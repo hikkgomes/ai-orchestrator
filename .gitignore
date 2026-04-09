@@ -1,0 +1,37 @@
+# ai-orchestrator runtime artifacts
+.ai-orchestrator/state/
+.ai-orchestrator/worktrees/
+.ai-orchestrator/logs/
+.ai-orchestrator/prompts/
+.ai-orchestrator/results/
+.ai-orchestrator/approvals/
+.ai-orchestrator/feedback/
+.ai-orchestrator/executions/
+.ai-orchestrator/metadata.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+.venv-test/
+venv/
+env/
+*.egg-link
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-orchestrator.dev/schemas/plan.schema.json",
+  "title": "Plan",
+  "description": "A decomposed implementation plan produced by the planning phase.",
+  "type": "object",
+  "required": ["plan_id", "task", "steps", "reasoning"],
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+      "description": "UUID v4 identifier for this plan."
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The original task description."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "description": "Ordered list of implementation steps."
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Explanation of why the task was decomposed this way."
+    }
+  },
+  "$defs": {
+    "Step": {
+      "type": "object",
+      "required": [
+        "step_number",
+        "description",
+        "files_to_read",
+        "files_to_modify",
+        "depends_on",
+        "estimated_complexity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_number": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-indexed position in the plan."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What this step accomplishes."
+        },
+        "files_to_read": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*\\.\\./)"
+          },
+          "description": "Relative file paths to include as context. Must not contain .. segments or start with /."
+        },
+        "files_to_modify": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*\\.\\./)"
+          },
+          "description": "Relative file paths this step will create or edit. Must not contain .. segments or start with /."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Step numbers that must complete before this step. Empty array means independent. Retained for future parallel execution; v1 executes all steps sequentially."
+        },
+        "estimated_complexity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Complexity hint used for routing and timeout decisions."
+        }
+      }
+    }
+  }
+}

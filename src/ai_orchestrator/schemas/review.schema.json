@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-orchestrator.dev/schemas/review.schema.json",
+  "title": "Review",
+  "description": "Code review of an implementation produced by the review phase.",
+  "type": "object",
+  "required": ["review_id", "verdict", "score", "findings", "summary", "blocks_merge"],
+  "additionalProperties": false,
+  "properties": {
+    "review_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+      "description": "UUID v4 identifier for this review."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "request_changes", "reject"],
+      "description": "Overall review verdict."
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "Quality score from 1 (worst) to 10 (best)."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "description": "Specific review findings."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Overall review narrative."
+    },
+    "blocks_merge": {
+      "type": "boolean",
+      "description": "Whether this review should block merge."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": { "const": "reject" }
+        }
+      },
+      "then": {
+        "properties": {
+          "blocks_merge": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": { "enum": ["reject", "request_changes"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "contains": {
+              "properties": {
+                "severity": { "enum": ["critical", "major"] }
+              },
+              "required": ["severity"]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Finding": {
+      "type": "object",
+      "required": ["severity", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "major", "minor", "info"],
+          "description": "Impact level of this finding."
+        },
+        "file": {
+          "type": "string",
+          "description": "Which file this finding relates to."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Which line this finding relates to."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What was found."
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "How to fix this finding."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# Codex configuration for ai-orchestrator.
+#
+# This file configures how the Codex CLI behaves when invoked by the
+# ai-orchestrator. The orchestrator invokes Codex via:
+#
+#   codex exec "<prompt>"
+#
+# All execution happens in an isolated git worktree branch per run.
+# See AGENTS.md for the full Codex adapter contract.
+
+# Codex is used as the default worker (executor) in ai-orchestrator.
+# It is invoked for each plan step with a prompt that includes:
+# - The step description
+# - Plan context
+# - Relevant file contents
+# - The expected result file path
+# - The step_result.schema.json
+
+# The prompt instructs Codex to:
+# 1. Implement the step
+# 2. Write a JSON result to: .ai-orchestrator/results/pending-step-<n>.json

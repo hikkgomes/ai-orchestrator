@@ -1,0 +1,41 @@
+# Default workflow configuration for ai-orchestrator.
+#
+# This file describes the canonical workflow phases and their routing.
+# The authoritative specification is in docs/workflow.md and aio.toml.
+# This file is informational; the engine reads aio.toml, not this file.
+
+name: default
+description: >
+  Full orchestrated run: plan → approve → execute → review → adjudicate → merge.
+
+phases:
+  planning:
+    cli: claude
+    approval_gate: plan
+    retries: 3
+
+  executing:
+    cli: codex
+    worktree: true
+    retries: 3
+    complexity_timeouts:
+      low: 180
+      medium: 300
+      high: 600
+
+  reviewing:
+    cli: claude
+    retries: 3
+
+  adjudicating:
+    cli: claude
+    retries: 3
+    loop_limits:
+      rework: 3
+      replan: 2
+
+  merging:
+    approval_gate: merge
+    pre_checks:
+      - clean_working_tree
+      - base_commit_match

@@ -1,0 +1,307 @@
+"""JSON schema + application-level validation for all workflow artifacts.
+
+Two validation layers (docs/design-decisions.md DD-8):
+
+1. **Schema validation** — structural check via ``jsonschema``.  The schemas
+   live in ``src/ai_orchestrator/schemas/`` (bundled) and ``schemas/`` (source).
+
+2. **Application validation** — semantic invariants that JSON Schema cannot
+   express:
+   - Plan step ordering (must be sequential starting from 1)
+   - Dependency acyclicity
+   - Path normalisation: reject any path containing ``..`` segments, or
+     starting with ``/``, after resolving against the repo root
+   - ``files_changed`` correspondence with ``git diff`` (Codex results only)
+   - Review conditional field requirements
+   - Adjudication conditional field requirements
+
+Usage::
+
+    validator = Validator(repo_root)
+    validated_plan = validator.validate_plan(raw_dict)
+    validated_result = validator.validate_step_result(raw_dict, step_number=1)
+"""
+
+from __future__ import annotations
+
+import importlib.resources
+import json
+from pathlib import Path
+from typing import Any
+
+import jsonschema
+
+
+class ValidationError(Exception):
+    """Raised when schema or application-level validation fails."""
+
+    def __init__(self, message: str, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
+def _load_schema(name: str) -> dict[str, Any]:
+    """Load a bundled JSON schema by filename (e.g. 'plan.schema.json')."""
+    package = importlib.resources.files("ai_orchestrator.schemas")
+    with (package / name).open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_bundled_schema(name: str) -> dict[str, Any]:
+    """Public wrapper for loading a bundled schema by filename."""
+    return _load_schema(name)
+
+
+def _validate_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls.check_schema(schema)
+    validator = validator_cls(schema)
+    errors = sorted(validator.iter_errors(data), key=lambda err: list(err.path))
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.absolute_path)
+        detail = f"{location}: {first.message}" if location else first.message
+        raise ValidationError("Schema validation failed", detail)
+
+
+def validate_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
+    """Validate *data* against an arbitrary JSON schema."""
+    _validate_schema(data, schema)
+
+
+def _validate_no_path_traversal(paths: list[str]) -> None:
+    """Raise ValidationError if any path contains ``..`` or starts with ``/``.
+
+    Checks both leading ``/`` and any embedded ``../`` segment per DD-8.
+    """
+    for path_str in paths:
+        path = Path(path_str)
+        if path.is_absolute():
+            raise ValidationError("Unsafe path", f"Absolute path is not allowed: {path_str}")
+        if ".." in path.parts:
+            raise ValidationError("Unsafe path", f"Path traversal is not allowed: {path_str}")
+
+
+def _validate_paths_confined(repo_root: Path, paths: list[str]) -> None:
+    _validate_no_path_traversal(paths)
+    for path_str in paths:
+        resolved = (repo_root / path_str).resolve()
+        try:
+            resolved.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValidationError(
+                "Unsafe path",
+                f"Path escapes repository root: {path_str}",
+            ) from exc
+
+
+class Validator:
+    """Validates workflow artifacts against schemas and application invariants.
+
+    Parameters
+    ----------
+    repo_root:
+        Absolute path to the repository root, used for path confinement checks.
+    """
+
+    def __init__(self, repo_root: Path) -> None:
+        self._repo_root = repo_root.resolve()
+        self._schemas: dict[str, Any] = {}
+
+    def _get_schema(self, name: str) -> dict[str, Any]:
+        if name not in self._schemas:
+            self._schemas[name] = _load_schema(name)
+        return self._schemas[name]
+
+    def validate_plan(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a plan artifact (schema + application level).
+
+        Application checks:
+        - Step numbers must be sequential starting from 1
+        - ``depends_on`` values must reference existing step numbers < current step
+        - No circular dependencies
+        - All ``files_to_read`` and ``files_to_modify`` paths are safe
+
+        Returns the original *data* dict on success.
+
+        Raises
+        ------
+        ValidationError
+        """
+        _validate_schema(data, self._get_schema("plan.schema.json"))
+
+        steps = data["steps"]
+        expected_numbers = list(range(1, len(steps) + 1))
+        actual_numbers = [step["step_number"] for step in steps]
+        if actual_numbers != expected_numbers:
+            raise ValidationError(
+                "Invalid plan step ordering",
+                f"Expected sequential step numbers {expected_numbers}, got {actual_numbers}",
+            )
+
+        valid_steps = set(actual_numbers)
+        graph: dict[int, list[int]] = {}
+        for step in steps:
+            number = step["step_number"]
+            depends_on = step.get("depends_on", [])
+            for dependency in depends_on:
+                if dependency not in valid_steps:
+                    raise ValidationError(
+                        "Invalid dependency",
+                        f"Step {number} depends on unknown step {dependency}",
+                    )
+                if dependency >= number:
+                    raise ValidationError(
+                        "Invalid dependency",
+                        f"Step {number} depends on non-prior step {dependency}",
+                    )
+            graph[number] = depends_on
+            _validate_paths_confined(self._repo_root, step.get("files_to_read", []))
+            _validate_paths_confined(self._repo_root, step.get("files_to_modify", []))
+
+        visiting: set[int] = set()
+        visited: set[int] = set()
+
+        def visit(node: int) -> None:
+            if node in visited:
+                return
+            if node in visiting:
+                raise ValidationError("Invalid dependency", "Circular dependency detected")
+            visiting.add(node)
+            for dependency in graph.get(node, []):
+                visit(dependency)
+            visiting.remove(node)
+            visited.add(node)
+
+        for step_number in actual_numbers:
+            visit(step_number)
+
+        return data
+
+    def validate_step_result(
+        self,
+        data: dict[str, Any],
+        step_number: int,
+    ) -> dict[str, Any]:
+        """Validate a step result artifact (schema + application level).
+
+        Application checks:
+        - ``step_number`` matches the expected *step_number*
+        - All ``files_changed`` paths are safe
+        - If ``status == "success"``, ``files_changed`` must be non-empty
+
+        Returns the original *data* dict on success.
+
+        Raises
+        ------
+        ValidationError
+        """
+        _validate_schema(data, self._get_schema("step_result.schema.json"))
+
+        if data["step_number"] != step_number:
+            raise ValidationError(
+                "Invalid step result",
+                f"Expected step_number {step_number}, got {data['step_number']}",
+            )
+
+        _validate_paths_confined(
+            self._repo_root,
+            [change["path"] for change in data.get("files_changed", [])],
+        )
+
+        if data["status"] == "success" and not data.get("files_changed"):
+            raise ValidationError(
+                "Invalid step result",
+                "Successful step results must include at least one changed file",
+            )
+
+        return data
+
+    def validate_review(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a review artifact (schema + application level).
+
+        Application checks:
+        - ``score`` is between 1 and 10
+        - If ``verdict == "reject"``, ``blocks_merge`` must be True
+        - If verdict is ``reject`` or ``request_changes``, at least one
+          finding with severity ``critical`` or ``major`` must exist
+
+        Returns the original *data* dict on success.
+
+        Raises
+        ------
+        ValidationError
+        """
+        _validate_schema(data, self._get_schema("review.schema.json"))
+
+        verdict = data["verdict"]
+        findings = data.get("findings", [])
+        if verdict == "reject" and data.get("blocks_merge") is not True:
+            raise ValidationError(
+                "Invalid review",
+                "Rejected reviews must set blocks_merge to true",
+            )
+        if verdict in {"reject", "request_changes"}:
+            has_blocking = any(
+                finding.get("severity") in {"critical", "major"} for finding in findings
+            )
+            if not has_blocking:
+                raise ValidationError(
+                    "Invalid review",
+                    "Blocking reviews require at least one critical or major finding",
+                )
+
+        return data
+
+    def validate_adjudication(
+        self,
+        data: dict[str, Any],
+        *,
+        plan_step_numbers: set[int] | None = None,
+    ) -> dict[str, Any]:
+        """Validate an adjudication artifact (schema + application level).
+
+        Application checks:
+        - If ``verdict == "REWORK"``: ``rework_steps`` non-empty, ``rework_feedback`` present
+        - If ``verdict == "REPLAN"``: ``replan_feedback`` present
+        - If ``verdict == "FAIL"``: ``failure_reason`` present
+
+        Returns the original *data* dict on success.
+
+        Raises
+        ------
+        ValidationError
+        """
+        _validate_schema(data, self._get_schema("adjudication.schema.json"))
+
+        verdict = data["verdict"]
+        if verdict == "REWORK":
+            if not data.get("rework_steps") or not data.get("rework_feedback"):
+                raise ValidationError(
+                    "Invalid adjudication",
+                    "REWORK requires rework_steps and rework_feedback",
+                )
+            if plan_step_numbers is not None:
+                invalid_steps = sorted(
+                    step_number
+                    for step_number in data.get("rework_steps", [])
+                    if step_number not in plan_step_numbers
+                )
+                if invalid_steps:
+                    valid_steps = sorted(plan_step_numbers)
+                    raise ValidationError(
+                        "Invalid adjudication",
+                        f"REWORK steps {invalid_steps} are not in the current plan step numbers {valid_steps}",
+                    )
+        if verdict == "REPLAN" and not data.get("replan_feedback"):
+            raise ValidationError(
+                "Invalid adjudication",
+                "REPLAN requires replan_feedback",
+            )
+        if verdict == "FAIL" and not data.get("failure_reason"):
+            raise ValidationError(
+                "Invalid adjudication",
+                "FAIL requires failure_reason",
+            )
+
+        return data

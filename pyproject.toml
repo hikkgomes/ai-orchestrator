@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-orchestrator"
+version = "0.1.0"
+description = "Local orchestrator for Claude Code and Codex as stateless worker processes."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["ai", "orchestrator", "claude", "codex", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "jsonschema>=4.17",
+    "pydantic>=2.0",
+    "filelock>=3.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.scripts]
+orch = "ai_orchestrator.cli:main"
+aio = "ai_orchestrator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_orchestrator"]
+include = ["src/ai_orchestrator/schemas/*.json"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "schemas/",
+    "docs/",
+    "scripts/",
+    "tests/",
+    "pyproject.toml",
+    "README.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "aio.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short"
+
+[tool.coverage.run]
+source = ["src/ai_orchestrator"]
+omit = ["tests/*"]
