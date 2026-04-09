@@ -39,9 +39,55 @@ Claude and GPT check each other's work at every stage. Model effort (low/medium/
 
 ## Install
 
+### New machine setup (macOS)
+
+On a brand new Mac, install the prerequisites in this order:
+
+```bash
+# 1. Install Homebrew if needed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 2. Install required tools
+brew install git python@3.11 pipx
+
+# 3. Enable pipx in your shell
+pipx ensurepath
+exec zsh -l
+
+# 4. Verify the basics
+git --version
+python3.11 --version
+pipx --version
+```
+
+Then install and authenticate the two AI CLIs using their normal vendor setup flows, and verify:
+
+```bash
+claude --version
+codex --version
+```
+
+After that, install ai-orchestrator:
+
+```bash
+git clone https://github.com/<org>/ai-orchestrator.git
+cd ai-orchestrator
+pipx install .
+orch doctor
+```
+
+If you reinstall after local code changes:
+
+```bash
+pipx install --force .
+```
+
 ### From PyPI (recommended)
 
 ```bash
+python3.11 -m pip install --user pipx
+pipx ensurepath
+exec zsh -l
 pipx install ai-orchestrator
 orch doctor
 ```
@@ -71,6 +117,9 @@ pwsh -File scripts/install-windows.ps1
 Add `--editable` (or `-Editable` on Windows) for a local dev install.
 
 ## First-time repo setup
+
+Installing the CLI on your machine makes `orch` available in any terminal, including VS Code.
+You still need to initialize each repository you want to orchestrate.
 
 From the root of the repository you want to orchestrate:
 
