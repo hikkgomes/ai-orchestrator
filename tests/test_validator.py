@@ -111,6 +111,34 @@ class TestScopingValidation:
         }
         assert v.validate_scoping(scoping)["complexity_tier"] == "simple"
 
+    def test_missing_actionable_no_blocking_reason_defaults_to_true(self, tmp_path):
+        v = Validator(tmp_path)
+        result = v.validate_scoping({
+            "normalized_task": "Fix typo",
+            "assumptions": [],
+            "complexity_tier": "simple",
+        })
+        assert result["actionable"] is True
+
+    def test_missing_actionable_with_blocking_reason_infers_false(self, tmp_path):
+        v = Validator(tmp_path)
+        result = v.validate_scoping({
+            "normalized_task": "raw task",
+            "assumptions": [],
+            "complexity_tier": "simple",
+            "blocking_reason": "Task targets external system",
+        })
+        assert result["actionable"] is False
+
+    def test_missing_assumptions_defaults_to_empty_list(self, tmp_path):
+        v = Validator(tmp_path)
+        result = v.validate_scoping({
+            "actionable": True,
+            "normalized_task": "Fix typo",
+            "complexity_tier": "simple",
+        })
+        assert result["assumptions"] == []
+
 
 class TestFeasibilityValidation:
     def test_blocked_requires_critical_issue(self, tmp_path):

@@ -89,6 +89,19 @@ def test_build_scoping_prompt_renders_complexity_rules():
     assert "OUTPUT SCHEMA:" in prompt
 
 
+def test_build_scoping_prompt_includes_required_field_checklist():
+    prompt = build_scoping_prompt(
+        raw_task="Fix header",
+        repo_summary="A website repo",
+        directory_tree="src/",
+        schema_json="{}",
+    )
+
+    assert "REQUIRED FIELDS" in prompt
+    assert '"actionable"' in prompt
+    assert '"complexity_tier"' in prompt
+
+
 def test_build_feasibility_prompt_codex_renders_result_path():
     prompt = build_feasibility_prompt_codex(
         task_description="Add endpoint",

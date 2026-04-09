@@ -180,6 +180,14 @@ class Validator:
 
     def validate_scoping(self, data: dict[str, Any]) -> dict[str, Any]:
         """Validate a scoping result artifact."""
+        if "actionable" not in data:
+            data = {
+                **data,
+                "actionable": False if data.get("blocking_reason") else True,
+            }
+        if "assumptions" not in data:
+            data = {**data, "assumptions": []}
+
         _validate_schema(data, self._get_schema("scoping.schema.json"))
 
         if data.get("actionable") is False and not data.get("blocking_reason"):

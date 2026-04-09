@@ -119,6 +119,11 @@ def build_scoping_prompt(
         '   "assumptions". Do not block unless you are certain.\n\n'
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
+        "REQUIRED FIELDS - every response must include all four:\n"
+        '  - "actionable": true or false (never omit - use true if uncertain)\n'
+        '  - "normalized_task": string\n'
+        '  - "assumptions": array (use [] if none)\n'
+        '  - "complexity_tier": one of "simple", "moderate", "complex", "architectural"\n\n'
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
