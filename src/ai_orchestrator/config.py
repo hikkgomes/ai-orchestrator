@@ -39,6 +39,7 @@ class OrchestratorConfig:
     max_rework_loops: int = 3
     max_replan_loops: int = 2
     step_timeout: int = 300
+    scoping_timeout: int = 60
     planning_timeout: int = 120
     execution_timeout_low: int = 180
     execution_timeout_medium: int = 300
@@ -60,19 +61,97 @@ class CodexRoutingConfig:
 
 
 @dataclass
+class PhaseRoutingOverride:
+    cli: str = ""
+    reasoning_effort: str = ""
+    model: str = ""
+
+
+@dataclass
 class RoutingConfig:
     planner: str = "claude"
     worker: str = "codex"
     reviewer: str = "claude"
-    adjudicator: str = "claude"
+    adjudicator: str = "codex"
+    feasibility_checker: str = "codex"
+    scoper: str = "claude"
     claude: ClaudeRoutingConfig = field(default_factory=ClaudeRoutingConfig)
     codex: CodexRoutingConfig = field(default_factory=CodexRoutingConfig)
+    phases: dict[str, PhaseRoutingOverride] = field(default_factory=dict)
 
 
 @dataclass
 class ApprovalConfig:
     require_plan_approval: bool = True
     require_merge_approval: bool = True
+
+
+@dataclass
+class ScopingConfig:
+    enabled: bool = True
+
+
+@dataclass
+class FeasibilityConfig:
+    enabled: bool = True
+    timeout: int = 120
+
+
+def _default_complexity_phase_map(
+    *,
+    planning: str,
+    feasibility: str,
+    executing: str,
+    reviewing: str,
+    adjudicating: str,
+) -> dict[str, str]:
+    return {
+        "planning": planning,
+        "feasibility": feasibility,
+        "executing": executing,
+        "reviewing": reviewing,
+        "adjudicating": adjudicating,
+    }
+
+
+@dataclass
+class ComplexityRoutingConfig:
+    simple: dict[str, str] = field(
+        default_factory=lambda: _default_complexity_phase_map(
+            planning="medium",
+            feasibility="medium",
+            executing="medium",
+            reviewing="high",
+            adjudicating="medium",
+        )
+    )
+    moderate: dict[str, str] = field(
+        default_factory=lambda: _default_complexity_phase_map(
+            planning="high",
+            feasibility="medium",
+            executing="medium",
+            reviewing="high",
+            adjudicating="medium",
+        )
+    )
+    complex: dict[str, str] = field(
+        default_factory=lambda: _default_complexity_phase_map(
+            planning="high",
+            feasibility="high",
+            executing="high",
+            reviewing="high",
+            adjudicating="high",
+        )
+    )
+    architectural: dict[str, str] = field(
+        default_factory=lambda: _default_complexity_phase_map(
+            planning="max",
+            feasibility="max",
+            executing="xhigh",
+            reviewing="max",
+            adjudicating="max",
+        )
+    )
 
 
 @dataclass
@@ -97,6 +176,9 @@ class CliCompatConfig:
 class Config:
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
+    scoping: ScopingConfig = field(default_factory=ScopingConfig)
+    feasibility: FeasibilityConfig = field(default_factory=FeasibilityConfig)
+    complexity_routing: ComplexityRoutingConfig = field(default_factory=ComplexityRoutingConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -198,6 +280,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
         "max_rework_loops",
         "max_replan_loops",
         "step_timeout",
+        "scoping_timeout",
         "planning_timeout",
         "execution_timeout_low",
         "execution_timeout_medium",
@@ -209,7 +292,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             _validate_int(f"orchestrator.{key}", orchestrator[key], minimum=1)
 
     routing = _expect_mapping("routing", data.get("routing"))
-    for key in ("planner", "worker", "reviewer", "adjudicator"):
+    for key in ("planner", "worker", "reviewer", "adjudicator", "feasibility_checker", "scoper"):
         if key in routing:
             _validate_choice(f"routing.{key}", routing[key], {"claude", "codex"})
 
@@ -222,6 +305,37 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     for key in ("model", "reasoning_effort"):
         if key in codex:
             _validate_string(f"routing.codex.{key}", codex[key])
+
+    phases = _expect_mapping("routing.phases", routing.get("phases"))
+    for phase_name, phase_data in phases.items():
+        phase_mapping = _expect_mapping(f"routing.phases.{phase_name}", phase_data)
+        for key, value in phase_mapping.items():
+            if key in {"reasoning_effort", "model"}:
+                _validate_string(f"routing.phases.{phase_name}.{key}", value)
+            elif key == "cli":
+                _validate_string(f"routing.phases.{phase_name}.cli", value)
+                if value:
+                    _validate_choice(
+                        f"routing.phases.{phase_name}.cli",
+                        value,
+                        {"claude", "codex"},
+                    )
+
+    scoping = _expect_mapping("scoping", data.get("scoping"))
+    if "enabled" in scoping:
+        _validate_bool("scoping.enabled", scoping["enabled"])
+
+    feasibility = _expect_mapping("feasibility", data.get("feasibility"))
+    if "enabled" in feasibility:
+        _validate_bool("feasibility.enabled", feasibility["enabled"])
+    if "timeout" in feasibility:
+        _validate_int("feasibility.timeout", feasibility["timeout"], minimum=1)
+
+    complexity_routing = _expect_mapping("complexity_routing", data.get("complexity_routing"))
+    for tier_name, tier_data in complexity_routing.items():
+        tier_mapping = _expect_mapping(f"complexity_routing.{tier_name}", tier_data)
+        for phase_name, effort in tier_mapping.items():
+            _validate_string(f"complexity_routing.{tier_name}.{phase_name}", effort)
 
     approval = _expect_mapping("approval", data.get("approval"))
     for key in ("require_plan_approval", "require_merge_approval"):
@@ -284,13 +398,71 @@ def load_config(repo_root: Path | None = None) -> Config:
     _warn_unknown_keys(
         "root",
         merged,
-        {"orchestrator", "routing", "approval", "worktree", "logging", "cli_compat"},
+        {
+            "orchestrator",
+            "routing",
+            "scoping",
+            "feasibility",
+            "complexity_routing",
+            "approval",
+            "worktree",
+            "logging",
+            "cli_compat",
+        },
     )
     _warn_unknown_keys(
         "routing",
         routing_data,
-        {"planner", "worker", "reviewer", "adjudicator", "claude", "codex"},
+        {
+            "planner",
+            "worker",
+            "reviewer",
+            "adjudicator",
+            "feasibility_checker",
+            "scoper",
+            "claude",
+            "codex",
+            "phases",
+        },
     )
+    routing_phases = _expect_mapping("routing.phases", routing_data.get("phases"))
+    _warn_unknown_keys(
+        "routing.phases",
+        routing_phases,
+        {"scoping", "planning", "feasibility", "executing", "reviewing", "adjudicating"},
+    )
+    phase_overrides: dict[str, PhaseRoutingOverride] = {}
+    for phase_name, phase_data in routing_phases.items():
+        phase_mapping = _expect_mapping(f"routing.phases.{phase_name}", phase_data)
+        _warn_unknown_keys(
+            f"routing.phases.{phase_name}",
+            phase_mapping,
+            {"cli", "reasoning_effort", "model"},
+        )
+        phase_overrides[phase_name] = _apply_section(
+            PhaseRoutingOverride,
+            phase_mapping,
+            section_name=f"routing.phases.{phase_name}",
+        )
+
+    complexity_routing_data = _expect_mapping("complexity_routing", merged.get("complexity_routing"))
+    _warn_unknown_keys(
+        "complexity_routing",
+        complexity_routing_data,
+        {"simple", "moderate", "complex", "architectural"},
+    )
+    complexity_routing = _apply_section(
+        ComplexityRoutingConfig,
+        complexity_routing_data,
+        section_name="complexity_routing",
+    )
+    for tier_name in ("simple", "moderate", "complex", "architectural"):
+        _warn_unknown_keys(
+            f"complexity_routing.{tier_name}",
+            getattr(complexity_routing, tier_name),
+            {"planning", "feasibility", "executing", "reviewing", "adjudicating"},
+        )
+
     config = Config(
         orchestrator=_apply_section(
             OrchestratorConfig,
@@ -301,7 +473,9 @@ def load_config(repo_root: Path | None = None) -> Config:
             planner=routing_data.get("planner", "claude"),
             worker=routing_data.get("worker", "codex"),
             reviewer=routing_data.get("reviewer", "claude"),
-            adjudicator=routing_data.get("adjudicator", "claude"),
+            adjudicator=routing_data.get("adjudicator", "codex"),
+            feasibility_checker=routing_data.get("feasibility_checker", "codex"),
+            scoper=routing_data.get("scoper", "claude"),
             claude=_apply_section(
                 ClaudeRoutingConfig,
                 _expect_mapping("routing.claude", routing_data.get("claude")),
@@ -312,7 +486,19 @@ def load_config(repo_root: Path | None = None) -> Config:
                 _expect_mapping("routing.codex", routing_data.get("codex")),
                 section_name="routing.codex",
             ),
+            phases=phase_overrides,
         ),
+        scoping=_apply_section(
+            ScopingConfig,
+            _expect_mapping("scoping", merged.get("scoping")),
+            section_name="scoping",
+        ),
+        feasibility=_apply_section(
+            FeasibilityConfig,
+            _expect_mapping("feasibility", merged.get("feasibility")),
+            section_name="feasibility",
+        ),
+        complexity_routing=complexity_routing,
         approval=_apply_section(
             ApprovalConfig,
             _expect_mapping("approval", merged.get("approval")),

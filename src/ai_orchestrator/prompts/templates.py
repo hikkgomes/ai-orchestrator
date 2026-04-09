@@ -74,6 +74,51 @@ def build_planning_prompt(
     )
 
 
+def build_scoping_prompt(
+    raw_task: str,
+    repo_summary: str,
+    directory_tree: str,
+    schema_json: str,
+) -> str:
+    """Build the scoping phase prompt."""
+    return (
+        "You are a task intake agent for an automated software orchestrator.\n\n"
+        "Your only job is to validate and normalize the task below. Do not implement\n"
+        "anything. Do not discuss implementation. Do not ask questions. Produce output\n"
+        "in exactly one pass.\n\n"
+        "RAW TASK:\n"
+        f"{raw_task}\n\n"
+        "REPOSITORY SUMMARY:\n"
+        f"{repo_summary}\n\n"
+        "REPOSITORY STRUCTURE (depth 2):\n"
+        f"{directory_tree}\n\n"
+        "---\n\n"
+        "RULES:\n"
+        "1. If the task is actionable and scoped to this repository:\n"
+        '   - Set "actionable" to true\n'
+        '   - Set "normalized_task" to a clean, precise restatement of what must be done\n'
+        '   - List any assumptions you made to resolve ambiguity in "assumptions"\n'
+        '   - Omit "blocking_reason"\n\n'
+        "2. If the task cannot proceed (targets external systems, requires credentials\n"
+        "   you cannot scope, is too vague to plan even conservatively, or requests\n"
+        "   destructive actions on production systems):\n"
+        '   - Set "actionable" to false\n'
+        '   - Set "normalized_task" to the raw task verbatim\n'
+        '   - Set "blocking_reason" to a one-sentence explanation for the human operator\n'
+        '   - Set "assumptions" to []\n\n'
+        "3. Assess complexity:\n"
+        '   - "simple": single-file or config change, no architectural impact\n'
+        '   - "moderate": multi-file change, clear scope\n'
+        '   - "complex": cross-cutting, tricky dependencies, weak test coverage\n'
+        '   - "architectural": system design change, new patterns, ambiguous requirements\n\n'
+        "4. When in doubt: default to actionable = true. Record your uncertainty in\n"
+        '   "assumptions". Do not block unless you are certain.\n\n'
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+    )
+
+
 def build_execution_prompt_codex(
     step_description: str,
     plan_context: str,
@@ -98,6 +143,76 @@ def build_execution_prompt_codex(
         "The JSON must conform to this schema:\n"
         f"{schema_json}\n\n"
         "Do not print the JSON to stdout. Write it to the file path above.\n"
+    )
+
+
+def build_feasibility_prompt_codex(
+    task_description: str,
+    plan_json: str,
+    directory_tree: str,
+    result_file_path: str,
+    schema_json: str,
+) -> str:
+    """Build the feasibility phase prompt for the Codex adapter."""
+    return (
+        "You are a feasibility checker for an automated software orchestrator.\n\n"
+        "Your job is to verify that the following plan can be executed in the current\n"
+        "repository environment. This is a READ-ONLY check. Do not modify any files.\n"
+        "Do not install packages. Do not run mutating commands.\n\n"
+        "TASK:\n"
+        f"{task_description}\n\n"
+        "PLAN:\n"
+        f"{plan_json}\n\n"
+        "REPOSITORY STRUCTURE:\n"
+        f"{directory_tree}\n\n"
+        "CHECKS TO PERFORM:\n"
+        '1. Verify that all paths listed in "files_to_read" across all plan steps exist\n'
+        "   in the repository. Paths that don't exist and aren't listed in any step's\n"
+        '   "files_to_modify" are potential issues.\n'
+        "2. Check that the build/test environment is intact. Run read-only probes only\n"
+        '   (e.g., `python -c "import <dep>"`, `which <tool>`, `git status`).\n'
+        "3. Check for obvious blockers: broken imports, missing config files the plan\n"
+        "   depends on, etc.\n"
+        "4. Do NOT attempt to fix anything. Report only.\n\n"
+        "After checking, write your result JSON to:\n"
+        f"{result_file_path}\n\n"
+        "The JSON must conform to this schema:\n"
+        f"{schema_json}\n\n"
+        "Do NOT print the JSON to stdout. Write it to the file path above only.\n"
+        "Do NOT modify any source files. Do NOT commit anything.\n"
+    )
+
+
+def build_feasibility_prompt_claude(
+    task_description: str,
+    plan_json: str,
+    directory_tree: str,
+    schema_json: str,
+) -> str:
+    """Build the feasibility phase prompt for the Claude adapter."""
+    return (
+        "You are a feasibility checker for an automated software orchestrator.\n\n"
+        "Your job is to review the following plan and identify any conditions in the\n"
+        "current repository that would prevent execution. This is a STATIC ANALYSIS\n"
+        "only - you cannot run commands. Use the repository structure and plan contents\n"
+        "to reason about feasibility.\n\n"
+        "TASK:\n"
+        f"{task_description}\n\n"
+        "PLAN:\n"
+        f"{plan_json}\n\n"
+        "REPOSITORY STRUCTURE:\n"
+        f"{directory_tree}\n\n"
+        "CHECKS TO PERFORM:\n"
+        '1. Verify all "files_to_read" paths exist or will exist by the time the step\n'
+        "   runs (i.e., an earlier step creates them).\n"
+        '2. Identify any "files_to_modify" paths that are outside the repository root\n'
+        "   or contain path traversal (automatic blocking issue).\n"
+        "3. Flag any steps where the description implies network access, credential use,\n"
+        "   or interactive input - all of which cannot proceed.\n"
+        "4. Note any ambiguous or contradictory step dependencies.\n\n"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -274,6 +389,19 @@ def default_planning_files(repo_root: Path) -> list[str]:
         "src/ai_orchestrator/engine.py",
     ]
     return [candidate for candidate in candidates if (repo_root / candidate).exists()]
+
+
+def repo_summary(repo_root: Path) -> str:
+    """Return the first non-empty README line, or a fallback marker."""
+    for name in ("README.md", "README.rst", "README.txt", "README"):
+        path = repo_root / name
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped:
+                return stripped
+    return "<no README>"
 
 
 def json_block(data: Any) -> str:

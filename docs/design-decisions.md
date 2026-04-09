@@ -1,6 +1,6 @@
 # Design Decisions
 
-> **Design status: FROZEN** as of 2026-04-08.
+> **Design status: UPDATED** as of 2026-04-09.
 
 This document records decisions made during design, including responses to the feasibility review. Each entry explains the decision, the alternatives considered, and why this choice was made.
 
@@ -210,3 +210,35 @@ This document records decisions made during design, including responses to the f
 **Context:** The exact flags supported by `claude -p` for reasoning effort need to be tested during implementation. If the flag is not available, the adapter silently omits it.
 
 **Decision rationale:** Expose the knob but don't block on it. The adapter attempts to pass the flag; if the CLI doesn't support it, execution continues without it.
+
+---
+
+## DD-18: Add a scoping phase before planning
+
+**Decision:** Introduce a read-only scoping phase that normalizes the task and assigns a `complexity_tier` before planning.
+
+**Decision rationale:** This closes the gap between raw operator input and the planner input while giving downstream phases a single routing signal.
+
+---
+
+## DD-19: Add a feasibility phase before execution
+
+**Decision:** Introduce a non-mutating feasibility phase after plan approval and before execution.
+
+**Decision rationale:** This catches broken environments and impossible plan assumptions before the worker touches files.
+
+---
+
+## DD-20: Per-phase routing is overrideable and complexity-adaptive
+
+**Decision:** Add `routing.phases.<phase>` overrides for CLI, reasoning effort, and model, plus built-in `complexity_routing` defaults keyed by `complexity_tier`.
+
+**Decision rationale:** The engine now resolves phase effort in a strict order: explicit phase override, complexity-driven mapping, then adapter global default.
+
+---
+
+## DD-21: Default adjudication moves to Codex
+
+**Decision:** Change the default adjudicator from Claude to Codex.
+
+**Decision rationale:** The default review/adjudication pair is now cross-model, which avoids asking Claude to adjudicate its own review loop by default.

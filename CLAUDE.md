@@ -1,6 +1,6 @@
 # CLAUDE.md — ai-orchestrator
 
-> **Design status: FROZEN** as of 2026-04-08.
+> **Design status: ACTIVE** as of 2026-04-09.
 
 ## What is this project?
 
@@ -52,7 +52,7 @@ tests/                  # unit + integration tests
 
 ## Canonical workflow states
 
-INIT → PLANNING → APPROVAL_PLAN → EXECUTING → REVIEWING → ADJUDICATING → APPROVAL_MERGE → MERGING → DONE
+INIT → SCOPING → PLANNING → APPROVAL_PLAN → FEASIBILITY → EXECUTING → REVIEWING → ADJUDICATING → APPROVAL_MERGE → MERGING → DONE
 
 Also: FAILED, PAUSED, BLOCKED_ON_CLI, CONFLICT
 
@@ -89,18 +89,18 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 
 | File | Phase | Produces |
 |---|---|---|
+| `scope.md` | SCOPING | transient scoping result |
 | `plan.md` | PLANNING (first plan) | `plans/plan-<uuid>.json` |
+| `feasibility.md` | FEASIBILITY | `feasibility/feasibility-<uuid>.json` |
 | `implement.md` | EXECUTING (each step) | `results/step-<n>-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
 | `adjudicate.md` | ADJUDICATING | `adjudications/adj-<uuid>.json` |
 | `fix-plan.md` | PLANNING (replan loop) | `plans/plan-<uuid>.json` (new) |
 
-Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired into the v1 engine:
+Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired into the current engine:
 
 | File | Intended phase | Status |
 |---|---|---|
-| `deferred/define.md` | INIT pre-gate | Deferred |
-| `deferred/feasibility.md` | post-APPROVAL_PLAN | Deferred |
 | `deferred/finalize.md` | DONE entry | Deferred |
 
 Each prompt file defines: variables, escalation policy, scope constraints, template
@@ -125,11 +125,6 @@ as a workflow agent:
 | File | Role | Phase |
 |---|---|---|
 | `implementer.md` | Step executor | EXECUTING |
-| `adjudicator.md` | Adjudicator (alternate routing) | ADJUDICATING |
+| `adjudicator.md` | Adjudicator | ADJUDICATING |
+| `feasibility.md` | Feasibility checker | FEASIBILITY |
 | `repairer.md` | Rework executor | EXECUTING (rework loop) |
-
-Deferred Codex agent drafts:
-
-| File | Role | Intended phase |
-|---|---|---|
-| `feasibility.md` | Feasibility checker | pre-EXECUTING |

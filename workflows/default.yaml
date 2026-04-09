@@ -6,13 +6,22 @@
 
 name: default
 description: >
-  Full orchestrated run: plan → approve → execute → review → adjudicate → merge.
+  Full orchestrated run: scope -> plan -> feasibility -> execute -> review -> adjudicate -> merge.
 
 phases:
+  scoping:
+    cli: claude
+    retries: 2
+
   planning:
     cli: claude
     approval_gate: plan
     retries: 3
+
+  feasibility:
+    cli: codex
+    worktree: true
+    retries: 2
 
   executing:
     cli: codex
@@ -28,7 +37,7 @@ phases:
     retries: 3
 
   adjudicating:
-    cli: claude
+    cli: codex
     retries: 3
     loop_limits:
       rework: 3

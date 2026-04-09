@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FeasibilityResult",
+  "type": "object",
+  "required": ["verdict", "blocking_issues", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["go", "go_with_warnings", "blocked"],
+      "description": "Overall go/no-go decision."
+    },
+    "blocking_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "warning"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Issues found. Empty array if verdict is 'go'."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-paragraph summary of the feasibility check result."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "blocked" } } },
+      "then": {
+        "properties": {
+          "blocking_issues": { "minItems": 1 }
+        }
+      }
+    }
+  ]
+}

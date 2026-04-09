@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TaskDefinition",
+  "type": "object",
+  "required": [
+    "actionable",
+    "normalized_task",
+    "assumptions",
+    "complexity_tier"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "actionable": {
+      "type": "boolean",
+      "description": "True if the task is safe to pass to the planner."
+    },
+    "normalized_task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Cleaned, unambiguous version of the task. Required even when actionable is false - use the raw task verbatim in that case."
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of assumptions made to resolve ambiguity. Empty array if none needed."
+    },
+    "blocking_reason": {
+      "type": "string",
+      "description": "Why the task cannot proceed. Required only when actionable is false."
+    },
+    "complexity_tier": {
+      "type": "string",
+      "enum": [
+        "simple",
+        "moderate",
+        "complex",
+        "architectural"
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "actionable": {
+        "const": false
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "actionable",
+      "normalized_task",
+      "assumptions",
+      "blocking_reason",
+      "complexity_tier"
+    ]
+  }
+}

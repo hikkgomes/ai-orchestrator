@@ -23,8 +23,10 @@ class WorkflowStatus(str, Enum):
     """Canonical orchestrator run states (docs/workflow.md)."""
 
     INIT = "INIT"
+    SCOPING = "SCOPING"
     PLANNING = "PLANNING"
     APPROVAL_PLAN = "APPROVAL_PLAN"
+    FEASIBILITY = "FEASIBILITY"
     EXECUTING = "EXECUTING"
     REVIEWING = "REVIEWING"
     ADJUDICATING = "ADJUDICATING"
@@ -43,6 +45,15 @@ class Complexity(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class ComplexityTier(str, Enum):
+    """Repository-level task complexity tier resolved during scoping."""
+
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+    ARCHITECTURAL = "architectural"
 
 
 class StepStatus(str, Enum):
@@ -196,9 +207,12 @@ class RunState(BaseModel):
     status: WorkflowStatus = WorkflowStatus.INIT
     current_phase: str = "INIT"
     plan_id: str | None = None
+    normalized_task: str | None = None
+    complexity_tier: str | None = None
     step_results: list[str] = Field(default_factory=list)
     review_id: str | None = None
     adjudication_id: str | None = None
+    feasibility_id: str | None = None
     rework_count: int = 0
     replan_count: int = 0
     retry_counts: dict[str, int] = Field(default_factory=dict)

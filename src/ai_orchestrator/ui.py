@@ -29,7 +29,9 @@ from .models import Plan, RunState, WorkflowStatus
 
 
 ACTIVE_STATES = {
+    WorkflowStatus.SCOPING.value,
     WorkflowStatus.PLANNING.value,
+    WorkflowStatus.FEASIBILITY.value,
     WorkflowStatus.EXECUTING.value,
     WorkflowStatus.REVIEWING.value,
     WorkflowStatus.ADJUDICATING.value,
@@ -48,8 +50,10 @@ _TERMINAL_STATES = TERMINAL_STATES
 
 _STATUS_STYLES = {
     WorkflowStatus.INIT.value: "cyan",
+    WorkflowStatus.SCOPING.value: "bright_cyan",
     WorkflowStatus.PLANNING.value: "cyan",
     WorkflowStatus.APPROVAL_PLAN.value: "yellow",
+    WorkflowStatus.FEASIBILITY.value: "bright_magenta",
     WorkflowStatus.EXECUTING.value: "magenta",
     WorkflowStatus.REVIEWING.value: "blue",
     WorkflowStatus.ADJUDICATING.value: "bright_blue",
@@ -94,6 +98,14 @@ class OrchestratorUI:
         payload = self._coerce_plan(plan)
         self.console.print(self._render_plan(payload))
 
+    def print_scoping_result(self, result: dict[str, Any]) -> None:
+        """Render the scoping output."""
+        self.console.print(self._render_scoping_result(result))
+
+    def print_feasibility_result(self, result: dict[str, Any]) -> None:
+        """Render the feasibility output."""
+        self.console.print(self._render_feasibility_result(result))
+
     def print_status(
         self,
         state: RunState,
@@ -135,6 +147,10 @@ class OrchestratorUI:
         summary.add_row("Phase", state.current_phase)
         summary.add_row("Status", Text(state.status, style=self._status_style(state.status)))
         summary.add_row("Updated", state.updated_at)
+        if state.normalized_task:
+            summary.add_row("Normalized", self._truncate(state.normalized_task, 88))
+        if state.complexity_tier:
+            summary.add_row("Complexity", state.complexity_tier)
         if state.error:
             summary.add_row("Error", Text(self._truncate(state.error, 88), style="bold red"))
 
@@ -336,6 +352,33 @@ class OrchestratorUI:
             title="Implementation Plan",
             border_style="cyan",
         )
+
+    def _render_scoping_result(self, result: dict[str, Any]) -> RenderableType:
+        table = Table(box=box.ROUNDED, expand=True, header_style="bold cyan")
+        table.add_column("Field", width=16)
+        table.add_column("Value")
+        table.add_row("Normalized Task", str(result.get("normalized_task", "")))
+        table.add_row("Complexity Tier", str(result.get("complexity_tier", "")))
+        if result.get("blocking_reason"):
+            table.add_row("Blocking Reason", str(result["blocking_reason"]))
+        return Panel(table, title="Scoping Result", border_style="bright_cyan")
+
+    def _render_feasibility_result(self, result: dict[str, Any]) -> RenderableType:
+        table = Table(box=box.ROUNDED, expand=True, header_style="bold magenta")
+        table.add_column("Verdict", width=18)
+        table.add_column("Summary")
+        table.add_row(str(result.get("verdict", "")), self._truncate(str(result.get("summary", "")), 96))
+
+        issues = Table(box=box.SIMPLE, expand=True, header_style="bold magenta")
+        issues.add_column("Severity", width=12)
+        issues.add_column("Description")
+        blocking_issues = result.get("blocking_issues", [])
+        if blocking_issues:
+            for issue in blocking_issues:
+                issues.add_row(str(issue.get("severity", "")), str(issue.get("description", "")))
+        else:
+            issues.add_row("-", "No blocking issues.")
+        return Panel(Group(table, issues), title="Feasibility Result", border_style="bright_magenta")
 
     def _render_diff(self, diff: str) -> RenderableType:
         lines = [line for line in diff.splitlines() if line.strip()]

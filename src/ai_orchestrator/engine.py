@@ -16,7 +16,10 @@ from .prompts.templates import (
     build_adjudication_prompt,
     build_execution_prompt_claude,
     build_execution_prompt_codex,
+    build_feasibility_prompt_claude,
+    build_feasibility_prompt_codex,
     build_planning_prompt,
+    build_scoping_prompt,
     build_retry_prompt,
     build_review_prompt,
     collect_file_context,
@@ -24,6 +27,7 @@ from .prompts.templates import (
     json_block,
     redact_secret_text,
     render_directory_tree,
+    repo_summary,
 )
 from .state import StateManager
 from .validator import ValidationError, Validator, load_bundled_schema
@@ -32,17 +36,35 @@ from .worktree import WorktreeError, WorktreeManager
 
 
 TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
-    WorkflowStatus.INIT: {WorkflowStatus.PLANNING, WorkflowStatus.FAILED},
+    WorkflowStatus.INIT: {
+        WorkflowStatus.SCOPING,
+        WorkflowStatus.PLANNING,
+        WorkflowStatus.FAILED,
+    },
+    WorkflowStatus.SCOPING: {
+        WorkflowStatus.PLANNING,
+        WorkflowStatus.PAUSED,
+        WorkflowStatus.FAILED,
+        WorkflowStatus.BLOCKED_ON_CLI,
+    },
     WorkflowStatus.PLANNING: {
         WorkflowStatus.APPROVAL_PLAN,
+        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.APPROVAL_PLAN: {
+        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.PAUSED,
+    },
+    WorkflowStatus.FEASIBILITY: {
+        WorkflowStatus.EXECUTING,
+        WorkflowStatus.PLANNING,
+        WorkflowStatus.FAILED,
+        WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.EXECUTING: {
         WorkflowStatus.REVIEWING,
@@ -77,11 +99,14 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.DONE: set(),
     WorkflowStatus.FAILED: set(),
     WorkflowStatus.PAUSED: {
+        WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
         WorkflowStatus.APPROVAL_MERGE,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
+        WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
+        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.REVIEWING,
         WorkflowStatus.ADJUDICATING,
@@ -123,7 +148,10 @@ class Engine:
     def start(self, task: str, run_id: str) -> RunState:
         state = RunState(run_id=run_id, task=task)
         self._state_mgr.save(state)
-        state = self._transition(state, WorkflowStatus.PLANNING)
+        if self._config.scoping.enabled:
+            state = self._transition(state, WorkflowStatus.SCOPING)
+        else:
+            state = self._transition(state, WorkflowStatus.PLANNING)
         return self._run(state)
 
     def resume(self, run_id: str) -> RunState:
@@ -155,6 +183,16 @@ class Engine:
         gate_phase = self._gate_phase(gate)
         if WorkflowStatus(state.status) != WorkflowStatus.PAUSED or state.current_phase != gate_phase:
             raise EngineError(f"Run {run_id} is not paused at the {gate} gate")
+        if gate == "scope":
+            state.error = None
+            self._state_mgr.save(state)
+            state = self._transition(
+                state,
+                WorkflowStatus.PLANNING,
+                current_phase=WorkflowStatus.PLANNING.value,
+                error=None,
+            )
+            return self._run(state)
         self._artifacts.save_approval_decision(run_id, gate, "approve", force=force)
         state = self._transition(
             state,
@@ -169,6 +207,19 @@ class Engine:
         gate_phase = self._gate_phase(gate)
         if WorkflowStatus(state.status) != WorkflowStatus.PAUSED or state.current_phase != gate_phase:
             raise EngineError(f"Run {run_id} is not paused at the {gate} gate")
+        if gate == "scope":
+            state.task = reason
+            state.normalized_task = None
+            state.complexity_tier = None
+            state.error = None
+            self._state_mgr.save(state)
+            state = self._transition(
+                state,
+                WorkflowStatus.SCOPING,
+                current_phase=WorkflowStatus.SCOPING.value,
+                error=None,
+            )
+            return self._run(state)
         self._artifacts.save_approval_decision(run_id, gate, "reject", reason=reason)
         state = self._transition(
             state,
@@ -190,11 +241,17 @@ class Engine:
             }:
                 return state
 
+            if status == WorkflowStatus.SCOPING:
+                state = self._run_scoping(state)
+                continue
             if status == WorkflowStatus.PLANNING:
                 state = self._run_planning(state)
                 continue
             if status == WorkflowStatus.APPROVAL_PLAN:
                 state = self._handle_plan_approval(state)
+                continue
+            if status == WorkflowStatus.FEASIBILITY:
+                state = self._run_feasibility(state)
                 continue
             if status == WorkflowStatus.EXECUTING:
                 state = self._run_execution(state)
@@ -214,9 +271,65 @@ class Engine:
 
             raise EngineError(f"Unhandled engine status: {status.value}")
 
+    def _run_scoping(self, state: RunState) -> RunState:
+        schema = load_bundled_schema("scoping.schema.json")
+        prompt = build_scoping_prompt(
+            raw_task=state.task,
+            repo_summary=repo_summary(self._repo_root),
+            directory_tree=render_directory_tree(self._repo_root, max_depth=2),
+            schema_json=json_block(schema),
+        )
+        self._artifacts.save_prompt(f"scoping-{state.run_id[:8]}.md", prompt)
+
+        adapter = self._adapter_for_phase("scoping")
+        cli_name = self._phase_cli("scoping", config_name="scoper")
+        try:
+            result = self._invoke_with_retries(
+                state,
+                retry_key="scoping",
+                retries=self._retry_limit("scoping"),
+                spinner_label="Scoping",
+                invoke=lambda current_prompt: adapter.invoke(
+                    current_prompt,
+                    self._repo_root,
+                    self._config.orchestrator.scoping_timeout,
+                    schema,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "scoping",
+                        cli_name,
+                    ),
+                    model_override=self._resolve_model_for_phase("scoping", cli_name),
+                ),
+                initial_prompt=prompt,
+            )
+        except BlockedOnCLI as exc:
+            return self._transition(
+                state,
+                WorkflowStatus.BLOCKED_ON_CLI,
+                current_phase=WorkflowStatus.SCOPING.value,
+                error=str(exc),
+            )
+        except StepFailure as exc:
+            return self._fail_run(state, exc.validation_error or str(exc))
+
+        state.normalized_task = result["normalized_task"]
+        state.complexity_tier = result["complexity_tier"]
+        state.error = None
+        self._state_mgr.save(state)
+
+        if result["actionable"]:
+            return self._transition(state, WorkflowStatus.PLANNING)
+        return self._transition(
+            state,
+            WorkflowStatus.PAUSED,
+            current_phase=WorkflowStatus.SCOPING.value,
+            error=str(result.get("blocking_reason") or "Task requires scoping review"),
+        )
+
     def _run_planning(self, state: RunState) -> RunState:
         schema = load_bundled_schema("plan.schema.json")
-        task_description = state.task
+        task_description = state.normalized_task or state.task
         feedback_parts = []
 
         planning_feedback = self._artifacts.load_feedback(state.run_id, "planning")
@@ -254,6 +367,15 @@ class Engine:
                     self._repo_root,
                     self._config.orchestrator.planning_timeout,
                     schema,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "planning",
+                        self._phase_cli("planning", config_name="planner"),
+                    ),
+                    model_override=self._resolve_model_for_phase(
+                        "planning",
+                        self._phase_cli("planning", config_name="planner"),
+                    ),
                 ),
                 initial_prompt=prompt,
             )
@@ -268,6 +390,7 @@ class Engine:
             return self._fail_run(state, exc.validation_error or str(exc))
 
         state.plan_id = self._artifacts.save_plan(state.run_id, result)
+        state.feasibility_id = None
         state.review_id = None
         state.adjudication_id = None
         self._artifacts.clear_feedback(state.run_id, "planning")
@@ -277,10 +400,14 @@ class Engine:
 
         if self._config.approval.require_plan_approval:
             return self._transition(state, WorkflowStatus.APPROVAL_PLAN)
+        if self._config.feasibility.enabled:
+            return self._transition(state, WorkflowStatus.FEASIBILITY)
         return self._transition(state, WorkflowStatus.EXECUTING)
 
     def _handle_plan_approval(self, state: RunState) -> RunState:
         if not self._config.approval.require_plan_approval:
+            if self._config.feasibility.enabled:
+                return self._transition(state, WorkflowStatus.FEASIBILITY)
             return self._transition(state, WorkflowStatus.EXECUTING)
 
         decision = self._artifacts.consume_approval_decision(state.run_id, "plan")
@@ -298,7 +425,99 @@ class Engine:
                 str(decision.get("reason") or ""),
             )
             return self._transition(state, WorkflowStatus.PLANNING)
+        if self._config.feasibility.enabled:
+            return self._transition(state, WorkflowStatus.FEASIBILITY)
         return self._transition(state, WorkflowStatus.EXECUTING)
+
+    def _run_feasibility(self, state: RunState) -> RunState:
+        if not self._config.feasibility.enabled:
+            return self._transition(state, WorkflowStatus.EXECUTING)
+
+        schema = load_bundled_schema("feasibility.schema.json")
+        plan = self._require_artifact(state.plan_id)
+        worktree_dir = self._ensure_worktree(state)
+        result_path = (self._artifact_root / "feasibility" / f"pending-{state.run_id}.json").resolve()
+        if result_path.exists():
+            result_path.unlink()
+
+        task_description = state.normalized_task or state.task
+        plan_json = json_block(plan)
+        directory_tree = render_directory_tree(worktree_dir)
+        adapter = self._adapter_for_phase("feasibility")
+        cli_name = self._phase_cli("feasibility", config_name="feasibility_checker")
+        if cli_name == "codex":
+            prompt = build_feasibility_prompt_codex(
+                task_description=task_description,
+                plan_json=plan_json,
+                directory_tree=directory_tree,
+                result_file_path=str(result_path),
+                schema_json=json_block(schema),
+            )
+        else:
+            prompt = build_feasibility_prompt_claude(
+                task_description=task_description,
+                plan_json=plan_json,
+                directory_tree=directory_tree,
+                schema_json=json_block(schema),
+            )
+        self._artifacts.save_prompt(f"feasibility-{state.run_id[:8]}.md", prompt)
+
+        try:
+            result = self._invoke_with_retries(
+                state,
+                retry_key="feasibility",
+                retries=self._retry_limit("feasibility"),
+                spinner_label="Checking feasibility",
+                invoke=lambda current_prompt: adapter.invoke(
+                    current_prompt,
+                    worktree_dir,
+                    self._config.feasibility.timeout,
+                    schema,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "feasibility",
+                        cli_name,
+                    ),
+                    model_override=self._resolve_model_for_phase("feasibility", cli_name),
+                ),
+                initial_prompt=prompt,
+            )
+        except BlockedOnCLI as exc:
+            return self._transition(
+                state,
+                WorkflowStatus.BLOCKED_ON_CLI,
+                current_phase=WorkflowStatus.FEASIBILITY.value,
+                error=str(exc),
+            )
+        except StepFailure as exc:
+            return self._fail_run(state, exc.validation_error or str(exc))
+        finally:
+            if result_path.exists():
+                result_path.unlink()
+
+        state.feasibility_id = self._artifacts.save_feasibility(state.run_id, result)
+        state.error = None
+        self._state_mgr.save(state)
+
+        if result["verdict"] in {"go", "go_with_warnings"}:
+            return self._transition(state, WorkflowStatus.EXECUTING)
+
+        if state.replan_count >= self._replan_limit():
+            return self._fail_run(state, "Replan loop limit exceeded")
+
+        state.replan_count += 1
+        self._state_mgr.save(state)
+        issues = [
+            f"- {issue['severity']}: {issue['description']}"
+            for issue in result.get("blocking_issues", [])
+        ]
+        feedback = str(result.get("summary") or "").strip()
+        if issues:
+            feedback = (feedback + "\n\nBlocking issues:\n" + "\n".join(issues)).strip()
+        self._artifacts.save_feedback(state.run_id, "planning", feedback)
+        self._discard_worktree(state, force=True)
+        self._artifacts.clear_execution_manifest(state.run_id)
+        return self._transition(state, WorkflowStatus.PLANNING)
 
     def _run_execution(self, state: RunState) -> RunState:
         plan = self._require_artifact(state.plan_id)
@@ -309,7 +528,7 @@ class Engine:
 
         worktree_dir = self._ensure_worktree(state)
         worker_name = self._phase_cli("executing", config_name="worker")
-        worker = self._adapter(worker_name)
+        worker = self._adapter_for_phase("executing")
         schema = load_bundled_schema("step_result.schema.json")
 
         for step_number in target_steps:
@@ -346,6 +565,12 @@ class Engine:
                     self._execution_timeout(step["estimated_complexity"]),
                     schema,
                     step_number=step_number,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "executing",
+                        worker_name,
+                    ),
+                    model_override=self._resolve_model_for_phase("executing", worker_name),
                 )
             else:
                 prompt = build_execution_prompt_claude(
@@ -359,6 +584,12 @@ class Engine:
                     worktree_dir,
                     self._execution_timeout(step["estimated_complexity"]),
                     schema,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "executing",
+                        worker_name,
+                    ),
+                    model_override=self._resolve_model_for_phase("executing", worker_name),
                 )
 
             attempt_number = 0
@@ -426,6 +657,7 @@ class Engine:
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter_for_phase("reviewing")
+        cli_name = self._phase_cli("reviewing", config_name="reviewer")
 
         try:
             result = self._invoke_with_retries(
@@ -438,6 +670,12 @@ class Engine:
                     self._repo_root,
                     self._config.orchestrator.review_timeout,
                     schema,
+                    reasoning_effort_override=self._resolve_effort_for_phase(
+                        state,
+                        "reviewing",
+                        cli_name,
+                    ),
+                    model_override=self._resolve_model_for_phase("reviewing", cli_name),
                 ),
                 initial_prompt=review_prompt,
             )
@@ -479,6 +717,7 @@ class Engine:
         )
         self._artifacts.save_prompt(f"adjudication-{state.run_id[:8]}.md", prompt)
         adapter = self._adapter_for_phase("adjudicating")
+        cli_name = self._phase_cli("adjudicating", config_name="adjudicator")
 
         try:
             result = self._invoke_with_retries(
@@ -492,6 +731,12 @@ class Engine:
                         self._repo_root,
                         self._config.orchestrator.adjudication_timeout,
                         schema,
+                        reasoning_effort_override=self._resolve_effort_for_phase(
+                            state,
+                            "adjudicating",
+                            cli_name,
+                        ),
+                        model_override=self._resolve_model_for_phase("adjudicating", cli_name),
                     ),
                     validator,
                     plan_step_numbers,
@@ -676,7 +921,10 @@ class Engine:
         cli_name = self._phase_cli(
             phase_name,
             config_name={
+                "scoping": "scoper",
                 "planning": "planner",
+                "feasibility": "feasibility_checker",
+                "executing": "worker",
                 "reviewing": "reviewer",
                 "adjudicating": "adjudicator",
             }[phase_name],
@@ -697,8 +945,35 @@ class Engine:
 
     def _phase_cli(self, workflow_phase: str, *, config_name: str) -> str:
         phase = self._workflow.phase(workflow_phase)
+        override = self._config.routing.phases.get(workflow_phase)
+        if override and override.cli:
+            return override.cli
         configured = getattr(self._config.routing, config_name)
         return configured or phase.cli or ""
+
+    def _resolve_effort_for_phase(
+        self,
+        state: RunState,
+        phase_name: str,
+        cli_name: str,
+    ) -> str | None:
+        override = self._config.routing.phases.get(phase_name)
+        if override and override.reasoning_effort:
+            return override.reasoning_effort
+
+        complexity_tier = state.complexity_tier
+        if complexity_tier:
+            tier_map = getattr(self._config.complexity_routing, complexity_tier, {})
+            if phase_name in tier_map:
+                return tier_map[phase_name]
+
+        return getattr(getattr(self._config.routing, cli_name), "reasoning_effort", "") or None
+
+    def _resolve_model_for_phase(self, phase_name: str, cli_name: str) -> str | None:
+        override = self._config.routing.phases.get(phase_name)
+        if override and override.model:
+            return override.model
+        return getattr(getattr(self._config.routing, cli_name), "model", "") or None
 
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries
@@ -706,18 +981,10 @@ class Engine:
         return config_limit or phase_limit
 
     def _rework_limit(self) -> int:
-        return (
-            self._config.orchestrator.max_rework_loops
-            or self._workflow.phase("adjudicating").loop_limits.get("rework")
-            or 0
-        )
+        return self._config.orchestrator.max_rework_loops
 
     def _replan_limit(self) -> int:
-        return (
-            self._config.orchestrator.max_replan_loops
-            or self._workflow.phase("adjudicating").loop_limits.get("replan")
-            or 0
-        )
+        return self._config.orchestrator.max_replan_loops
 
     def _execution_timeout(self, complexity: str) -> int:
         timeouts = self._workflow.phase("executing").complexity_timeouts
@@ -885,6 +1152,7 @@ class Engine:
 
     def _gate_phase(self, gate: str) -> str:
         return {
+            "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
             "merge": WorkflowStatus.APPROVAL_MERGE.value,
         }[gate]

@@ -1,6 +1,6 @@
 # AGENTS.md — CLI Adapter Contracts
 
-> **Design status: FROZEN** as of 2026-04-08.
+> **Design status: UPDATED** as of 2026-04-09.
 
 This document defines the exact contracts for how ai-orchestrator invokes Claude Code and Codex as subprocess workers.
 
@@ -19,6 +19,8 @@ class BaseAdapter:
         schema: dict,
         *,
         step_number: int | None = None,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
     ) -> dict
 ```
 
@@ -28,6 +30,8 @@ class BaseAdapter:
 - `timeout` — seconds before the subprocess is killed
 - `schema` — JSON schema dict to validate the output against
 - `step_number` — optional execution-step context used by worker adapters
+- `reasoning_effort_override` — optional phase-specific override
+- `model_override` — optional phase-specific override
 
 **Outputs:**
 - Returns a validated `dict` matching the schema
@@ -92,10 +96,11 @@ If configured in `aio.toml` (`routing.claude.reasoning_effort`), the adapter att
 
 | Phase | Used by default | Reasoning effort |
 |---|---|---|
+| Scoping | Yes | high |
 | Planning | Yes | high |
 | Execution | No (Codex default) | medium |
 | Review | Yes | high |
-| Adjudication | Yes | high |
+| Adjudication | No (Codex default) | medium |
 
 ---
 
@@ -117,9 +122,9 @@ codex exec "<prompt>"
 
 Because `codex exec` mutates files directly and may not produce clean JSON on stdout:
 
-1. **Result file (primary):** The prompt instructs Codex to write a JSON result to `.ai-orchestrator/results/pending-step-<n>.json`. If this file exists after execution, it is read and validated.
+1. **Result file (primary):** The prompt instructs Codex to write a JSON result file. Execution uses `.ai-orchestrator/results/pending-step-<n>.json`; feasibility uses `.ai-orchestrator/feasibility/pending-<run-id>.json`.
 2. **Stdout fallback:** If the result file is missing, scan stdout from the end backwards for the last valid JSON object. Parse and validate.
-3. **Git-diff-only fallback:** If both above fail, reconstruct a minimal `step_result` from `git diff --name-status` in the worktree. `files_changed` comes from git. `summary` defaults to "Changes detected via git diff." `status` defaults to `partial`. Metadata fields (`issues`, `test_commands`) are empty.
+3. **Git-diff-only fallback:** Execution only. If both above fail for a step result, reconstruct a minimal `step_result` from `git diff --name-status` in the worktree. `files_changed` comes from git. `summary` defaults to "Changes detected via git diff." `status` defaults to `partial`. Metadata fields (`issues`, `test_commands`) are empty.
 
 In all cases, `files_changed` is verified against `git diff` in the worktree. The git diff is the ground truth for what files changed; the AI-provided `files_changed` is treated as metadata only.
 
@@ -127,10 +132,11 @@ In all cases, `files_changed` is verified against `git diff` in the worktree. Th
 
 | Phase | Used by default |
 |---|---|
+| Feasibility | Yes |
 | Planning | No (Claude default) |
 | Execution | Yes |
 | Review | No (Claude default) |
-| Adjudication | No (Claude default) |
+| Adjudication | Yes |
 
 ---
 
@@ -140,10 +146,12 @@ Configured in `aio.toml` under `[routing]`:
 
 ```toml
 [routing]
+scoper = "claude"
 planner = "claude"
+feasibility_checker = "codex"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "claude"
+adjudicator = "codex"
 ```
 
 Any phase can be routed to either CLI:
@@ -199,7 +207,9 @@ Max retries configurable via `orchestrator.max_retries` (default: 3).
 
 | Phase | Default timeout | Config key |
 |---|---|---|
+| Scoping | 60s | `orchestrator.scoping_timeout` |
 | Planning | 120s | `orchestrator.planning_timeout` |
+| Feasibility | 120s | `feasibility.timeout` |
 | Execution (low complexity) | 180s | `orchestrator.execution_timeout_low` |
 | Execution (medium complexity) | 300s | `orchestrator.execution_timeout_medium` |
 | Execution (high complexity) | 600s | `orchestrator.execution_timeout_high` |
@@ -223,18 +233,18 @@ substitution before each CLI invocation.
 
 | Prompt file | Phase | CLI | Output schema |
 |---|---|---|---|
+| `docs/prompts/scope.md` | SCOPING | `claude -p` | `scoping.schema.json` |
 | `docs/prompts/plan.md` | PLANNING | `claude -p` | `plan.schema.json` |
+| `docs/prompts/feasibility.md` | FEASIBILITY | `codex exec` or `claude -p` | `feasibility.schema.json` |
 | `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `step_result.schema.json` |
 | `docs/prompts/review.md` | REVIEWING | `claude -p` | `review.schema.json` |
-| `docs/prompts/adjudicate.md` | ADJUDICATING | `claude -p` | `adjudication.schema.json` |
+| `docs/prompts/adjudicate.md` | ADJUDICATING | `codex exec` or `claude -p` | `adjudication.schema.json` |
 | `docs/prompts/fix-plan.md` | PLANNING (replan) | `claude -p` | `plan.schema.json` |
 
-Deferred prompt drafts are kept under `docs/prompts/deferred/` and are not invoked by the v1 engine:
+Deferred prompt drafts are kept under `docs/prompts/deferred/` and are not invoked by the current engine:
 
 | Prompt file | Intended phase | Status |
 |---|---|---|
-| `docs/prompts/deferred/define.md` | INIT pre-gate | Deferred |
-| `docs/prompts/deferred/feasibility.md` | pre-EXECUTING | Deferred |
 | `docs/prompts/deferred/finalize.md` | DONE entry | Deferred |
 
 ## Claude Code Skills
@@ -258,14 +268,9 @@ a workflow agent. These supplement the prompt with Codex-specific output convent
 | Agent file | Active phase | Prompt used |
 |---|---|---|
 | `implementer.md` | EXECUTING | `docs/prompts/implement.md` |
-| `adjudicator.md` | ADJUDICATING (alternate) | `docs/prompts/adjudicate.md` |
+| `adjudicator.md` | ADJUDICATING | `docs/prompts/adjudicate.md` |
+| `feasibility.md` | FEASIBILITY | `docs/prompts/feasibility.md` |
 | `repairer.md` | EXECUTING (rework loop) | `docs/prompts/implement.md` (rework variant) |
-
-Deferred Codex agent drafts:
-
-| Agent file | Intended phase | Prompt used |
-|---|---|---|
-| `feasibility.md` | pre-EXECUTING | `docs/prompts/deferred/feasibility.md` |
 
 ## Prompt Templates
 

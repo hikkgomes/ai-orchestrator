@@ -27,6 +27,7 @@ def artifact_root(tmp_path: Path) -> Path:
     root = tmp_path / ".ai-orchestrator"
     for subdir in (
         "state",
+        "feasibility",
         "plans",
         "results",
         "reviews",

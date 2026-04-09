@@ -1,6 +1,6 @@
 # Output Contracts
 
-> **Design status: FROZEN** as of 2026-04-08.
+> **Design status: UPDATED** as of 2026-04-09.
 
 Every artifact exchanged between workflow phases is a JSON file validated against a schema in `schemas/`. This document defines the contracts, their fields, and how they flow between phases.
 
@@ -9,11 +9,27 @@ Every artifact exchanged between workflow phases is a JSON file validated agains
 ## Artifact Flow
 
 ```
-Phase 1 (Planning)     → plans/plan-<uuid>.json         [plan.schema.json]
-Phase 3 (Execution)    → results/step-<n>-<uuid>.json   [step_result.schema.json]
-Phase 4 (Review)       → reviews/review-<uuid>.json     [review.schema.json]
-Phase 5 (Adjudication) → adjudications/adj-<uuid>.json  [adjudication.schema.json]
+Phase 1 (Scoping)      → transient result                    [scoping.schema.json]
+Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
+Phase 4 (Feasibility)  → feasibility/feasibility-<uuid>.json [feasibility.schema.json]
+Phase 5 (Execution)    → results/step-<n>-<uuid>.json       [step_result.schema.json]
+Phase 6 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
+Phase 7 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
 ```
+
+---
+
+## Scoping Contract (`scoping.schema.json`)
+
+Produced by the scoper. Consumed by the planner and engine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `actionable` | boolean | yes | Whether the task can proceed |
+| `normalized_task` | string | yes | Normalized task text |
+| `assumptions` | array of string | yes | Assumptions used during normalization |
+| `complexity_tier` | enum: simple/moderate/complex/architectural | yes | Task-level routing tier |
+| `blocking_reason` | string | conditional | Required when `actionable = false` |
 
 ---
 
@@ -44,6 +60,21 @@ Produced by the planner. Consumed by the executor and reviewer.
 - No circular dependencies in the dependency graph
 - All file paths are normalized and verified to stay within the repo root (reject paths containing `..` anywhere, e.g. `a/../../b`)
 - `depends_on` references are valid
+
+---
+
+## Feasibility Contract (`feasibility.schema.json`)
+
+Produced by the feasibility checker. Consumed by the engine before execution.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `verdict` | enum: go/go_with_warnings/blocked | yes | Overall feasibility decision |
+| `blocking_issues` | array | yes | Critical or warning issues |
+| `blocking_issues[].severity` | enum: critical/warning | yes | Issue impact |
+| `blocking_issues[].description` | string | yes | Problem summary |
+| `blocking_issues[].suggestion` | string | no | Suggested operator action |
+| `summary` | string | yes | High-level feasibility summary |
 
 ---
 
@@ -132,7 +163,10 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `status` | enum (see canonical states) | Current workflow state |
 | `current_phase` | string | Which phase is active |
 | `plan_id` | string or null | Reference to current plan |
+| `normalized_task` | string or null | Scoping-normalized task |
+| `complexity_tier` | string or null | Scoping-derived routing tier |
 | `step_results` | array of string | References to completed step results |
+| `feasibility_id` | string or null | Reference to current feasibility result |
 | `review_id` | string or null | Reference to current review |
 | `adjudication_id` | string or null | Reference to current adjudication |
 | `rework_count` | integer | How many rework loops so far |

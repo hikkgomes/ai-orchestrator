@@ -72,7 +72,9 @@ def cmd_init(ctx: click.Context, force: bool) -> None:
         ctx.obj["ui"].info("Repository already has the default orch scaffolding.")
 
 
-def _start_run(ctx: click.Context, task: str, interactive: bool) -> None:
+def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping: bool) -> None:
+    if skip_scoping:
+        _require_config(ctx).scoping.enabled = False
     engine = _build_engine(ctx)
     run_id = str(uuid4())
     state = engine.start(task, run_id)
@@ -84,19 +86,21 @@ def _start_run(ctx: click.Context, task: str, interactive: bool) -> None:
 @main.command("new")
 @click.argument("task")
 @click.option("--interactive", is_flag=True, default=False)
+@click.option("--skip-scoping", is_flag=True, default=False)
 @click.pass_context
-def cmd_new(ctx: click.Context, task: str, interactive: bool) -> None:
+def cmd_new(ctx: click.Context, task: str, interactive: bool, skip_scoping: bool) -> None:
     """Start a new orchestrated run for TASK."""
-    _start_run(ctx, task, interactive)
+    _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
 
 
 @main.command("run")
 @click.argument("task")
 @click.option("--interactive", is_flag=True, default=False)
+@click.option("--skip-scoping", is_flag=True, default=False)
 @click.pass_context
-def cmd_run(ctx: click.Context, task: str, interactive: bool) -> None:
+def cmd_run(ctx: click.Context, task: str, interactive: bool, skip_scoping: bool) -> None:
     """Start a new orchestrated run for TASK."""
-    _start_run(ctx, task, interactive)
+    _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
 
 
 @main.command("resume")
@@ -114,7 +118,7 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 @main.command("approve")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["plan", "merge"]))
+@click.argument("gate", type=click.Choice(["scope", "plan", "merge"]))
 @click.option("--force", is_flag=True, default=False, help="Allow a merge despite base-branch drift.")
 @click.pass_context
 def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None:
@@ -129,7 +133,7 @@ def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None
 
 @main.command("reject")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["plan", "merge"]))
+@click.argument("gate", type=click.Choice(["scope", "plan", "merge"]))
 @click.option("--reason", required=True)
 @click.pass_context
 def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str) -> None:
@@ -273,8 +277,22 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         state = state_mgr.load(run_id)
         if state.status != "PAUSED":
             return state
-        gate = "plan" if state.current_phase == "APPROVAL_PLAN" else "merge"
-        if gate == "plan" and state.plan_id:
+        if state.current_phase == "SCOPING":
+            gate = "scope"
+        elif state.current_phase == "APPROVAL_PLAN":
+            gate = "plan"
+        else:
+            gate = "merge"
+        if gate == "scope":
+            if state.normalized_task or state.complexity_tier:
+                ui.print_scoping_result(
+                    {
+                        "normalized_task": state.normalized_task or state.task,
+                        "complexity_tier": state.complexity_tier or "unknown",
+                        "blocking_reason": state.error,
+                    }
+                )
+        elif gate == "plan" and state.plan_id:
             plan = ArtifactStore(ctx.obj["artifact_root"]).read_json(state.plan_id)
             ui.print_plan(plan)
         elif gate == "merge" and state.worktree_branch and state.base_commit:
@@ -302,8 +320,18 @@ def _render_run_snapshot(ctx: click.Context, run_id: str, *, state=None) -> None
     if state is None:
         state = StateManager(ctx.obj["artifact_root"]).load(run_id)
     store = ArtifactStore(ctx.obj["artifact_root"])
+    if state.current_phase == "SCOPING":
+        ctx.obj["ui"].print_scoping_result(
+            {
+                "normalized_task": state.normalized_task or state.task,
+                "complexity_tier": state.complexity_tier or "unknown",
+                "blocking_reason": state.error,
+            }
+        )
     if state.current_phase == "APPROVAL_PLAN" and state.plan_id:
         ctx.obj["ui"].print_plan(store.read_json(state.plan_id))
+    if state.current_phase == "FEASIBILITY" and state.feasibility_id:
+        ctx.obj["ui"].print_feasibility_result(store.read_json(state.feasibility_id))
     if state.current_phase == "APPROVAL_MERGE" and state.base_commit and state.worktree_branch:
         ctx.obj["ui"].print_diff_summary(_run_diff_stat(ctx.obj["repo_root"], state.base_commit, state.worktree_branch))
     ctx.obj["ui"].print_status(

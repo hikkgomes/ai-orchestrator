@@ -11,6 +11,7 @@ max_retries = 3
 max_rework_loops = 3
 max_replan_loops = 2
 step_timeout = 300
+scoping_timeout = 60
 planning_timeout = 120
 execution_timeout_low = 180
 execution_timeout_medium = 300
@@ -22,7 +23,9 @@ adjudication_timeout = 120
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "claude"
+adjudicator = "codex"
+feasibility_checker = "codex"
+scoper = "claude"
 
 [routing.claude]
 model = ""
@@ -31,6 +34,28 @@ reasoning_effort = "high"
 [routing.codex]
 model = ""
 reasoning_effort = "medium"
+
+[routing.phases.scoping]
+reasoning_effort = "high"
+
+[routing.phases.planning]
+reasoning_effort = "medium"
+
+[routing.phases.feasibility]
+reasoning_effort = "medium"
+
+[routing.phases.reviewing]
+reasoning_effort = "high"
+
+[routing.phases.adjudicating]
+reasoning_effort = "medium"
+
+[scoping]
+enabled = true
+
+[feasibility]
+enabled = true
+timeout = 120
 
 [approval]
 require_plan_approval = true
@@ -57,13 +82,22 @@ DEFAULT_WORKFLOW = """# Default workflow configuration for ai-orchestrator.
 
 name: default
 description: >
-  Full orchestrated run: plan -> approve -> execute -> review -> adjudicate -> merge.
+  Full orchestrated run: scope -> plan -> feasibility -> execute -> review -> adjudicate -> merge.
 
 phases:
+  scoping:
+    cli: claude
+    retries: 2
+
   planning:
     cli: claude
     approval_gate: plan
     retries: 3
+
+  feasibility:
+    cli: codex
+    worktree: true
+    retries: 2
 
   executing:
     cli: codex
@@ -79,7 +113,7 @@ phases:
     retries: 3
 
   adjudicating:
-    cli: claude
+    cli: codex
     retries: 3
     loop_limits:
       rework: 3
@@ -94,6 +128,7 @@ phases:
 
 GITIGNORE_BLOCK = """# ai-orchestrator runtime artifacts
 .ai-orchestrator/state/
+.ai-orchestrator/feasibility/
 .ai-orchestrator/worktrees/
 .ai-orchestrator/logs/
 .ai-orchestrator/prompts/

@@ -59,6 +59,8 @@ class ClaudeAdapter(BaseAdapter):
         schema: dict[str, Any],
         *,
         step_number: int | None = None,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
     ) -> dict[str, Any]:
         """Invoke ``claude -p`` and return a validated output dict.
 
@@ -69,7 +71,11 @@ class ClaudeAdapter(BaseAdapter):
         BlockedOnCLI
             On auth/interactive exit or timeout with no output.
         """
-        command, model, reasoning_effort = self._build_command(prompt)
+        command, model, reasoning_effort = self._build_command(
+            prompt,
+            reasoning_effort_override=reasoning_effort_override,
+            model_override=model_override,
+        )
         return self._invoke_command(
             command,
             working_dir,
@@ -80,10 +86,20 @@ class ClaudeAdapter(BaseAdapter):
             allow_effort_retry=bool(reasoning_effort),
         )
 
-    def _build_command(self, prompt: str) -> tuple[list[str], str | None, str | None]:
+    def _build_command(
+        self,
+        prompt: str,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+    ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME]
-        model = getattr(self._config.routing.claude, "model", "") or None
-        reasoning_effort = getattr(self._config.routing.claude, "reasoning_effort", "") or None
+        model = model_override or getattr(self._config.routing.claude, "model", "") or None
+        reasoning_effort = (
+            reasoning_effort_override
+            or getattr(self._config.routing.claude, "reasoning_effort", "")
+            or None
+        )
         if model:
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:

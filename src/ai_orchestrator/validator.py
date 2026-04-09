@@ -178,6 +178,18 @@ class Validator:
 
         return data
 
+    def validate_scoping(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a scoping result artifact."""
+        _validate_schema(data, self._get_schema("scoping.schema.json"))
+
+        if data.get("actionable") is False and not data.get("blocking_reason"):
+            raise ValidationError(
+                "Invalid scoping result",
+                "Non-actionable scoping results require blocking_reason",
+            )
+
+        return data
+
     def validate_step_result(
         self,
         data: dict[str, Any],
@@ -249,6 +261,22 @@ class Validator:
                 raise ValidationError(
                     "Invalid review",
                     "Blocking reviews require at least one critical or major finding",
+                )
+
+        return data
+
+    def validate_feasibility(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a feasibility result artifact."""
+        _validate_schema(data, self._get_schema("feasibility.schema.json"))
+
+        if data["verdict"] == "blocked":
+            has_critical = any(
+                issue.get("severity") == "critical" for issue in data.get("blocking_issues", [])
+            )
+            if not has_critical:
+                raise ValidationError(
+                    "Invalid feasibility result",
+                    "Blocked feasibility results require at least one critical issue",
                 )
 
         return data

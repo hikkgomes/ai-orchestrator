@@ -63,6 +63,7 @@ def test_init_scaffolds_repo_files():
         workflow_text = Path("workflows/default.yaml").read_text(encoding="utf-8")
         assert "authoritative workflow definition" in workflow_text
         assert ".ai-orchestrator/results/" in Path(".gitignore").read_text(encoding="utf-8")
+        assert ".ai-orchestrator/feasibility/" in Path(".gitignore").read_text(encoding="utf-8")
 
 
 def test_install_shell_writes_bash_integration(monkeypatch, tmp_path):
@@ -78,3 +79,11 @@ def test_install_shell_writes_bash_integration(monkeypatch, tmp_path):
     assert integration.exists()
     assert 'alias aio=orch' in integration.read_text(encoding="utf-8")
     assert '.config/ai-orchestrator/shell/orch.bash' in (home / ".bashrc").read_text(encoding="utf-8")
+
+
+def test_run_help_lists_skip_scoping_option():
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--skip-scoping" in result.output

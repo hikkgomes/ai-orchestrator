@@ -21,6 +21,7 @@ class ArtifactStore:
         self._artifact_root = artifact_root
         self._retain_prompts = retain_prompts
         self._dirs = {
+            "feasibility": artifact_root / "feasibility",
             "plans": artifact_root / "plans",
             "results": artifact_root / "results",
             "reviews": artifact_root / "reviews",
@@ -39,6 +40,9 @@ class ArtifactStore:
 
     def save_plan(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("plans", f"plan-{run_id[:8]}", payload)
+
+    def save_feasibility(self, run_id: str, payload: dict[str, Any]) -> str:
+        return self._write_versioned_json("feasibility", f"feasibility-{run_id[:8]}", payload)
 
     def save_step_result(self, run_id: str, step_number: int, payload: dict[str, Any]) -> str:
         self.clear_pending_step_result(step_number)

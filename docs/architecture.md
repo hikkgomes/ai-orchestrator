@@ -1,6 +1,6 @@
 # Architecture
 
-> **Design status: FROZEN** as of 2026-04-08. Changes require explicit unfreezing.
+> **Design status: UPDATED** as of 2026-04-09.
 
 ## Overview
 
@@ -24,14 +24,15 @@
 │                      ai-orchestrator CLI                      │
 │  (Python – click + rich)                                      │
 │                                                               │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐ │
-│  │  Planner │→ │  Worker  │→ │ Reviewer │→ │ Adjudicator  │ │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬───────┘ │
+│  ┌──────────┐  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐ │
+│  │  Scoper  │→ │  Planner │→ │ Feasibility│→ │ Reviewer │→ │ Adjudicator  │ │
+│  └────┬─────┘  └────┬─────┘  └──────┬─────┘  └────┬─────┘  └──────┬───────┘ │
 │       │              │              │               │         │
 │       ▼              ▼              ▼               ▼         │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │              Artifact Store (.ai-orchestrator/)          │ │
-│  │  plans/ results/ reviews/ adjudications/ state/ logs/   │ │
+│  │ feasibility/ plans/ results/ reviews/ adjudications/    │ │
+│  │ state/ logs/                                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │       │              │                                        │
 │       ▼              ▼                                        │
@@ -50,6 +51,8 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── metadata.sqlite3            # run + adapter invocation metadata
 ├── state/
 │   └── run-<uuid>.json          # orchestrator run state (resumable)
+├── feasibility/
+│   └── feasibility-<uuid>.json  # validated against feasibility.schema.json
 ├── plans/
 │   └── plan-<uuid>.json         # validated against plan.schema.json
 ├── results/
@@ -97,8 +100,10 @@ States:
 | State | Description |
 |---|---|
 | `INIT` | Run created, not yet started |
+| `SCOPING` | Scoper CLI invocation in progress |
 | `PLANNING` | Planner CLI invocation in progress |
 | `APPROVAL_PLAN` | Waiting for human to approve/reject the plan |
+| `FEASIBILITY` | Feasibility checker validating the approved plan |
 | `EXECUTING` | Worker CLI executing plan steps sequentially |
 | `REVIEWING` | Reviewer CLI analyzing implementation |
 | `ADJUDICATING` | Adjudicator CLI deciding pass/rework/replan/fail |
@@ -148,7 +153,7 @@ Both adapters:
 
 **Claude adapter (primary):** Parse `--output-format json` stdout. Try `json.loads(stdout)` first. On failure, strip markdown fences and find JSON boundaries (lenient mode). Log a warning on lenient success.
 
-**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path (`.ai-orchestrator/results/pending-step-<n>.json`) that the prompt instructs the CLI to write. `files_changed` is always reconstructed from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail, construct a minimal result from git diff alone.
+**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-step-<n>.json`; feasibility writes `.ai-orchestrator/feasibility/pending-<run-id>.json`. Execution still reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
 
 ### 4. Schema Validator
 
@@ -206,7 +211,8 @@ step_timeout = 300
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "claude"
+feasibility_checker = "codex"
+adjudicator = "codex"
 
 [routing.claude]
 reasoning_effort = "high"

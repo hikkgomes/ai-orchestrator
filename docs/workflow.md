@@ -1,6 +1,6 @@
 # Workflow
 
-> **Design status: FROZEN** as of 2026-04-08.
+> **Design status: UPDATED** as of 2026-04-09.
 
 ## Workflow Phases
 
@@ -9,17 +9,37 @@ Every orchestrated run moves through these phases in order. Each phase is a dist
 `workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides the supported routing, retry, timeout, and loop-limit values.
 
 ```
- ┌─────────┐     ┌──────────────┐     ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐     ┌───────┐
- │ PLANNING │────▶│APPROVAL_PLAN │────▶│EXECUTING │────▶│ REVIEWING │────▶│ADJUDICATING│────▶│APPROVAL_MERGE│────▶│MERGING│──▶ DONE
- └─────────┘     └──────────────┘     └──────────┘     └───────────┘     └────────────┘     └──────────────┘     └───────┘
-      │               │                │                 │                  │
-      ▼               ▼                ▼                 ▼                  ▼
-  plan.json       (human)        step_result.json   review.json      adjudication.json
+INIT -> SCOPING -> PLANNING -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING -> REVIEWING
+         ^           ^                                          |
+         |           +------------------ REPLAN ----------------+
+         |
+         +---- reject/update task while paused at SCOPING
+
+ADJUDICATING -> APPROVAL_MERGE -> MERGING -> DONE
+      |
+      +---- REWORK -> EXECUTING
 ```
 
 ---
 
-## Phase 1: PLANNING
+## Phase 1: SCOPING
+
+**Purpose:** Normalize the raw task and classify a task-level `complexity_tier` before planning.
+
+| Property | Value |
+|---|---|
+| Default CLI | `claude -p` |
+| Config key | `routing.scoper` |
+| Input | Raw task + repo summary + shallow directory tree |
+| Output | transient result validated against `scoping.schema.json` |
+| Worktree | No |
+| Retries | Up to `max_retries` on schema/validation failure |
+
+If the task is not actionable, the run pauses at the `SCOPING` gate. The operator can approve to continue anyway or reject with a replacement task, which re-runs scoping.
+
+---
+
+## Phase 2: PLANNING
 
 **Purpose:** Decompose a high-level task into an ordered list of implementation steps.
 
@@ -57,7 +77,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 ---
 
-## Phase 2: APPROVAL_PLAN
+## Phase 3: APPROVAL_PLAN
 
 **Purpose:** Human reviews the generated plan before execution begins.
 
@@ -70,11 +90,28 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 When rejected (`aio reject <run-id> plan --reason "..."`), the rejection reason is fed back into Phase 1 as additional context and planning re-runs.
 
-**Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to EXECUTING.
+**Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to FEASIBILITY when enabled, otherwise EXECUTING.
 
 ---
 
-## Phase 3: EXECUTING
+## Phase 4: FEASIBILITY
+
+**Purpose:** Validate that the approved plan is executable in the current repository state before any worker mutation.
+
+| Property | Value |
+|---|---|
+| Default CLI | `codex exec` |
+| Config key | `routing.feasibility_checker` |
+| Input | Normalized task + approved plan + pre-execution worktree tree |
+| Output | `feasibility/feasibility-<uuid>.json` validated against `feasibility.schema.json` |
+| Worktree | Yes (read-only probe) |
+| Retries | Up to `max_retries` on schema failure |
+
+Blocked feasibility results feed back into replanning and consume the replan loop budget.
+
+---
+
+## Phase 5: EXECUTING
 
 **Purpose:** Implement each step in the plan, sequentially, in a single worktree.
 
@@ -153,7 +190,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 ---
 
-## Phase 4: REVIEWING
+## Phase 6: REVIEWING
 
 **Purpose:** A second AI reviews the implementation for correctness, style, and completeness.
 
@@ -193,13 +230,13 @@ The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 
 ---
 
-## Phase 5: ADJUDICATING
+## Phase 7: ADJUDICATING
 
 **Purpose:** Decide whether the implementation passes review or needs rework.
 
 | Property | Value |
 |---|---|
-| Default CLI | `claude -p` |
+| Default CLI | `codex exec` |
 | Config key | `routing.adjudicator` |
 | Input | Review JSON + step results + original task |
 | Output | `adjudications/adj-<uuid>.json` validated against `adjudication.schema.json` |
@@ -225,7 +262,7 @@ When any loop limit is hit, the run transitions to `FAILED` with a summary of al
 
 ---
 
-## Phase 6: APPROVAL_MERGE
+## Phase 8: APPROVAL_MERGE
 
 **Purpose:** Human reviews final implementation before merge.
 
@@ -242,7 +279,7 @@ On rejection, reason is fed to Phase 5 for re-adjudication.
 
 ---
 
-## Phase 7: MERGING
+## Phase 9: MERGING
 
 **Purpose:** Merge the worktree branch into the base branch.
 

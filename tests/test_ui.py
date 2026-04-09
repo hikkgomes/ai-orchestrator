@@ -78,3 +78,28 @@ def test_print_doctor_report_renders_all_checks():
     assert "WARN" in output
     assert "repo-config" in output
     assert "orch init" in output
+
+
+def test_print_scoping_and_feasibility_results():
+    ui, console, _ = _ui()
+
+    ui.print_scoping_result(
+        {
+            "normalized_task": "Fix typo in README",
+            "complexity_tier": "simple",
+            "blocking_reason": "Need a repository-scoped task.",
+        }
+    )
+    ui.print_feasibility_result(
+        {
+            "verdict": "blocked",
+            "blocking_issues": [{"severity": "critical", "description": "Missing config"}],
+            "summary": "Execution is blocked.",
+        }
+    )
+
+    output = console.export_text()
+    assert "Scoping Result" in output
+    assert "Fix typo in README" in output
+    assert "Feasibility Result" in output
+    assert "Missing config" in output

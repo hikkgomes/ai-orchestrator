@@ -35,6 +35,11 @@ _AUTH_PATTERNS = (
 )
 
 _STEP_RESULT_PATH_PATTERN = re.compile(r"pending-step-(\d+)\.json")
+_RESULT_FILE_PATH_PATTERN = re.compile(
+    r"(?:write your result JSON to:|write a JSON result file to the path:)\s*\n([^\n]+\.json)",
+    re.IGNORECASE,
+)
+_ANY_JSON_PATH_PATTERN = re.compile(r"([^\s]+\.json)")
 
 
 class CodexAdapter(BaseAdapter):
@@ -55,6 +60,8 @@ class CodexAdapter(BaseAdapter):
         schema: dict[str, Any],
         *,
         step_number: int | None = None,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
     ) -> dict[str, Any]:
         """Invoke ``codex exec`` and return a validated output dict.
 
@@ -65,11 +72,19 @@ class CodexAdapter(BaseAdapter):
         BlockedOnCLI
             On auth/interactive exit or timeout with no output.
         """
-        step_number = step_number or self._extract_step_number(prompt)
-        if step_number is None:
-            raise StepFailure("Codex prompt is missing the pending step result path")
+        schema_title = schema.get("title")
+        result_path = self._extract_result_path(prompt, working_dir)
+        if schema_title == "StepResult":
+            step_number = step_number or self._extract_step_number(prompt)
+            if step_number is None:
+                raise StepFailure("Codex prompt is missing the pending step result path")
+            result_path = self._pending_result_path(step_number)
 
-        command, model, reasoning_effort = self._build_command(prompt)
+        command, model, reasoning_effort = self._build_command(
+            prompt,
+            reasoning_effort_override=reasoning_effort_override,
+            model_override=model_override,
+        )
         completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
         stdout = completed.stdout
         stderr = completed.stderr
@@ -140,27 +155,36 @@ class CodexAdapter(BaseAdapter):
                 stderr=stderr,
             )
 
-        git_result = self._git_diff_fallback(working_dir, step_number)
-        output_source = "git-diff"
-        result = self._try_result_file(self._pending_result_path(step_number))
+        output_source = "stdout"
+        result = self._try_result_file(result_path) if result_path else None
         if result is not None:
             output_source = "result-file"
         else:
             result = self._scan_stdout_for_json(stdout)
-            if result is not None:
-                output_source = "stdout"
 
-        merged = self._merge_result_metadata(
-            git_result,
-            result,
-            step_number=step_number,
-        )
-        validated = self._validate_output(
-            merged,
-            schema,
-            working_dir,
-            step_number=step_number or merged.get("step_number"),
-        )
+        if schema_title == "StepResult":
+            git_result = self._git_diff_fallback(working_dir, step_number or 0)
+            if result is None:
+                output_source = "git-diff"
+            merged = self._merge_result_metadata(
+                git_result,
+                result,
+                step_number=step_number or 0,
+            )
+            validated = self._validate_output(
+                merged,
+                schema,
+                working_dir,
+                step_number=step_number or merged.get("step_number"),
+            )
+        else:
+            if result is None:
+                raise StepFailure(
+                    "Codex CLI did not produce a parseable JSON result",
+                    stdout=stdout,
+                    stderr=stderr,
+                )
+            validated = self._validate_output(result, schema, working_dir)
         typed_result = self._typed_step_result(validated)
         self._record_invocation(
             InvocationRecord(
@@ -186,10 +210,20 @@ class CodexAdapter(BaseAdapter):
         )
         return validated
 
-    def _build_command(self, prompt: str) -> tuple[list[str], str | None, str | None]:
+    def _build_command(
+        self,
+        prompt: str,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+    ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME, "exec"]
-        model = getattr(self._config.routing.codex, "model", "") or None
-        reasoning_effort = getattr(self._config.routing.codex, "reasoning_effort", "") or None
+        model = model_override or getattr(self._config.routing.codex, "model", "") or None
+        reasoning_effort = (
+            reasoning_effort_override
+            or getattr(self._config.routing.codex, "reasoning_effort", "")
+            or None
+        )
         if model:
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:
@@ -205,6 +239,18 @@ class CodexAdapter(BaseAdapter):
     def _extract_step_number(prompt: str) -> int | None:
         match = _STEP_RESULT_PATH_PATTERN.search(prompt)
         return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _extract_result_path(prompt: str, working_dir: Path) -> Path | None:
+        match = _RESULT_FILE_PATH_PATTERN.search(prompt)
+        if not match:
+            match = _ANY_JSON_PATH_PATTERN.search(prompt)
+        if not match:
+            return None
+        path = Path(match.group(1).strip())
+        if not path.is_absolute():
+            path = working_dir / path
+        return path
 
     def _try_result_file(self, path: Path) -> dict[str, Any] | None:
         """Read and parse the result file if it exists; return None otherwise."""

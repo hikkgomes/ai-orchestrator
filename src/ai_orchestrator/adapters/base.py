@@ -135,6 +135,8 @@ class BaseAdapter(ABC):
         schema: dict[str, Any],
         *,
         step_number: int | None = None,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
     ) -> dict[str, Any]:
         """Invoke the CLI with *prompt* and return a validated result dict.
 
@@ -150,6 +152,10 @@ class BaseAdapter(ABC):
             JSON schema dict to validate the output against.
         step_number:
             Optional step number context for execution-phase validations.
+        reasoning_effort_override:
+            Optional phase-specific reasoning effort override.
+        model_override:
+            Optional phase-specific model override.
 
         Returns
         -------
@@ -221,12 +227,16 @@ class BaseAdapter(ABC):
         validator = Validator(working_dir)
         title = schema.get("title")
         try:
+            if title == "TaskDefinition":
+                return validator.validate_scoping(data)
             if title == "Plan":
                 return validator.validate_plan(data)
             if title == "StepResult":
                 if step_number is None:
                     step_number = int(data.get("step_number", 0))
                 return validator.validate_step_result(data, step_number)
+            if title == "FeasibilityResult":
+                return validator.validate_feasibility(data)
             if title == "Review":
                 return validator.validate_review(data)
             if title == "Adjudication":

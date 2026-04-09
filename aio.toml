@@ -3,6 +3,7 @@ max_retries = 3
 max_rework_loops = 3
 max_replan_loops = 2
 step_timeout = 300
+scoping_timeout = 60
 planning_timeout = 120
 execution_timeout_low = 180
 execution_timeout_medium = 300
@@ -14,7 +15,9 @@ adjudication_timeout = 120
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "claude"
+adjudicator = "codex"
+feasibility_checker = "codex"
+scoper = "claude"
 
 [routing.claude]
 model = ""
@@ -23,6 +26,28 @@ reasoning_effort = "high"
 [routing.codex]
 model = ""
 reasoning_effort = "medium"
+
+[routing.phases.scoping]
+reasoning_effort = "high"
+
+[routing.phases.planning]
+reasoning_effort = "medium"
+
+[routing.phases.feasibility]
+reasoning_effort = "medium"
+
+[routing.phases.reviewing]
+reasoning_effort = "high"
+
+[routing.phases.adjudicating]
+reasoning_effort = "medium"
+
+[scoping]
+enabled = true
+
+[feasibility]
+enabled = true
+timeout = 120
 
 [approval]
 require_plan_approval = true

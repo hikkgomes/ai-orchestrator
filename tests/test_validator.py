@@ -88,6 +88,50 @@ class TestStepResultValidation:
         with pytest.raises(ValidationError):
             v.validate_step_result(result, step_number=1)
 
+
+class TestScopingValidation:
+    def test_non_actionable_requires_blocking_reason(self, tmp_path):
+        v = Validator(tmp_path)
+        scoping = {
+            "actionable": False,
+            "normalized_task": "raw task",
+            "assumptions": [],
+            "complexity_tier": "simple",
+        }
+        with pytest.raises(ValidationError):
+            v.validate_scoping(scoping)
+
+    def test_actionable_scoping_is_valid(self, tmp_path):
+        v = Validator(tmp_path)
+        scoping = {
+            "actionable": True,
+            "normalized_task": "Fix typo in README",
+            "assumptions": [],
+            "complexity_tier": "simple",
+        }
+        assert v.validate_scoping(scoping)["complexity_tier"] == "simple"
+
+
+class TestFeasibilityValidation:
+    def test_blocked_requires_critical_issue(self, tmp_path):
+        v = Validator(tmp_path)
+        feasibility = {
+            "verdict": "blocked",
+            "blocking_issues": [{"severity": "warning", "description": "maybe"}],
+            "summary": "Blocked",
+        }
+        with pytest.raises(ValidationError):
+            v.validate_feasibility(feasibility)
+
+    def test_go_with_warnings_is_valid(self, tmp_path):
+        v = Validator(tmp_path)
+        feasibility = {
+            "verdict": "go_with_warnings",
+            "blocking_issues": [{"severity": "warning", "description": "Optional tool missing"}],
+            "summary": "Can proceed.",
+        }
+        assert v.validate_feasibility(feasibility)["verdict"] == "go_with_warnings"
+
     def test_success_requires_files_changed(self, tmp_path):
         v = Validator(tmp_path)
         result = {
