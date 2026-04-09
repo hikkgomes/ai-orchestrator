@@ -118,9 +118,9 @@ Add `--editable` (or `-Editable` on Windows) for a local dev install.
 ## First-time repo setup
 
 Installing the CLI on your machine makes `orch` available in any terminal, including VS Code.
-You still need to initialize each repository you want to orchestrate.
+You still need to initialize each repository or workspace you want to orchestrate.
 
-From the root of the repository you want to orchestrate:
+From the root of the repository or workspace you want to orchestrate:
 
 ```bash
 orch init           # writes aio.toml, workflows/default.yaml, .gitignore entries
@@ -149,10 +149,10 @@ orch new "Fix the off-by-one in pagination" --skip-scoping
 ### Non-interactive mode
 
 ```bash
-orch run "Refactor auth middleware" --no-interactive
+orch run "Refactor auth middleware"
 ```
 
-The run pauses at approval gates. Use `approve`/`reject` commands to drive it:
+Non-interactive mode is the default. The run pauses at approval gates. Use `approve`/`reject` commands to drive it:
 
 ```bash
 orch approve <run-id> plan
@@ -171,7 +171,7 @@ orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
 orch status                      # overview of all runs
 orch status <run-id> --watch     # live status for a specific run
 orch logs <run-id>               # view event log
-orch logs <run-id> --step 3      # view a specific step result
+orch logs <run-id> 3             # view a specific step result
 orch resume <run-id>             # resume a paused or blocked run
 orch config                      # show effective configuration
 orch clean                       # remove completed run artifacts
@@ -258,6 +258,7 @@ timeout = 120
 
 [approval]
 require_plan_approval = true
+# require_merge_approval may still appear in older configs but is no longer used.
 
 # Uncomment for multi-repo workspace mode:
 # [workspace]
