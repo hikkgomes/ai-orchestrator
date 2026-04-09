@@ -3,6 +3,7 @@ from __future__ import annotations
 from ai_orchestrator.prompts.templates import (
     build_feasibility_prompt_claude,
     build_feasibility_prompt_codex,
+    build_review_prompt,
     build_scoping_prompt,
     build_retry_prompt,
     collect_file_context,
@@ -113,3 +114,39 @@ def test_build_feasibility_prompt_claude_renders_static_analysis_rules():
     assert "STATIC ANALYSIS" in prompt
     assert 'Identify any "files_to_modify" paths' in prompt
     assert "Respond with ONLY valid JSON." in prompt
+
+
+def test_build_review_prompt_renders_optional_reviewer_sections():
+    prompt = build_review_prompt(
+        task_description="Implement feature",
+        plan_json='{"plan_id":"1"}',
+        git_diff="diff --git a/a.py b/a.py",
+        step_results_json='[{"step_number":1}]',
+        schema_json='{"title":"Review"}',
+        heuristic_findings=[
+            {
+                "workspace": "",
+                "rule_id": "placeholder",
+                "file": "src/app.py",
+                "line": 4,
+                "snippet": 'dummy_key = "changeme"',
+            }
+        ],
+        review_categories={
+            "hallucinated_api": "Non-existent APIs, methods, flags, or parameters.",
+            "runtime_breakage": "Code that appears plausible but will not run.",
+        },
+        reviewer_config={
+            "project": {"stack": ["python", "fastapi"]},
+            "paths": {"critical": ["src/auth/"]},
+            "risk": {"auth_sensitive": ["middleware.py"]},
+            "architecture": {"patterns": ["layered"], "key_libraries": {}, "naming": {}, "project_description": ""},
+        },
+    )
+
+    assert "HEURISTIC SCAN RESULTS:" in prompt
+    assert '[placeholder] src/app.py:4 :: dummy_key = "changeme"' in prompt
+    assert "AI FAILURE CATEGORIES:" in prompt
+    assert "hallucinated_api - Non-existent APIs" in prompt
+    assert "REPOSITORY CONTEXT:" in prompt
+    assert "Stack: python, fastapi" in prompt

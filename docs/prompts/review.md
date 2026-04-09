@@ -11,8 +11,9 @@
 ## Purpose
 
 Independently review the full implementation against the original task and plan.
-The reviewer has not participated in planning or execution. It reads only the
-task, plan, diff, and step results. It must assess:
+The reviewer has not participated in planning or execution. It reads the
+task, plan, diff, step results, bundled review categories, optional heuristic
+scanner output, and optional repository context. It must assess:
 
 1. Correctness — does the implementation do what the task requires?
 2. Completeness — are all plan steps covered? Are there missing cases?
@@ -34,6 +35,9 @@ findings with `critical` or `major` severity.
 | `{plan_json}` | `plans/plan-<uuid>.json` | Full plan JSON |
 | `{git_diff}` | worktree | Output of `git diff <base_commit>...aio/run-<uuid>`, truncated to 80 000 chars |
 | `{step_results_json}` | `results/` | Array of all step result JSONs for this run |
+| `{heuristic_scan_section}` | reviewer scanner | Optional regex-based findings for changed files |
+| `{review_categories_section}` | bundled `reviewer/rules.yaml` | Ordered AI-failure checklist |
+| `{repository_context_section}` | `.ai-review/config.json` | Optional repo-aware review hints |
 | `{review_schema}` | `schemas/review.schema.json` | Full JSON Schema for the review artifact |
 | `{rework_count}` | run state | Number of prior rework loops (informs severity calibration) |
 
@@ -106,6 +110,12 @@ IMPLEMENTATION DIFF:
 STEP RESULTS:
 {step_results_json}
 
+{heuristic_scan_section}
+
+{review_categories_section}
+
+{repository_context_section}
+
 {rework_context_section}
 
 OUTPUT SCHEMA:
@@ -133,6 +143,38 @@ REVIEW RULES:
 8. "review_id" must be a valid UUID v4.
 
 Respond with ONLY valid JSON. No markdown fences. No commentary.
+```
+
+### Heuristic scan section (injected only when findings exist)
+
+```
+HEURISTIC SCAN RESULTS:
+The following patterns were detected in changed files. Verify each finding
+against the actual code. Include confirmed issues in your findings array.
+Silently discard false positives.
+
+[placeholder] src/foo.py:42 :: dummy_key = "changeme"
+[sql_concatenation] src/db.py:15 :: query = "SELECT * FROM " + table
+```
+
+### Review categories section (always injected when rules are available)
+
+```
+AI FAILURE CATEGORIES:
+Review against these categories in order of priority:
+1. hallucinated_api - Non-existent APIs, methods, flags, or parameters.
+2. runtime_breakage - Code that appears plausible but will not run.
+...
+```
+
+### Repository context section (injected only when `.ai-review/config.json` exists)
+
+```
+REPOSITORY CONTEXT:
+Stack: python, fastapi, postgres
+Critical paths: src/auth/, migrations/
+Risk areas: auth_sensitive=[middleware.py], migration_sensitive=[migrations/]
+Architecture: layered, repository-pattern
 ```
 
 ### Rework context section (injected only when `rework_count >= 1`)

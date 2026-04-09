@@ -257,8 +257,14 @@ def build_review_prompt(
     git_diff: str,
     step_results_json: str,
     schema_json: str,
+    heuristic_findings: list[dict[str, Any]] | None = None,
+    review_categories: dict[str, str] | list[tuple[str, str]] | None = None,
+    reviewer_config: dict[str, Any] | None = None,
 ) -> str:
     """Build the review phase prompt."""
+    heuristic_section = _review_heuristic_section(heuristic_findings)
+    categories_section = _review_categories_section(review_categories)
+    repo_context_section = _reviewer_context_section(reviewer_config)
     return (
         "You are a code review agent. Review the following implementation.\n\n"
         "ORIGINAL TASK:\n"
@@ -269,6 +275,9 @@ def build_review_prompt(
         f"{git_diff}\n\n"
         "STEP RESULTS:\n"
         f"{step_results_json}\n\n"
+        f"{heuristic_section}"
+        f"{categories_section}"
+        f"{repo_context_section}"
         "Produce a JSON review conforming to this schema:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
@@ -416,6 +425,91 @@ def repo_summary(repo_root: Path) -> str:
             if stripped:
                 return stripped
     return "<no README>"
+
+
+def _review_heuristic_section(findings: list[dict[str, Any]] | None) -> str:
+    if not findings:
+        return ""
+    lines = []
+    for finding in findings:
+        workspace = str(finding.get("workspace") or "").strip()
+        prefix = f"[{workspace}]" if workspace else ""
+        lines.append(
+            f"{prefix}[{finding['rule_id']}] {finding['file']}:{finding['line']} :: {finding['snippet']}"
+        )
+    return (
+        "HEURISTIC SCAN RESULTS:\n"
+        "The following patterns were detected in changed files. Verify each finding\n"
+        "against the actual code. Include confirmed issues in your findings array.\n"
+        "Silently discard false positives.\n\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+def _review_categories_section(categories: dict[str, str] | list[tuple[str, str]] | None) -> str:
+    if not categories:
+        return ""
+    entries = categories.items() if isinstance(categories, dict) else categories
+    lines = [
+        f"{index}. {category} - {description}"
+        for index, (category, description) in enumerate(entries, start=1)
+    ]
+    return (
+        "AI FAILURE CATEGORIES:\n"
+        "Review against these categories in order of priority:\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+def _reviewer_context_section(config: dict[str, Any] | None) -> str:
+    if not config:
+        return ""
+
+    project = config.get("project") or {}
+    paths = config.get("paths") or {}
+    risk = config.get("risk") or {}
+    architecture = config.get("architecture") or {}
+    naming = architecture.get("naming") or {}
+    key_libraries = architecture.get("key_libraries") or {}
+
+    lines: list[str] = []
+    if project.get("stack"):
+        lines.append(f"Stack: {', '.join(project['stack'])}")
+    if paths.get("critical"):
+        lines.append(f"Critical paths: {', '.join(paths['critical'])}")
+
+    risk_parts = [
+        f"{name}=[{', '.join(values)}]"
+        for name, values in risk.items()
+        if values
+    ]
+    if risk_parts:
+        lines.append(f"Risk areas: {', '.join(risk_parts)}")
+
+    if architecture.get("patterns"):
+        lines.append(f"Architecture: {', '.join(architecture['patterns'])}")
+
+    library_parts = [
+        f"{category}=[{', '.join(values)}]"
+        for category, values in key_libraries.items()
+        if values
+    ]
+    if library_parts:
+        lines.append(f"Key libraries: {', '.join(library_parts)}")
+
+    naming_parts = [f"{key}={value}" for key, value in naming.items() if value]
+    if naming_parts:
+        lines.append(f"Naming: {', '.join(naming_parts)}")
+
+    if architecture.get("project_description"):
+        lines.append(f"Description: {architecture['project_description']}")
+
+    if not lines:
+        return ""
+
+    return "REPOSITORY CONTEXT:\n" + "\n".join(lines) + "\n\n"
 
 
 def json_block(data: Any) -> str:

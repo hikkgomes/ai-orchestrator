@@ -29,6 +29,9 @@ from .prompts.templates import (
     render_directory_tree,
     repo_summary,
 )
+from .reviewer import load_config as load_reviewer_config
+from .reviewer import load_rules as load_reviewer_rules
+from .reviewer import run_review_scan
 from .state import StateManager
 from .validator import ValidationError, Validator, load_bundled_schema
 from .workflow import WorkflowDefinition, load_workflow_definition
@@ -678,12 +681,27 @@ class Engine:
         schema = load_bundled_schema("review.schema.json")
         plan = self._require_artifact(state.plan_id)
         git_diff = redact_secret_text(self._implementation_diff(state))
+        review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
+        try:
+            changed_files = self._review_changed_files(state)
+        except (EngineError, OSError):
+            changed_files = []
+        reviewer_config = self._load_reviewer_config(review_root)
+        heuristic_findings = self._run_heuristic_scan(
+            review_root,
+            changed_files=changed_files,
+            reviewer_config=reviewer_config,
+        )
+        reviewer_rules = self._load_reviewer_rules()
         review_prompt = build_review_prompt(
-            task_description=state.task,
+            task_description=state.normalized_task or state.task,
             plan_json=json_block(plan),
             git_diff=git_diff,
             step_results_json=json_block(self._load_step_results(state)),
             schema_json=json_block(schema),
+            heuristic_findings=heuristic_findings,
+            review_categories=reviewer_rules.get("review_categories") or {},
+            reviewer_config=reviewer_config,
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter_for_phase("reviewing")
@@ -724,13 +742,76 @@ class Engine:
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.ADJUDICATING)
 
+    def _run_heuristic_scan(
+        self,
+        root: Path,
+        *,
+        changed_files: list[str],
+        reviewer_config: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        try:
+            return run_review_scan(root, changed_files=changed_files, config=reviewer_config)
+        except Exception:
+            return []
+
+    def _load_reviewer_config(self, root: Path) -> dict[str, Any] | None:
+        config = load_reviewer_config(root)
+        if config is not None or root == self._repo_root:
+            return config
+        return load_reviewer_config(self._repo_root)
+
+    def _load_reviewer_rules(self) -> dict[str, Any]:
+        try:
+            return load_reviewer_rules()
+        except Exception:
+            return {"review_categories": []}
+
+    def _review_changed_files(self, state: RunState) -> list[str]:
+        if state.is_workspace:
+            changed: list[str] = []
+            for repo in state.workspace_repos:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD"],
+                    cwd=self._repo_root / repo,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise EngineError(
+                        f"Failed to list changed files for workspace repo '{repo}': {result.stderr.strip() or result.stdout.strip()}"
+                    )
+                changed.extend(
+                    f"{repo}/{path.strip()}"
+                    for path in result.stdout.splitlines()
+                    if path.strip()
+                )
+            return list(dict.fromkeys(changed))
+
+        if not state.base_commit or not state.worktree_branch:
+            return []
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{state.base_commit}...{state.worktree_branch}"],
+            cwd=self._repo_root,
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise EngineError(
+                f"Failed to list changed files for review: {result.stderr.strip() or result.stdout.strip()}"
+            )
+        return list(dict.fromkeys(path.strip() for path in result.stdout.splitlines() if path.strip()))
+
     def _run_adjudication(self, state: RunState) -> RunState:
         schema = load_bundled_schema("adjudication.schema.json")
         plan = self._require_artifact(state.plan_id)
         plan_step_numbers = {int(step["step_number"]) for step in plan["steps"]}
         validator = Validator(self._repo_root)
         review = self._require_artifact(state.review_id)
-        task_description = state.task
+        task_description = state.normalized_task or state.task
         adjudication_feedback = self._artifacts.load_feedback(state.run_id, "adjudication")
         if adjudication_feedback:
             task_description = (

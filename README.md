@@ -29,6 +29,11 @@ SCOPING ─► PLANNING ─► APPROVAL ─► FEASIBILITY ─► EXECUTING ─�
 
 Claude and GPT check each other's work at every stage. Model effort (low/medium/high/max) is automatically selected based on task complexity.
 
+The review phase can also inject non-AI evidence:
+
+- heuristic findings from the bundled AI-gotcha scanner on changed files
+- repo-aware review context from `.ai-review/config.json` when installed
+
 ## Requirements
 
 - Python 3.11+
@@ -47,7 +52,7 @@ On a brand new Mac, install the prerequisites in this order:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # 2. Install required tools
-brew install git python@3.11 pipx
+brew install git python@3.11 pipx claude codex
 
 # 3. Enable pipx in your shell
 pipx ensurepath
@@ -62,8 +67,8 @@ pipx --version
 Then install and authenticate the two AI CLIs using their normal vendor setup flows, and verify:
 
 ```bash
-claude --version
-codex --version
+claude login
+codex login
 ```
 
 After that, install ai-orchestrator:
@@ -125,7 +130,15 @@ From the root of the repository or workspace you want to orchestrate:
 ```bash
 orch init           # writes aio.toml, workflows/default.yaml, .gitignore entries
 orch install-shell  # installs shell integration and `aio` alias
+orch review-install # writes .ai-review/config.json and bundled review rules
 orch doctor         # verifies everything is working
+```
+
+If the repo changes significantly later, refresh the reviewer context without
+discarding curated notes or risk paths:
+
+```bash
+orch review-analyze
 ```
 
 ## Usage
@@ -173,6 +186,8 @@ orch status <run-id> --watch     # live status for a specific run
 orch logs <run-id>               # view event log
 orch logs <run-id> 3             # view a specific step result
 orch resume <run-id>             # resume a paused or blocked run
+orch review-install              # create repo-local reviewer config and rules
+orch review-analyze              # refresh reviewer config from current repo
 orch config                      # show effective configuration
 orch clean                       # remove completed run artifacts
 orch clean --all                 # remove all run artifacts
@@ -271,6 +286,19 @@ max_replan_loops = 2
 ```
 
 Complexity-adaptive effort selection is built in. When scoping classifies a task as `simple`, `moderate`, `complex`, or `architectural`, downstream phases automatically use appropriate effort levels. Per-phase overrides in `[routing.phases.*]` take precedence.
+
+## Reviewer setup
+
+Reviewer heuristics run automatically during the review phase, even if you do
+not configure anything else. `orch review-install` adds repo-aware context that
+makes reviews more targeted. It creates:
+
+- `.ai-review/config.json` for detected stack, commands, architecture, and risk paths
+- `.ai-review/rules.yaml` for the bundled review categories used in the prompt
+
+Use `orch review-analyze` to refresh the detected fields while preserving manual
+edits such as notes and curated critical paths. Once config exists,
+`orch review-install` requires `--force` to overwrite it.
 
 ## Runtime layout
 

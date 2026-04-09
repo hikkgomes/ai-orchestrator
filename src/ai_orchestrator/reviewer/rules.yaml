@@ -1,0 +1,46 @@
+review_categories:
+  hallucinated_api: Non-existent APIs, methods, flags, or parameters.
+  runtime_breakage: Code that appears plausible but will not run.
+  logic_error: Incorrect branching, state handling, or business logic.
+  overengineering: Needless abstraction or complexity for the task.
+  duplication: Repeated logic that should remain unified.
+  error_handling: Missing, misleading, or swallowed error paths.
+  async_concurrency: Races, missed awaits, blocking calls, or unsafe parallelism.
+  security: Injection, secrets exposure, auth bypasses, or unsafe execution.
+  performance: Obvious inefficiencies, N+1 work, or excessive allocations.
+  testing: Missing or insufficient tests for changed behavior.
+  dependency_environment: Broken assumptions about tools, libraries, or runtime setup.
+  constraint_violation: Violations of stated task, schema, or adapter constraints.
+  input_validation: Missing validation or unsafe trust of external input.
+  maintainability: Code that is unnecessarily brittle or hard to reason about.
+  external_system_assumption: Assumptions about networks, credentials, or external services.
+  integration_mismatch: Interfaces that do not line up across modules or boundaries.
+  incomplete_behaviour: Partially implemented flows or missing edge-path coverage.
+  observability: Missing logs, metrics, or actionable failure signals.
+  data_correctness: Incorrect persistence, transformations, or data semantics.
+  locale_unicode: Broken assumptions around text, encoding, or locale behavior.
+  resource_management: Leaks or misuse of files, sockets, processes, or handles.
+  regression_refactor: Existing behavior broken by internal cleanup or rewrites.
+  licensing_policy: Changes that may violate dependency, policy, or usage constraints.
+
+severity_order:
+  - critical
+  - high
+  - medium
+  - low
+
+critical_risks:
+  - auth
+  - payments
+  - secrets
+  - migrations
+  - data_deletion
+  - public_api
+  - infra
+  - shell_execution
+
+review_defaults:
+  review_scope: changed
+  run_changed_script_first: true
+  prefer_evidence_over_guessing: true
+  state_uncertainty_explicitly: true

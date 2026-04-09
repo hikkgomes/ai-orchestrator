@@ -238,6 +238,136 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     ]
 
 
+def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    reviewer_dir = tmp_repo / ".ai-review"
+    reviewer_dir.mkdir()
+    (reviewer_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "project": {"stack": ["python", "fastapi"], "package_managers": ["uv"], "monorepo": False},
+                "paths": {"generated": [], "ignore": [], "critical": ["src/auth/"]},
+                "risk": {"auth_sensitive": ["middleware.py"]},
+                "architecture": {"patterns": ["layered"], "key_libraries": {}, "naming": {}, "project_description": ""},
+                "workspaces": {},
+                "notes": [],
+                "uncertain": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", ".ai-review/config.json"], cwd=tmp_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Add reviewer config"], cwd=tmp_repo, check=True, capture_output=True)
+
+    class HeuristicCodexAdapter(FakeCodexAdapter):
+        def invoke(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            schema,
+            *,
+            step_number=None,
+            reasoning_effort_override=None,
+            model_override=None,
+        ):
+            result = super().invoke(
+                prompt,
+                working_dir,
+                timeout,
+                schema,
+                step_number=step_number,
+                reasoning_effort_override=reasoning_effort_override,
+                model_override=model_override,
+            )
+            if schema["title"] == "StepResult" and step_number == 1:
+                (working_dir / "step-1.txt").write_text('dummy_key = "changeme"\n', encoding="utf-8")
+            return result
+
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = HeuristicCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "aeaeaeae-aeae-aeae-aeae-aeaeaeaeaeae")
+
+    assert state.status == "DONE"
+    review_prompts = [item["prompt"] for item in claude.invocations if item["title"] == "Review"]
+    assert review_prompts
+    prompt = review_prompts[0]
+    assert "HEURISTIC SCAN RESULTS:" in prompt
+    assert "[placeholder] step-1.txt:1 ::" in prompt
+    assert "AI FAILURE CATEGORIES:" in prompt
+    assert "REPOSITORY CONTEXT:" in prompt
+    assert "Stack: python, fastapi" in prompt
+
+
+def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_root, default_config, monkeypatch):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    def boom(_state):
+        raise EngineError("git diff failed")
+
+    monkeypatch.setattr(engine, "_review_changed_files", boom)
+
+    state = engine.start("Implement feature", "adadadad-adad-adad-adad-adadadadadad")
+
+    assert state.status == "DONE"
+    review_prompts = [item["prompt"] for item in claude.invocations if item["title"] == "Review"]
+    assert review_prompts
+    assert "AI FAILURE CATEGORIES:" in review_prompts[0]
+
+
+def test_adjudication_prompt_uses_normalized_task(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [_plan()],
+        [_review()],
+        [_pass_adjudication()],
+        scopings=[
+            {
+                "actionable": True,
+                "normalized_task": "Normalized implementation task",
+                "assumptions": [],
+                "complexity_tier": "moderate",
+            }
+        ],
+    )
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("raw user wording", "afafafaf-afaf-afaf-afaf-afafafafafaf")
+
+    assert state.status == "DONE"
+    adjudication_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "Adjudication"]
+    assert adjudication_prompts
+    assert "ORIGINAL TASK:\nNormalized implementation task" in adjudication_prompts[0]
+    assert "ORIGINAL TASK:\nraw user wording" not in adjudication_prompts[0]
+
+
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = True
     default_config.approval.require_merge_approval = True

@@ -17,6 +17,7 @@ from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
 from .models import RunState
+from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
 from .worktree import WorktreeManager
@@ -240,6 +241,29 @@ def cmd_install_shell(ctx: click.Context, shell: str | None, force: bool) -> Non
     ctx.obj["ui"].print_install_shell_result(shell_name, destination)
 
 
+@main.command("review-install")
+@click.option("--force", is_flag=True, default=False, help="Overwrite existing reviewer config.")
+@click.pass_context
+def cmd_review_install(ctx: click.Context, force: bool) -> None:
+    """Install repository-local reviewer config and bundled rules."""
+    config_path = ctx.obj["repo_root"] / ".ai-review" / "config.json"
+    if config_path.exists() and not force:
+        raise click.ClickException(
+            "Reviewer config already exists. Use 'orch review-analyze' to refresh, "
+            "or 'orch review-install --force' to overwrite."
+        )
+    result = install_reviewer(ctx.obj["repo_root"])
+    _print_review_setup_result(ctx, result)
+
+
+@main.command("review-analyze")
+@click.pass_context
+def cmd_review_analyze(ctx: click.Context) -> None:
+    """Refresh reviewer config from the current repository structure."""
+    result = analyze_repo(ctx.obj["repo_root"])
+    _print_review_setup_result(ctx, result)
+
+
 @main.command("clean")
 @click.option("--all", "clean_all", is_flag=True, default=False)
 @click.pass_context
@@ -374,6 +398,29 @@ def _load_log_entries(path: Path) -> list[dict[str, str]]:
         except json.JSONDecodeError:
             continue
     return entries
+
+
+def _print_review_setup_result(ctx: click.Context, result: dict) -> None:
+    summary = result["summary"]
+    stack = ", ".join(summary["stack"]) or "<none detected>"
+    workspaces = ", ".join(summary["workspaces"]) or "<none>"
+    architecture = ", ".join(summary["architecture_patterns"]) or "<none detected>"
+    commands = summary["commands"]
+    command_lines = [f"{name}: {value}" for name, value in commands.items()]
+    refinement_lines = summary["manual_refinement_needed"] or ["<none>"]
+
+    click.echo(f"Reviewer {result['action']}.")
+    click.echo(f"Config: {Path(result['config_path']).relative_to(ctx.obj['repo_root'])}")
+    click.echo(f"Rules: {Path(result['rules_path']).relative_to(ctx.obj['repo_root'])}")
+    click.echo(f"Stack: {stack}")
+    click.echo(f"Workspaces: {workspaces}")
+    click.echo(f"Architecture: {architecture}")
+    click.echo("Commands:")
+    for line in command_lines or ["<none detected>"]:
+        click.echo(f"  {line}")
+    click.echo("Manual refinement:")
+    for line in refinement_lines:
+        click.echo(f"  {line}")
 
 
 def _run_diff_stat(repo_root: Path, base_commit: str, branch_name: str) -> str:

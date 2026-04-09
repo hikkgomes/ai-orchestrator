@@ -23,6 +23,7 @@ src/ai_orchestrator/    # Python package source
   cli.py                # click CLI (entry point: orch; aio alias)
   engine.py             # orchestrator state machine
   adapters/             # claude.py, codex.py — subprocess wrappers
+  reviewer/             # heuristic scanner + repo analysis helpers
   state.py              # state persistence
   worktree.py           # git worktree manager
   validator.py          # JSON schema + application validation
@@ -44,6 +45,8 @@ tests/                  # unit + integration tests
 | `orch reject <run-id> <gate>` | Reject with feedback |
 | `orch status` | Show run status |
 | `orch log <run-id>` | View logs |
+| `orch review-install` | Install reviewer config and bundled rules |
+| `orch review-analyze` | Refresh reviewer config from repo heuristics |
 | `orch clean` | Remove completed artifacts |
 | `orch config` | Show/edit config |
 | `orch doctor` | Verify environment and CLI versions |

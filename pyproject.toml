@@ -38,7 +38,7 @@ aio = "ai_orchestrator.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ai_orchestrator"]
-include = ["src/ai_orchestrator/schemas/*.json"]
+include = ["src/ai_orchestrator/schemas/*.json", "src/ai_orchestrator/reviewer/rules.yaml"]
 
 [tool.hatch.build.targets.sdist]
 include = [
