@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
+from ai_orchestrator.adapters.base import BlockedOnCLI, StepFailure
 from ai_orchestrator.artifacts import ArtifactStore
-from ai_orchestrator.engine import Engine
+from ai_orchestrator.engine import Engine, EngineError
 from ai_orchestrator.models import RunState
 from ai_orchestrator.state import StateManager
 from ai_orchestrator.workflow import load_workflow_definition
@@ -293,6 +296,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
     class FlakyCodexAdapter:
         def __init__(self):
             self.calls: list[int] = []
+            self.prompts: list[str] = []
             self.failures = 0
 
         def invoke(self, prompt, working_dir, timeout, schema, *, step_number=None):
@@ -300,6 +304,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
                 match = re.search(r"pending-step-(\d+)\.json", prompt)
                 step_number = int(match.group(1)) if match else 0
             self.calls.append(step_number)
+            self.prompts.append(prompt)
             target = working_dir / f"step-{step_number}.txt"
             target.write_text(f"step {step_number}\n", encoding="utf-8")
             if step_number == 1 and self.failures == 0:
@@ -340,3 +345,186 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
 
     assert state.status == "DONE"
     assert codex.calls == [1, 1, 2]
+    assert "Create first file" in codex.prompts[1]
+    assert "The full original prompt follows." in codex.prompts[1]
+
+
+def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+
+    class RetryingClaudeAdapter:
+        def __init__(self):
+            self.prompts: list[str] = []
+            self._plan_attempts = 0
+
+        def invoke(self, prompt, working_dir, timeout, schema):
+            self.prompts.append(prompt)
+            title = schema["title"]
+            if title == "Plan":
+                self._plan_attempts += 1
+                if self._plan_attempts == 1:
+                    raise StepFailure("invalid plan", validation_error="missing task context")
+                return _plan()
+            if title == "Review":
+                return _review()
+            if title == "Adjudication":
+                return _pass_adjudication()
+            raise AssertionError(f"Unexpected schema title: {title}")
+
+    claude = RetryingClaudeAdapter()
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    assert state.status == "DONE"
+    assert len(claude.prompts) >= 2
+    assert "TASK:\nImplement feature" in claude.prompts[1]
+    assert "KEY FILE CONTENTS:" in claude.prompts[1]
+    assert "missing task context" in claude.prompts[1]
+    assert "The full original prompt follows." in claude.prompts[1]
+
+
+def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+
+    class DirtyRetryCodexAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, prompt, working_dir, timeout, schema, *, step_number=None):
+            if step_number is None:
+                match = re.search(r"pending-step-(\d+)\.json", prompt)
+                step_number = int(match.group(1)) if match else 0
+            self.calls += 1
+            if self.calls == 1:
+                (working_dir / "leftover.txt").write_text("stale\n", encoding="utf-8")
+                (working_dir / "README.md").write_text("dirty\n", encoding="utf-8")
+                raise StepFailure("execution failed", validation_error="retry requested")
+
+            assert not (working_dir / "leftover.txt").exists()
+            assert (working_dir / "README.md").read_text(encoding="utf-8") == "# Test repo\n"
+            target = working_dir / f"step-{step_number}.txt"
+            target.write_text(f"step {step_number}\n", encoding="utf-8")
+            return {
+                "step_number": step_number,
+                "status": "success",
+                "files_changed": [
+                    {
+                        "path": target.name,
+                        "action": "created",
+                        "summary": f"Created {target.name}",
+                    }
+                ],
+                "summary": f"Implemented step {step_number}",
+                "issues": [],
+                "test_commands": [],
+            }
+
+    codex = DirtyRetryCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "abababab-abab-abab-abab-abababababab")
+
+    assert state.status == "DONE"
+    assert codex.calls == 3
+
+
+def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = True
+    default_config.approval.require_merge_approval = False
+
+    class BlockingCodexAdapter:
+        def invoke(self, prompt, working_dir, timeout, schema, *, step_number=None):
+            raise BlockedOnCLI("auth refresh required", exit_code=1, stderr="login required")
+
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = BlockingCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    paused = engine.start("Implement feature", "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd")
+    assert paused.status == "PAUSED"
+    assert paused.current_phase == "APPROVAL_PLAN"
+
+    ArtifactStore(artifact_root).save_approval_decision(paused.run_id, "plan", "approve")
+    resumed = engine.resume(paused.run_id)
+
+    assert resumed.status == "BLOCKED_ON_CLI"
+    assert resumed.current_phase == "EXECUTING"
+
+
+def test_resume_paused_without_decision_re_pauses(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = True
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    paused = engine.start("Implement feature", "edededed-eded-eded-eded-edededededed")
+    assert paused.status == "PAUSED"
+    assert paused.current_phase == "APPROVAL_PLAN"
+
+    resumed = engine.resume(paused.run_id)
+
+    assert resumed.status == "PAUSED"
+    assert resumed.current_phase == "APPROVAL_PLAN"
+
+
+def test_reset_worktree_failure_raises_engine_error(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+
+    class DirtyRetryCodexAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, prompt, working_dir, timeout, schema, *, step_number=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise StepFailure("execution failed", validation_error="retry requested")
+            raise AssertionError("retry should not reach adapter after reset failure")
+
+    codex = DirtyRetryCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    def _boom(worktree_dir: Path) -> None:
+        raise EngineError("Failed to reset worktree: boom")
+
+    engine._reset_worktree = _boom  # type: ignore[method-assign]
+
+    with pytest.raises(EngineError, match="Failed to reset worktree: boom"):
+        engine.start("Implement feature", "12121212-1212-1212-1212-121212121212")

@@ -169,18 +169,20 @@ def build_adjudication_prompt(
 
 
 def build_retry_prompt(
-    original_schema_json: str,
+    original_prompt: str,
     error_message: str,
 ) -> str:
     """Build a retry prompt when the previous response was invalid.
 
-    Per AGENTS.md Retry Protocol, includes the validation error.
+    Per AGENTS.md Retry Protocol, includes the validation error and the
+    full original prompt because each retry runs in a fresh subprocess.
     """
     return (
         "Your previous response was not valid. Error: "
         f"{error_message}\n\n"
-        "Respond with ONLY valid JSON matching this schema:\n"
-        f"{original_schema_json}\n"
+        "Fix the error and try again. The full original prompt follows.\n\n"
+        "---\n\n"
+        f"{original_prompt}"
     )
 
 

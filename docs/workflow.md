@@ -6,6 +6,8 @@
 
 Every orchestrated run moves through these phases in order. Each phase is a distinct CLI invocation (fresh subprocess). All mutating phases operate within a single worktree branch per run.
 
+`workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides the supported routing, retry, timeout, and loop-limit values.
+
 ```
  ┌─────────┐     ┌──────────────┐     ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐     ┌───────┐
  │ PLANNING │────▶│APPROVAL_PLAN │────▶│EXECUTING │────▶│ REVIEWING │────▶│ADJUDICATING│────▶│APPROVAL_MERGE│────▶│MERGING│──▶ DONE
@@ -91,6 +93,7 @@ All steps execute in one worktree branch. Each step sees the filesystem state le
 
 1. On first step: create worktree `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`. Record the base commit SHA.
 2. All subsequent steps execute in the same worktree.
+3. If a step attempt fails and is retried, the engine resets the worktree to the last committed step baseline before re-invoking the worker.
 
 **Per-step sequence:**
 

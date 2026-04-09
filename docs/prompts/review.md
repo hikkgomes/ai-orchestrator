@@ -150,17 +150,13 @@ have been resolved.
 ## Retry Prompt (on schema/parse/validation failure)
 
 ```
-Your previous response was not valid JSON, did not match the required schema,
-or failed validation.
+Your previous response was not valid. Error: {validation_error}
 
-Error: {validation_error}
+Fix the error and try again. The full original prompt follows.
 
-Retry. Produce a fresh review of the same diff.
+---
 
-OUTPUT SCHEMA:
-{review_schema}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+{original_prompt}
 ```
 
 ---

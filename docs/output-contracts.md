@@ -164,8 +164,8 @@ Every prompt sent to a CLI includes:
 
 If the CLI returns non-JSON or schema-invalid JSON:
 1. The raw output is logged (if `logging.retain_raw_output` is enabled)
-2. A retry prompt is constructed that includes the validation error message
-3. The retry prompt is: "Your previous response was not valid JSON or did not match the required schema. Error: {error}. Try again. Respond with ONLY valid JSON."
+2. A retry prompt is constructed that includes the validation error message and the full original prompt
+3. The retry prompt prepends retry guidance to the original prompt so the fresh subprocess still receives the complete task context
 4. Up to `max_retries` attempts
 
 ---

@@ -60,6 +60,8 @@ def test_init_scaffolds_repo_files():
         assert result.exit_code == 0
         assert Path("aio.toml").exists()
         assert Path("workflows/default.yaml").exists()
+        workflow_text = Path("workflows/default.yaml").read_text(encoding="utf-8")
+        assert "authoritative workflow definition" in workflow_text
         assert ".ai-orchestrator/results/" in Path(".gitignore").read_text(encoding="utf-8")
 
 

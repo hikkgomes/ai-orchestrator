@@ -1,9 +1,11 @@
 """Workflow definition loading from ``workflows/default.yaml``.
 
-The repository uses a frozen, checked-in workflow definition rather than
-hard-coding phase metadata in the engine. The YAML file is intentionally small,
-so a minimal parser for the supported subset is sufficient and avoids adding a
-runtime YAML dependency.
+The repository uses a frozen, checked-in workflow definition as the
+authoritative source for phase structure and default phase-level settings.
+``aio.toml`` supplies user-level overrides for supported settings after the
+definition is loaded. The YAML file is intentionally small, so a minimal parser
+for the supported subset is sufficient and avoids adding a runtime YAML
+dependency.
 """
 
 from __future__ import annotations

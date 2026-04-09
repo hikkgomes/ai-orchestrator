@@ -132,23 +132,13 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 ## Retry Prompt (on schema/parse/validation failure)
 
 ```
-Your previous response was not valid JSON, did not match the required schema,
-failed application-level validation, or was too similar to the rejected plan.
+Your previous response was not valid. Error: {validation_error}
 
-Error: {validation_error}
+Fix the error and try again. The full original prompt follows.
 
-Retry. Produce a new plan that is meaningfully different from the rejected plan.
+---
 
-REJECTED PLAN (do not repeat):
-{prior_plan_json}
-
-REJECTION REASON:
-{replan_feedback}
-
-OUTPUT SCHEMA:
-{plan_schema}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+{original_prompt}
 ```
 
 ---

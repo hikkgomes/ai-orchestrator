@@ -65,3 +65,30 @@ def test_worktree_merge_conflict_detection(tmp_repo, artifact_root):
     assert manager.has_unresolved_conflicts() is True
     subprocess.run(["git", "merge", "--abort"], cwd=tmp_repo, check=True, capture_output=True)
     manager.remove(worktree_path, branch_name, force=True)
+
+
+def test_worktree_manager_reset(tmp_repo, artifact_root):
+    manager = WorktreeManager(tmp_repo, artifact_root)
+    worktree_path, branch_name, _ = manager.create(
+        "99999999-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "main",
+        "aio/",
+    )
+
+    (worktree_path / "README.md").write_text("modified\n", encoding="utf-8")
+    (worktree_path / "scratch.txt").write_text("temp\n", encoding="utf-8")
+
+    manager.reset(worktree_path)
+
+    assert (worktree_path / "README.md").read_text(encoding="utf-8") == "# Test repo\n"
+    assert not (worktree_path / "scratch.txt").exists()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout.strip() == ""
+
+    manager.remove(worktree_path, branch_name, force=True)

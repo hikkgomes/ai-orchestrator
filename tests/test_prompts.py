@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
+    build_retry_prompt,
     collect_file_context,
     redact_secret_text,
     render_directory_tree,
@@ -56,3 +57,16 @@ def test_redact_secret_text_hides_env_diff_and_inline_tokens():
     assert "supersecretvalue12345" not in redacted
     assert "[REDACTED SECRET-BEARING DIFF CONTENT]" in redacted
     assert "[REDACTED SECRET]" in redacted
+
+
+def test_retry_prompt_includes_original_context():
+    original_prompt = "STEP:\nImplement feature\n\nOUTPUT SCHEMA:\n{}"
+
+    prompt = build_retry_prompt(
+        original_prompt=original_prompt,
+        error_message="missing required field",
+    )
+
+    assert "missing required field" in prompt
+    assert "The full original prompt follows." in prompt
+    assert original_prompt in prompt

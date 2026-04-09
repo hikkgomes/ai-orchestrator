@@ -88,7 +88,7 @@ Built with `click` for command parsing and `rich` for terminal UI. Entry points:
 
 ### 2. Orchestrator Engine
 
-The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change.
+The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `workflows/default.yaml` defines the phase structure and default phase-level settings; `aio.toml` overrides the supported routing, retry, timeout, and loop-limit values.
 
 #### Canonical State Machine
 
@@ -165,6 +165,7 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 
 - Creates one worktree per run: `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`
 - All steps execute sequentially in this worktree, so each step sees the output of prior steps
+- Resets the worktree to the last committed step baseline before an execution retry
 - On success + merge approval: merges the single worktree branch back to base
 - On failure/rejection: `git worktree remove --force`
 - Records the base commit SHA at worktree creation; verifies it before merge

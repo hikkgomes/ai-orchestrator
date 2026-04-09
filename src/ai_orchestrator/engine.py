@@ -132,7 +132,13 @@ class Engine:
         if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED}:
             raise EngineError(f"Run {run_id} is not resumable from {status.value}")
         if status == WorkflowStatus.PAUSED:
-            return state
+            state = self._transition(
+                state,
+                WorkflowStatus(state.current_phase),
+                current_phase=state.current_phase,
+                error=None,
+            )
+            return self._run(state)
         if status == WorkflowStatus.BLOCKED_ON_CLI:
             state = self._transition(
                 state,
@@ -242,7 +248,6 @@ class Engine:
                 state,
                 retry_key="planning",
                 retries=self._retry_limit("planning"),
-                schema_json=json_block(schema),
                 spinner_label="Planning",
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
@@ -356,7 +361,14 @@ class Engine:
                     schema,
                 )
 
+            attempt_number = 0
+
             def invoke_and_enforce_status(current_prompt: str) -> dict[str, Any]:
+                nonlocal attempt_number
+                if attempt_number > 0:
+                    self._artifacts.clear_pending_step_result(step_number)
+                    self._reset_worktree(worktree_dir)
+                attempt_number += 1
                 result = invoke(current_prompt)
                 if result.get("status") == "failed":
                     detail = str(result.get("summary") or "Execution step reported failure")
@@ -376,7 +388,6 @@ class Engine:
                     state,
                     retry_key=f"step-{step_number}",
                     retries=self._retry_limit("executing"),
-                    schema_json=json_block(schema),
                     spinner_label=f"Executing step {step_number}",
                     invoke=invoke_and_enforce_status,
                     initial_prompt=prompt,
@@ -421,7 +432,6 @@ class Engine:
                 state,
                 retry_key="reviewing",
                 retries=self._retry_limit("reviewing"),
-                schema_json=json_block(schema),
                 spinner_label="Reviewing changes",
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
@@ -475,7 +485,6 @@ class Engine:
                 state,
                 retry_key="adjudicating",
                 retries=self._retry_limit("adjudicating"),
-                schema_json=json_block(schema),
                 spinner_label="Adjudicating result",
                 invoke=lambda current_prompt: self._validate_adjudication_result(
                     adapter.invoke(
@@ -632,7 +641,6 @@ class Engine:
         *,
         retry_key: str,
         retries: int,
-        schema_json: str,
         spinner_label: str,
         invoke: Any,
         initial_prompt: str,
@@ -655,7 +663,7 @@ class Engine:
                 if attempt >= retries:
                     raise
                 prompt = build_retry_prompt(
-                    original_schema_json=schema_json,
+                    original_prompt=initial_prompt,
                     error_message=exc.validation_error or str(exc),
                 )
                 continue
@@ -732,6 +740,12 @@ class Engine:
         state.base_commit = base_commit
         self._state_mgr.save(state)
         return worktree_path
+
+    def _reset_worktree(self, worktree_dir: Path) -> None:
+        try:
+            self._worktrees.reset(worktree_dir)
+        except WorktreeError as exc:
+            raise EngineError(f"Failed to reset worktree: {exc}") from exc
 
     def _discard_worktree(self, state: RunState, *, force: bool) -> None:
         if not state.worktree_path or not state.worktree_branch:

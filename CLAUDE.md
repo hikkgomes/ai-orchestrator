@@ -32,6 +32,8 @@ docs/                   # architecture, workflow, contracts, install, security
 tests/                  # unit + integration tests
 ```
 
+`workflows/default.yaml` is the authoritative workflow definition; `aio.toml` only overrides supported settings.
+
 ## CLI commands
 
 | Command | Purpose |

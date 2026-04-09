@@ -164,8 +164,11 @@ Both adapters follow the same retry protocol:
    ```
    Your previous response was not valid. Error: {error_message}
 
-   Respond with ONLY valid JSON matching this schema:
-   {json_schema}
+   Fix the error and try again. The full original prompt follows.
+
+   ---
+
+   {original_prompt}
    ```
 3. **Attempt 2** — retry prompt (fresh subprocess, fresh context)
 4. **On `StepFailure`** — same as above with accumulated error context

@@ -201,14 +201,13 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 ## Retry Prompt (on schema/parse failure)
 
 ```
-Your previous response was not valid JSON or did not match the required schema.
+Your previous response was not valid. Error: {validation_error}
 
-Error: {validation_error}
+Fix the error and try again. The full original prompt follows.
 
-Retry. Respond with ONLY valid JSON matching this schema:
-{feasibility_schema}
+---
 
-No markdown fences. No commentary.
+{original_prompt}
 ```
 
 ---

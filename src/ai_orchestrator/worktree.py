@@ -109,6 +109,11 @@ class WorktreeManager:
                 f"Failed to delete branch {branch_name}: {completed.stderr.strip()}"
             )
 
+    def reset(self, worktree_path: Path) -> None:
+        """Reset a worktree back to its last committed state."""
+        _run_git(["checkout", "--", "."], cwd=worktree_path)
+        _run_git(["clean", "-fd"], cwd=worktree_path)
+
     def verify_merge_preconditions(
         self,
         base_branch: str,

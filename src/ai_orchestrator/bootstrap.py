@@ -51,8 +51,9 @@ codex_min_version = ""
 
 DEFAULT_WORKFLOW = """# Default workflow configuration for ai-orchestrator.
 #
-# This file describes the canonical workflow phases and their routing.
-# The authoritative specification is in docs/workflow.md and aio.toml.
+# This file is the authoritative workflow definition for phase structure and
+# default phase-level settings. The engine loads this file at startup.
+# aio.toml provides user-level overrides for supported settings.
 
 name: default
 description: >
