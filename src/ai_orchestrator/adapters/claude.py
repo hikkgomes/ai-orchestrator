@@ -48,7 +48,7 @@ class ClaudeAdapter(BaseAdapter):
     """
 
     CLI_NAME = "claude"
-    _EFFORT_FLAG = "--reasoning-effort"
+    _EFFORT_FLAG = "--effort"
     _MODEL_FLAG = "--model"
 
     def invoke(
@@ -256,7 +256,7 @@ class ClaudeAdapter(BaseAdapter):
     @staticmethod
     def _is_unsupported_effort_flag(stderr: str) -> bool:
         lowered = stderr.lower()
-        return "reasoning-effort" in lowered and any(
+        return any(flag in lowered for flag in ("--effort", "--reasoning-effort")) and any(
             phrase in lowered for phrase in ("unknown option", "unrecognized option", "unsupported")
         )
 

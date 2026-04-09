@@ -323,7 +323,7 @@ class Engine:
                 error=str(exc),
             )
         except StepFailure as exc:
-            return self._fail_run(state, exc.validation_error or str(exc))
+            return self._fail_run(state, self._format_step_failure(exc))
 
         state.normalized_task = result["normalized_task"]
         state.complexity_tier = result["complexity_tier"]
@@ -405,7 +405,7 @@ class Engine:
                 error=str(exc),
             )
         except StepFailure as exc:
-            return self._fail_run(state, exc.validation_error or str(exc))
+            return self._fail_run(state, self._format_step_failure(exc))
 
         state.plan_id = self._artifacts.save_plan(state.run_id, result)
         state.feasibility_id = None
@@ -511,7 +511,7 @@ class Engine:
                 error=str(exc),
             )
         except StepFailure as exc:
-            return self._fail_run(state, exc.validation_error or str(exc))
+            return self._fail_run(state, self._format_step_failure(exc))
         finally:
             if result_path.exists():
                 result_path.unlink()
@@ -664,7 +664,7 @@ class Engine:
                     error=str(exc),
                 )
             except StepFailure as exc:
-                return self._fail_run(state, exc.validation_error or str(exc))
+                return self._fail_run(state, self._format_step_failure(exc))
 
             self._commit_worktree_step(state, worktree_dir, step_number, step["description"])
             reference = self._artifacts.save_step_result(state.run_id, step_number, result)
@@ -735,7 +735,7 @@ class Engine:
                 error=str(exc),
             )
         except StepFailure as exc:
-            return self._fail_run(state, exc.validation_error or str(exc))
+            return self._fail_run(state, self._format_step_failure(exc))
 
         state.review_id = self._artifacts.save_review(state.run_id, result)
         state.error = None
@@ -863,7 +863,7 @@ class Engine:
                 error=str(exc),
             )
         except StepFailure as exc:
-            return self._fail_run(state, exc.validation_error or str(exc))
+            return self._fail_run(state, self._format_step_failure(exc))
 
         state.adjudication_id = self._artifacts.save_adjudication(state.run_id, result)
         self._artifacts.clear_feedback(state.run_id, "adjudication")
@@ -1005,7 +1005,7 @@ class Engine:
                     raise
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
-                    error_message=exc.validation_error or str(exc),
+                    error_message=self._format_step_failure(exc),
                 )
                 continue
 
@@ -1390,13 +1390,30 @@ class Engine:
         summary = " ".join(task.split())
         return summary[:72] if len(summary) > 72 else summary
 
+    def _format_step_failure(self, exc: StepFailure) -> str:
+        parts: list[str] = []
+        if exc.validation_error:
+            parts.append(exc.validation_error.strip())
+        elif str(exc):
+            parts.append(str(exc).strip())
+        if exc.stderr and exc.stderr.strip():
+            parts.append(f"stderr: {exc.stderr.strip()[:1000]}")
+        if exc.exit_code is not None:
+            parts.append(f"exit_code: {exc.exit_code}")
+        return "\n".join(parts)
+
     def _fail_run(self, state: RunState, message: str) -> RunState:
         try:
             self._discard_worktree(state, force=True)
         except Exception:
             pass
         self._artifacts.clear_execution_manifest(state.run_id)
-        return self._transition(state, WorkflowStatus.FAILED, error=message)
+        return self._transition(
+            state,
+            WorkflowStatus.FAILED,
+            current_phase=state.current_phase,
+            error=message,
+        )
 
     @staticmethod
     def _validate_adjudication_result(

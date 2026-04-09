@@ -199,12 +199,18 @@ class OrchestratorUI:
         else:
             event_table.add_row("-", "No event log entries yet.")
 
-        body = Group(
+        panels: list[RenderableType] = [
             Panel(summary, title="Run Summary", border_style=self._status_style(state.status)),
             Panel(progress, title="Execution"),
             Panel(details, title="Recent Step Results"),
             Panel(event_table, title="Recent Events"),
-        )
+        ]
+        if state.status == WorkflowStatus.FAILED.value and state.error:
+            panels.insert(
+                1,
+                Panel(Text(state.error, overflow="fold"), title="Failure Detail", border_style="bold red"),
+            )
+        body = Group(*panels)
         return body
 
     def render_runs_overview(self, states: Iterable[RunState]) -> RenderableType:

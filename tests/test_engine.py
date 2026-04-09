@@ -1243,3 +1243,55 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     assert feasibility_call["reasoning_effort_override"] == "max"
     assert execute_call["reasoning_effort_override"] == "xhigh"
     assert review_call["reasoning_effort_override"] == "max"
+
+
+def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+
+    class FailingClaudeAdapter(FakeClaudeAdapter):
+        def invoke(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            schema,
+            *,
+            step_number=None,
+            reasoning_effort_override=None,
+            model_override=None,
+        ):
+            if schema["title"] == "TaskDefinition":
+                raise StepFailure(
+                    "Claude CLI exited with a non-zero status",
+                    exit_code=2,
+                    stderr="error: unknown option '--effort'",
+                )
+            return super().invoke(
+                prompt,
+                working_dir,
+                timeout,
+                schema,
+                step_number=step_number,
+                reasoning_effort_override=reasoning_effort_override,
+                model_override=model_override,
+            )
+
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={
+            "claude": FailingClaudeAdapter([_plan()], [_review()], [_pass_adjudication()]),
+            "codex": FakeCodexAdapter(),
+        },
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "19191919-1919-1919-1919-191919191919")
+
+    assert state.status == "FAILED"
+    assert state.current_phase == "SCOPING"
+    assert state.error is not None
+    assert "stderr: error: unknown option '--effort'" in state.error
+    assert "exit_code: 2" in state.error

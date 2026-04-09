@@ -111,7 +111,7 @@ class TestClaudeAdapter:
         result = adapter.invoke("plan this", tmp_path, 30, schema)
 
         assert result["task"] == "Example"
-        assert calls[0][:5] == ["claude", "--model", "claude-sonnet", "--reasoning-effort", "high"]
+        assert calls[0][:5] == ["claude", "--model", "claude-sonnet", "--effort", "high"]
         conn = sqlite3.connect(artifact_root / "metadata.sqlite3")
         row = conn.execute(
             "SELECT cli_name, model, reasoning_effort, output_source FROM invocations"
@@ -131,7 +131,7 @@ class TestClaudeAdapter:
         fake_popen, _ = _fake_popen_factory(
             [
                 {
-                    "stderr": "unknown option --reasoning-effort",
+                    "stderr": "unknown option '--effort'",
                     "returncode": 2,
                 },
                 {
@@ -155,8 +155,47 @@ class TestClaudeAdapter:
         result = adapter.invoke("review this", tmp_path, 30, schema)
 
         assert result["verdict"] == "approve"
-        assert any(part == "--reasoning-effort" for part in commands[0])
-        assert all(part != "--reasoning-effort" for part in commands[1])
+        assert any(part == "--effort" for part in commands[0])
+        assert all(part != "--effort" for part in commands[1])
+
+    def test_invoke_retries_on_old_reasoning_effort_flag(
+        self,
+        tmp_path,
+        artifact_root,
+        default_config,
+        monkeypatch,
+    ):
+        schema = _schema("review.schema.json")
+        commands = []
+        fake_popen, _ = _fake_popen_factory(
+            [
+                {
+                    "stderr": "unknown option '--reasoning-effort'",
+                    "returncode": 2,
+                },
+                {
+                    "stdout": json.dumps(
+                        {
+                            "review_id": "00000000-0000-0000-0000-000000000000",
+                            "verdict": "approve",
+                            "score": 8,
+                            "findings": [],
+                            "summary": "ok",
+                            "blocks_merge": False,
+                        }
+                    ),
+                },
+            ],
+            commands,
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        adapter = ClaudeAdapter(default_config, artifact_root)
+        result = adapter.invoke("review this", tmp_path, 30, schema)
+
+        assert result["verdict"] == "approve"
+        assert any(part == "--effort" for part in commands[0])
+        assert all(part != "--effort" for part in commands[1])
 
     def test_invoke_classifies_auth_error_as_blocked(
         self,
@@ -251,7 +290,7 @@ class TestCodexAdapter:
         assert result["files_changed"] == [
             {"path": "README.md", "action": "modified", "summary": "Modified README.md"}
         ]
-        assert commands[0][:4] == ["codex", "exec", "--reasoning-effort", "medium"]
+        assert commands[0][:4] == ["codex", "exec", "--config", 'model_reasoning_effort="medium"']
 
     def test_invoke_falls_back_to_stdout_jsonl(
         self,

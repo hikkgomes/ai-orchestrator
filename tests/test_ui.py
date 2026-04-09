@@ -80,6 +80,21 @@ def test_print_doctor_report_renders_all_checks():
     assert "orch init" in output
 
 
+def test_render_status_shows_failure_detail_panel_for_failed_runs():
+    ui, console, _ = _ui()
+    state = RunState(run_id="run-fail", task="Test failure detail")
+    state.status = WorkflowStatus.FAILED
+    state.current_phase = "SCOPING"
+    state.error = "Claude CLI exited with a non-zero status\nstderr: error: unknown option '--effort'\nexit_code: 2"
+
+    ui.print_status(state)
+
+    output = console.export_text()
+    assert "Failure Detail" in output
+    assert "error: unknown option '--effort'" in output
+    assert "exit_code: 2" in output
+
+
 def test_print_scoping_and_feasibility_results():
     ui, console, _ = _ui()
 

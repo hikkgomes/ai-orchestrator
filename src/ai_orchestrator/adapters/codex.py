@@ -50,7 +50,6 @@ class CodexAdapter(BaseAdapter):
 
     CLI_NAME = "codex"
     _MODEL_FLAG = "--model"
-    _EFFORT_FLAG = "--reasoning-effort"
 
     def invoke(
         self,
@@ -238,7 +237,7 @@ class CodexAdapter(BaseAdapter):
         if model:
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:
-            command.extend([self._EFFORT_FLAG, reasoning_effort])
+            command.extend(["--config", f"model_reasoning_effort={json.dumps(reasoning_effort)}"])
         command.append(prompt)
         return command, model, reasoning_effort
 
