@@ -77,6 +77,12 @@ def test_worktree_manager_reset(tmp_repo, artifact_root):
 
     (worktree_path / "README.md").write_text("modified\n", encoding="utf-8")
     (worktree_path / "scratch.txt").write_text("temp\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md", "scratch.txt"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+    )
 
     manager.reset(worktree_path)
 
@@ -90,5 +96,13 @@ def test_worktree_manager_reset(tmp_repo, artifact_root):
         text=True,
     )
     assert status.stdout.strip() == ""
+    cached_diff = subprocess.run(
+        ["git", "diff", "--cached"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert cached_diff.stdout.strip() == ""
 
     manager.remove(worktree_path, branch_name, force=True)

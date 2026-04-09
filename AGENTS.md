@@ -157,10 +157,12 @@ worker = "claude"  # use Claude for execution instead of Codex
 
 ## Retry Protocol
 
-Both adapters follow the same retry protocol:
+Both adapters follow the same retry protocol, driven by
+`_invoke_with_retries` in `engine.py`:
 
-1. **Attempt 1** — standard prompt
-2. **On `StepFailure`** — log error, construct retry prompt:
+1. **Initial invocation** — standard prompt.
+2. **On `StepFailure`** — increment retry counter. If retries exhausted,
+   raise to engine (step marked FAILED). Otherwise construct retry prompt:
    ```
    Your previous response was not valid. Error: {error_message}
 
@@ -170,12 +172,24 @@ Both adapters follow the same retry protocol:
 
    {original_prompt}
    ```
-3. **Attempt 2** — retry prompt (fresh subprocess, fresh context)
-4. **On `StepFailure`** — same as above with accumulated error context
-5. **Attempt 3** — final retry
-6. **On `StepFailure`** — raise to engine, step marked FAILED
+3. **Retry invocation** — fresh subprocess with the retry prompt.
+4. Repeat from step 2 until success or retry limit reached.
 
-On `BlockedOnCLI` — no retry. Transition to `BLOCKED_ON_CLI` state immediately.
+**Total invocations:** 1 initial + up to `max_retries` retries. With the
+default `max_retries = 3`, a step can be invoked up to **4 times** before
+failing.
+
+**Execution-phase retries** have an additional pre-retry step: before each
+retry invocation, the engine resets the worktree to the last committed state
+(`git reset --hard HEAD` followed by `git clean -fd`) and clears the pending
+step result file. This ensures each retry starts from an identical filesystem
+baseline. Planning, review, and adjudication retries do not modify the
+worktree and skip this step.
+
+**On success:** the retry counter for that step/phase is reset to 0, so
+subsequent steps start with a fresh retry budget.
+
+**On `BlockedOnCLI`:** no retry. Transition to `BLOCKED_ON_CLI` immediately.
 
 Max retries configurable via `orchestrator.max_retries` (default: 3).
 

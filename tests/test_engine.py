@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 
 import pytest
 
@@ -345,6 +346,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
 
     assert state.status == "DONE"
     assert codex.calls == [1, 1, 2]
+    assert state.retry_counts["step-1"] == 0
     assert "Create first file" in codex.prompts[1]
     assert "The full original prompt follows." in codex.prompts[1]
 
@@ -440,6 +442,81 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
     )
 
     state = engine.start("Implement feature", "abababab-abab-abab-abab-abababababab")
+
+    assert state.status == "DONE"
+    assert codex.calls == 3
+
+
+def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+
+    class DirtyIndexRetryCodexAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, prompt, working_dir, timeout, schema, *, step_number=None):
+            if step_number is None:
+                match = re.search(r"pending-step-(\d+)\.json", prompt)
+                step_number = int(match.group(1)) if match else 0
+            self.calls += 1
+            if self.calls == 1:
+                (working_dir / "README.md").write_text("staged dirty\n", encoding="utf-8")
+                (working_dir / "staged-new.txt").write_text("staged\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "add", "README.md", "staged-new.txt"],
+                    cwd=working_dir,
+                    check=True,
+                    capture_output=True,
+                )
+                raise StepFailure("execution failed", validation_error="retry requested")
+
+            assert (working_dir / "README.md").read_text(encoding="utf-8") == "# Test repo\n"
+            assert not (working_dir / "staged-new.txt").exists()
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=working_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert status.stdout.strip() == ""
+            cached_diff = subprocess.run(
+                ["git", "diff", "--cached"],
+                cwd=working_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert cached_diff.stdout.strip() == ""
+            target = working_dir / f"step-{step_number}.txt"
+            target.write_text(f"step {step_number}\n", encoding="utf-8")
+            return {
+                "step_number": step_number,
+                "status": "success",
+                "files_changed": [
+                    {
+                        "path": target.name,
+                        "action": "created",
+                        "summary": f"Created {target.name}",
+                    }
+                ],
+                "summary": f"Implemented step {step_number}",
+                "issues": [],
+                "test_commands": [],
+            }
+
+    codex = DirtyIndexRetryCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "acacacac-acac-acac-acac-acacacacacac")
 
     assert state.status == "DONE"
     assert codex.calls == 3
