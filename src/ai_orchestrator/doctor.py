@@ -40,13 +40,14 @@ class DoctorReport:
 
 def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = None) -> DoctorReport:
     """Run workflow-scoped environment checks."""
+    effective_config = config or Config()
     checks = [
         _check_python(),
         _check_git(),
-        _check_cli("claude", minimum=getattr((config or Config()).cli_compat, "claude_min_version", "")),
-        _check_cli("codex", minimum=getattr((config or Config()).cli_compat, "codex_min_version", "")),
+        _check_cli("claude", minimum=getattr(effective_config.cli_compat, "claude_min_version", "")),
+        _check_cli("codex", minimum=getattr(effective_config.cli_compat, "codex_min_version", "")),
         _check_write_permissions(repo_root, artifact_root),
-        _check_repo_config(repo_root),
+        _check_repo_config(repo_root, effective_config),
     ]
     return DoctorReport(checks=checks)
 
@@ -176,7 +177,7 @@ def _check_write_permissions(repo_root: Path, artifact_root: Path) -> DoctorChec
     )
 
 
-def _check_repo_config(repo_root: Path) -> DoctorCheck:
+def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
     config_path = repo_root / "aio.toml"
     if not config_path.exists():
         return DoctorCheck(
@@ -204,6 +205,20 @@ def _check_repo_config(repo_root: Path) -> DoctorCheck:
             summary="aio.toml is valid, but workflows/default.yaml is missing.",
             hint="Run `orch init --force` to restore default workflow files if needed.",
         )
+
+    if config.workspace.repos:
+        missing: list[str] = []
+        for repo in config.workspace.repos:
+            repo_path = repo_root / repo
+            if not repo_path.exists() or not (repo_path / ".git").exists():
+                missing.append(repo)
+        if missing:
+            return DoctorCheck(
+                name="repo-config",
+                status="warn",
+                summary="aio.toml is valid, but some configured workspace repos are missing or not git repos.",
+                hint=f"Check [workspace].repos entries: {', '.join(missing)}",
+            )
 
     return DoctorCheck(
         name="repo-config",

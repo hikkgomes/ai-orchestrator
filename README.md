@@ -10,23 +10,22 @@ You describe a task. The orchestrator drives it through an automated pipeline:
 
 ```
 SCOPING ─► PLANNING ─► APPROVAL ─► FEASIBILITY ─► EXECUTING ─► REVIEWING
-                                                                    │
-                ◄── replan ◄── ADJUDICATING ◄───────────────────────┘
+               ▲                                                    │
+               └─── replan ◄── ADJUDICATING ◄───────────────────────┘
                                     │
                                     ▼ (pass)
-                             APPROVAL_MERGE ─► MERGING ─► DONE
+                                   MERGING ─► DONE
 ```
 
 1. **Scoping** (Claude) -- classifies task complexity, normalizes the prompt
 2. **Planning** (Claude) -- generates a step-by-step implementation plan
 3. **Plan approval** -- you review and approve or request changes
 4. **Feasibility** (Codex/GPT) -- validates the plan is executable in your repo
-5. **Execution** (Codex/GPT) -- implements each step in an isolated git worktree
+5. **Execution** (Codex/GPT) -- implements each step in an isolated git worktree, or in-place across a workspace
 6. **Review** (Claude Opus) -- reviews the implementation for correctness and security
 7. **Adjudication** (Codex/GPT) -- pushes back on or accepts review findings
 8. **Fix loop** -- if issues found, plans and implements fixes, then re-reviews
-9. **Merge approval** -- you approve the final result
-10. **Merge** -- clean merge to your base branch
+9. **Handoff** -- applies the final diff without committing and prints the suggested git commands
 
 Claude and GPT check each other's work at every stage. Model effort (low/medium/high/max) is automatically selected based on task complexity.
 
@@ -137,7 +136,7 @@ orch doctor         # verifies everything is working
 orch new "Add a health check endpoint to the API"
 ```
 
-This launches the full pipeline. In interactive mode (default), approval gates pause and prompt you inline.
+This launches the full pipeline. In interactive mode, plan approval pauses inline; final handoff does not require approval.
 
 ### Skip scoping
 
@@ -158,7 +157,6 @@ The run pauses at approval gates. Use `approve`/`reject` commands to drive it:
 ```bash
 orch approve <run-id> plan
 orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
-orch approve <run-id> merge
 ```
 
 If scoping flags the task as not actionable:
@@ -205,21 +203,32 @@ orch new "Implement user authentication with JWT"
 #   3. Run feasibility checks
 #   4. Execute the plan in an isolated worktree
 #   5. Review and adjudicate the result
-#   6. Pause for merge approval
+#   6. Stage the final diff and print commit/push suggestions
 
 # While the run executes, you can open a second terminal to monitor:
 orch status <run-id> --watch
 
-# After merge, the changes land on your working branch.
+# After handoff, the staged changes land in your working tree.
 # VS Code will detect the file changes automatically.
 ```
 
 ### Tips
 
 - Use **split terminals** -- one for running `orch new`, another for `orch status --watch`
-- After a merge completes, VS Code's Source Control panel picks up the changes immediately
+- After handoff completes, VS Code's Source Control panel picks up the changes immediately
 - The `.ai-orchestrator/` directory is gitignored -- it won't clutter your Source Control view
-- You can keep coding in other files while a run executes; the orchestrator works in an isolated worktree
+- You can keep coding in other files while a single-repo run executes; the orchestrator works in an isolated worktree
+
+## Workspace mode
+
+A workspace is a parent directory that is not itself a git repo but contains multiple git repos such as `frontend/` and `backend/`.
+
+- `orch init` auto-detects git subdirectories and writes `[workspace] repos = [...]` into `aio.toml`.
+- Agents run from the workspace root and can work across all configured repos in one run.
+- Workspace runs do not create worktrees; changes are applied in place.
+- At the end of the run, `orch` prints per-repo `git add` / `git commit` / `git push` suggestions instead of committing for you.
+- All workspace repos must be clean before execution starts.
+- Known limitation: workspace retries reset repo changes back to `HEAD`, so rollback is repo-wide rather than step-local.
 
 ## Configuration
 
@@ -249,7 +258,10 @@ timeout = 120
 
 [approval]
 require_plan_approval = true
-require_merge_approval = true
+
+# Uncomment for multi-repo workspace mode:
+# [workspace]
+# repos = ["frontend", "backend"]
 
 [orchestrator]
 max_retries = 3

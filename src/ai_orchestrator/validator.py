@@ -227,6 +227,10 @@ class Validator:
                 "Successful step results must include at least one changed file",
             )
 
+        workspace_diffs = data.get("workspace_diffs") or {}
+        if not isinstance(workspace_diffs, dict):
+            raise ValidationError("Invalid step result", "workspace_diffs must be an object")
+
         return data
 
     def validate_review(self, data: dict[str, Any]) -> dict[str, Any]:

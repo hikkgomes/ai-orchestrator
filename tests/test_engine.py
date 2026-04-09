@@ -11,7 +11,7 @@ from ai_orchestrator.adapters.base import BlockedOnCLI, StepFailure
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import PhaseRoutingOverride
 from ai_orchestrator.engine import Engine, EngineError
-from ai_orchestrator.models import RunState
+from ai_orchestrator.models import RunState, WorkflowStatus
 from ai_orchestrator.state import StateManager
 from ai_orchestrator.workflow import load_workflow_definition
 
@@ -106,6 +106,7 @@ class FakeCodexAdapter:
         self.invocations.append(
             {
                 "title": schema["title"],
+                "prompt": prompt,
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
             }
@@ -193,6 +194,17 @@ def _pass_adjudication():
     }
 
 
+def _init_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=path, check=True, capture_output=True)
+    (path / "README.md").write_text(f"# {path.name}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, check=True, capture_output=True)
+
+
 def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
@@ -216,6 +228,14 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     assert (tmp_repo / "step-1.txt").exists()
     assert (tmp_repo / "step-2.txt").exists()
     assert len(state.step_results) == 2
+    assert state.commit_commands == [
+        "# Review staged changes:",
+        "git status",
+        "git diff --cached",
+        "",
+        'git commit -m "aio: Implement feature"',
+        f"git push origin {default_config.worktree.base_branch}",
+    ]
 
 
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
@@ -246,16 +266,64 @@ def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     assert claude.planning_calls == 2
 
     state = engine.approve(state.run_id, "plan")
-    assert state.status == "PAUSED"
-    assert state.current_phase == "APPROVAL_MERGE"
-
-    state = engine.reject(state.run_id, "merge", "Run adjudication again")
-    assert state.status == "PAUSED"
-    assert state.current_phase == "APPROVAL_MERGE"
-    assert codex.adjudication_calls == 2
-
-    state = engine.approve(state.run_id, "merge")
     assert state.status == "DONE"
+    assert state.commit_commands
+    assert codex.adjudication_calls == 1
+
+
+def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _init_repo(workspace_root / "frontend")
+    _init_repo(workspace_root / "backend")
+
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        workspace_root,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start(
+        "Implement feature",
+        "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        is_workspace=True,
+        workspace_repos=["frontend", "backend"],
+    )
+
+    assert state.status == "DONE"
+    execution_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "StepResult"]
+    assert execution_prompts
+    assert "Workspace repos:" in execution_prompts[0]
+    assert "## frontend/" in execution_prompts[0]
+    assert "## backend/" in execution_prompts[0]
+
+
+def test_workspace_resume_revalidates_cleanliness(tmp_path, artifact_root, default_config):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _init_repo(workspace_root / "frontend")
+    _init_repo(workspace_root / "backend")
+    (workspace_root / "frontend" / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    engine = Engine(default_config, workspace_root, artifact_root, workflow=_workflow())
+    state = RunState(
+        run_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        task="Implement feature",
+        status=WorkflowStatus.BLOCKED_ON_CLI,
+        current_phase=WorkflowStatus.EXECUTING.value,
+        is_workspace=True,
+        workspace_repos=["frontend", "backend"],
+    )
+    StateManager(artifact_root).save(state)
+
+    with pytest.raises(EngineError, match="Repo 'frontend' has uncommitted changes"):
+        engine.resume(state.run_id)
 
 
 def test_engine_rework_loop_limit_fails(tmp_repo, artifact_root, default_config):

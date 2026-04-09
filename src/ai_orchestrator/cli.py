@@ -38,6 +38,18 @@ def _require_config(ctx: click.Context) -> Config:
     return ctx.obj["config"]
 
 
+def _resolve_workspace_repos(repo_root: Path, config: Config) -> list[str]:
+    if (repo_root / ".git").exists():
+        return []
+    if config.workspace.repos:
+        return list(config.workspace.repos)
+    return [
+        path.name
+        for path in sorted(repo_root.iterdir())
+        if path.is_dir() and (path / ".git").exists()
+    ]
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="orch")
 @click.pass_context
@@ -58,6 +70,7 @@ def main(ctx: click.Context) -> None:
         ctx.obj["config"] = load_config(repo_root=repo_root)
     except ConfigError as exc:
         ctx.obj["config_error"] = str(exc)
+    ctx.obj["workspace_repos"] = _resolve_workspace_repos(repo_root, ctx.obj["config"])
 
 
 @main.command("init")
@@ -77,7 +90,13 @@ def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping
         _require_config(ctx).scoping.enabled = False
     engine = _build_engine(ctx)
     run_id = str(uuid4())
-    state = engine.start(task, run_id)
+    workspace_repos = ctx.obj["workspace_repos"]
+    state = engine.start(
+        task,
+        run_id,
+        is_workspace=bool(workspace_repos),
+        workspace_repos=workspace_repos,
+    )
     if interactive:
         state = _drive_interactive_approvals(ctx, state.run_id)
     _render_run_snapshot(ctx, state.run_id, state=state)
@@ -118,8 +137,8 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 @main.command("approve")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan", "merge"]))
-@click.option("--force", is_flag=True, default=False, help="Allow a merge despite base-branch drift.")
+@click.argument("gate", type=click.Choice(["scope", "plan"]))
+@click.option("--force", is_flag=True, default=False, help="Reserved for backward compatibility.")
 @click.pass_context
 def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None:
     """Approve a pending gate."""
@@ -133,7 +152,7 @@ def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None
 
 @main.command("reject")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan", "merge"]))
+@click.argument("gate", type=click.Choice(["scope", "plan"]))
 @click.option("--reason", required=True)
 @click.pass_context
 def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str) -> None:
@@ -170,6 +189,7 @@ def cmd_status(ctx: click.Context, run_id: str | None, watch: bool, refresh_inte
         return
 
     ui.console.print(_render_status(ctx, run_id))
+    _print_commit_suggestions_if_needed(ctx, state_mgr.load(run_id))
 
 
 @main.command("logs")
@@ -282,7 +302,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         elif state.current_phase == "APPROVAL_PLAN":
             gate = "plan"
         else:
-            gate = "merge"
+            return engine.resume(run_id)
         if gate == "scope":
             if state.normalized_task or state.complexity_tier:
                 ui.print_scoping_result(
@@ -295,10 +315,6 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         elif gate == "plan" and state.plan_id:
             plan = ArtifactStore(ctx.obj["artifact_root"]).read_json(state.plan_id)
             ui.print_plan(plan)
-        elif gate == "merge" and state.worktree_branch and state.base_commit:
-            diff = _run_diff_stat(ctx.obj["repo_root"], state.base_commit, state.worktree_branch)
-            ui.print_diff_summary(diff)
-
         if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
             state = engine.approve(run_id, gate)
         else:
@@ -332,14 +348,18 @@ def _render_run_snapshot(ctx: click.Context, run_id: str, *, state=None) -> None
         ctx.obj["ui"].print_plan(store.read_json(state.plan_id))
     if state.current_phase == "FEASIBILITY" and state.feasibility_id:
         ctx.obj["ui"].print_feasibility_result(store.read_json(state.feasibility_id))
-    if state.current_phase == "APPROVAL_MERGE" and state.base_commit and state.worktree_branch:
-        ctx.obj["ui"].print_diff_summary(_run_diff_stat(ctx.obj["repo_root"], state.base_commit, state.worktree_branch))
     ctx.obj["ui"].print_status(
         state,
         plan=store.read_json(state.plan_id) if state.plan_id else None,
         step_results=[store.read_json(reference) for reference in state.step_results],
         log_entries=_load_log_entries(ctx.obj["artifact_root"] / "logs" / f"run-{run_id}.log"),
     )
+    _print_commit_suggestions_if_needed(ctx, state)
+
+
+def _print_commit_suggestions_if_needed(ctx: click.Context, state: RunState) -> None:
+    if state.status == "DONE" and state.commit_commands:
+        ctx.obj["ui"].print_commit_suggestions(state.commit_commands)
 
 
 def _load_log_entries(path: Path) -> list[dict[str, str]]:

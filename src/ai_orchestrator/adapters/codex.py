@@ -163,20 +163,31 @@ class CodexAdapter(BaseAdapter):
             result = self._scan_stdout_for_json(stdout)
 
         if schema_title == "StepResult":
-            git_result = self._git_diff_fallback(working_dir, step_number or 0)
-            if result is None:
-                output_source = "git-diff"
-            merged = self._merge_result_metadata(
-                git_result,
-                result,
-                step_number=step_number or 0,
-            )
-            validated = self._validate_output(
-                merged,
-                schema,
-                working_dir,
-                step_number=step_number or merged.get("step_number"),
-            )
+            try:
+                git_result = self._git_diff_fallback(working_dir, step_number or 0)
+            except StepFailure:
+                if result is None or (working_dir / ".git").exists():
+                    raise
+                validated = self._validate_output(
+                    result,
+                    schema,
+                    working_dir,
+                    step_number=step_number or result.get("step_number"),
+                )
+            else:
+                if result is None:
+                    output_source = "git-diff"
+                merged = self._merge_result_metadata(
+                    git_result,
+                    result,
+                    step_number=step_number or 0,
+                )
+                validated = self._validate_output(
+                    merged,
+                    schema,
+                    working_dir,
+                    step_number=step_number or merged.get("step_number"),
+                )
         else:
             if result is None:
                 raise StepFailure(
@@ -412,4 +423,5 @@ class CodexAdapter(BaseAdapter):
             "summary": parsed_result.get("summary", git_result["summary"]),
             "issues": parsed_result.get("issues", []),
             "test_commands": parsed_result.get("test_commands", []),
+            "workspace_diffs": parsed_result.get("workspace_diffs", {}),
         }

@@ -15,7 +15,7 @@ INIT -> SCOPING -> PLANNING -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING -> REVI
          |
          +---- reject/update task while paused at SCOPING
 
-ADJUDICATING -> APPROVAL_MERGE -> MERGING -> DONE
+ADJUDICATING -> MERGING -> DONE
       |
       +---- REWORK -> EXECUTING
 ```
@@ -102,7 +102,7 @@ When rejected (`aio reject <run-id> plan --reason "..."`), the rejection reason 
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.feasibility_checker` |
-| Input | Normalized task + approved plan + pre-execution worktree tree |
+| Input | Normalized task + approved plan + pre-execution tree |
 | Output | `feasibility/feasibility-<uuid>.json` validated against `feasibility.schema.json` |
 | Worktree | Yes (read-only probe) |
 | Retries | Up to `max_retries` on schema failure |
@@ -113,7 +113,7 @@ Blocked feasibility results feed back into replanning and consume the replan loo
 
 ## Phase 5: EXECUTING
 
-**Purpose:** Implement each step in the plan, sequentially, in a single worktree.
+**Purpose:** Implement each step in the plan, sequentially, in a single worktree or in-place across a workspace.
 
 All steps execute in one worktree branch. Each step sees the filesystem state left by prior steps.
 
@@ -245,7 +245,7 @@ The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 
 **Possible verdicts:**
 
-- `PASS` — proceed to merge approval
+- `PASS` — proceed to MERGING
 - `REWORK` — re-execute specific steps with feedback (loops back to Phase 3). Reworked steps execute in the same worktree, seeing all prior changes.
 - `REPLAN` — the plan itself is flawed; loop back to Phase 1 with feedback. The existing worktree is discarded and a new one is created.
 - `FAIL` — unrecoverable; stop the run
@@ -262,38 +262,27 @@ When any loop limit is hit, the run transitions to `FAILED` with a summary of al
 
 ---
 
-## Phase 8: APPROVAL_MERGE
+## Phase 8: MERGING
 
-**Purpose:** Human reviews final implementation before merge.
+**Purpose:** Hand off the final implementation without committing on the user's behalf.
 
-| Property | Value |
-|---|---|
-| Gate type | Manual approval |
-| Configurable | `approval.require_merge_approval` (default: `true`) |
-| Behavior | Engine writes `PAUSED` state, prints diff summary, waits |
-| Resume | `aio approve <run-id> merge` |
-
-On rejection, reason is fed to Phase 5 for re-adjudication.
-
-**Skip behavior:** If `require_merge_approval = false`, this phase is skipped and the engine transitions directly to MERGING.
-
----
-
-## Phase 9: MERGING
-
-**Purpose:** Merge the worktree branch into the base branch.
+### Single-repo mode
 
 **Pre-merge checks:**
-1. Verify the working tree on the base branch is clean (no uncommitted changes). If dirty, transition to `FAILED` with message instructing user to commit or stash.
-2. Verify the base commit SHA matches what was recorded at worktree creation. If the base branch has advanced, warn the user and require explicit `aio approve <run-id> merge --force` to proceed.
+1. Verify the base working tree is clean.
+2. Verify the base branch still points at the recorded base commit.
 
-**Merge sequence:**
+**Handoff sequence:**
 1. `git checkout <base_branch>`
-2. `git merge --no-ff aio/run-<uuid> -m "aio: <task_summary>"`
-3. If merge conflict: transition to `CONFLICT` state. User resolves, then `aio resume <run-id>`.
-4. On success: clean up worktree `git worktree remove .ai-orchestrator/worktrees/run-<uuid>`
-5. Clean up branch: `git branch -d aio/run-<uuid>`
-6. Mark run as `DONE`
+2. `git merge --squash aio/run-<uuid>`
+3. Remove the worktree and delete its branch.
+4. Leave the squashed result as staged changes in the main working tree.
+5. Print suggested `git status`, `git diff --cached`, `git commit`, and `git push` commands.
+6. Mark the run as `DONE`
+
+### Workspace mode
+
+The engine does not create worktrees. It inspects each configured repo in place, leaves the file changes untouched, and prints per-repo `git add .`, `git commit`, and `git push` suggestions.
 
 ---
 
@@ -307,12 +296,11 @@ INIT ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXECUTING ──▶ RE
                       PLANNING                     EXECUTING         PLANNING
                       (with feedback)              (rework)          (replan)
                                                                         │
-ADJUDICATING(PASS) ──▶ APPROVAL_MERGE ──▶ MERGING ──▶ DONE            │
-                           │                  │                         │
-                           │ (reject)         │ (conflict)              │
-                           ▼                  ▼                         │
-                        ADJUDICATING       CONFLICT ──(resolved)──▶ MERGING
-                        (with feedback)
+ADJUDICATING(PASS) ──▶ MERGING ──▶ DONE                              │
+                              │                                       │
+                              │ (conflict, legacy resume path)        │
+                              ▼                                       │
+                           CONFLICT ──(resolved)──▶ MERGING
 
 Any state ──▶ FAILED        (unrecoverable error or loop limit exceeded)
 Any state ──▶ PAUSED        (approval gate reached)
@@ -329,6 +317,19 @@ Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth re
 | `CONFLICT` | Verify conflict is resolved, then continue merge |
 | `EXECUTING` (crashed mid-step) | Re-run the current step from the beginning in the same worktree |
 | Any other (crashed) | Re-enter at `current_phase` |
+
+---
+
+## Workspace Mode
+
+A workspace root is a directory without its own `.git/` that contains one or more git repos as subdirectories.
+
+- Detection: use `[workspace] repos = [...]` from `aio.toml`, or auto-detect git subdirectories when the current directory is not a repo.
+- Working directory: all AI phases run from the workspace root.
+- Execution: no worktrees and no per-step commits.
+- Retry/reset: on execution retry or replan, each configured repo is reset with `git checkout -- .` and `git clean -fd`.
+- Review input: step results may include `workspace_diffs`, and the review prompt aggregates those per-repo diffs.
+- Completion: `MERGING` prints per-repo handoff commands instead of changing git history.
 
 ---
 

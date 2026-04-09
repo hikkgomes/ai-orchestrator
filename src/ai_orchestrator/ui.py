@@ -57,7 +57,6 @@ _STATUS_STYLES = {
     WorkflowStatus.EXECUTING.value: "magenta",
     WorkflowStatus.REVIEWING.value: "blue",
     WorkflowStatus.ADJUDICATING.value: "bright_blue",
-    WorkflowStatus.APPROVAL_MERGE.value: "yellow",
     WorkflowStatus.MERGING.value: "green",
     WorkflowStatus.DONE.value: "bold green",
     WorkflowStatus.FAILED.value: "bold red",
@@ -253,6 +252,17 @@ class OrchestratorUI:
     def print_diff_summary(self, diff: str) -> None:
         """Render a diff or diff-stat summary."""
         self.console.print(self._render_diff(diff))
+
+    def print_commit_suggestions(self, commands: list[str]) -> None:
+        """Render suggested handoff commands after a successful run."""
+        self.console.print()
+        self.console.print(
+            Panel(
+                "\n".join(commands),
+                title="[bold green]Changes staged — run these commands to commit",
+                border_style="green",
+            )
+        )
 
     def print_logs(self, text: str, *, title: str = "Logs") -> None:
         """Render log output with syntax highlighting when possible."""

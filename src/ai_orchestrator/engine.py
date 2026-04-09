@@ -78,17 +78,11 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.ADJUDICATING: {
-        WorkflowStatus.APPROVAL_MERGE,
         WorkflowStatus.MERGING,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
-    },
-    WorkflowStatus.APPROVAL_MERGE: {
-        WorkflowStatus.MERGING,
-        WorkflowStatus.ADJUDICATING,
-        WorkflowStatus.PAUSED,
     },
     WorkflowStatus.MERGING: {
         WorkflowStatus.DONE,
@@ -101,7 +95,6 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
-        WorkflowStatus.APPROVAL_MERGE,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
         WorkflowStatus.SCOPING,
@@ -145,8 +138,20 @@ class Engine:
         self._adapters = adapters or {}
         self._ui = ui
 
-    def start(self, task: str, run_id: str) -> RunState:
-        state = RunState(run_id=run_id, task=task)
+    def start(
+        self,
+        task: str,
+        run_id: str,
+        *,
+        is_workspace: bool = False,
+        workspace_repos: list[str] | None = None,
+    ) -> RunState:
+        state = RunState(
+            run_id=run_id,
+            task=task,
+            is_workspace=is_workspace,
+            workspace_repos=list(workspace_repos or []),
+        )
         self._state_mgr.save(state)
         if self._config.scoping.enabled:
             state = self._transition(state, WorkflowStatus.SCOPING)
@@ -159,6 +164,12 @@ class Engine:
         status = WorkflowStatus(state.status)
         if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED}:
             raise EngineError(f"Run {run_id} is not resumable from {status.value}")
+        if state.is_workspace and state.current_phase in {
+            WorkflowStatus.EXECUTING.value,
+            WorkflowStatus.REVIEWING.value,
+            WorkflowStatus.ADJUDICATING.value,
+        }:
+            self._check_workspace_clean(state)
         if status == WorkflowStatus.PAUSED:
             state = self._transition(
                 state,
@@ -262,9 +273,6 @@ class Engine:
             if status == WorkflowStatus.ADJUDICATING:
                 state = self._run_adjudication(state)
                 continue
-            if status == WorkflowStatus.APPROVAL_MERGE:
-                state = self._handle_merge_approval(state)
-                continue
             if status == WorkflowStatus.MERGING:
                 state = self._run_merge(state)
                 continue
@@ -277,6 +285,7 @@ class Engine:
             raw_task=state.task,
             repo_summary=repo_summary(self._repo_root),
             directory_tree=render_directory_tree(self._repo_root, max_depth=2),
+            workspace_trees=self._workspace_trees(state, max_depth=2),
             schema_json=json_block(schema),
         )
         self._artifacts.save_prompt(f"scoping-{state.run_id[:8]}.md", prompt)
@@ -342,11 +351,17 @@ class Engine:
                     f"Replan feedback:\n{adjudication['replan_feedback']}"
                 )
         if feedback_parts:
-            task_description = task_description + "\n\nADDITIONAL FEEDBACK:\n" + "\n\n".join(feedback_parts)
+            task_description = (
+                task_description
+                + self._workspace_feedback_prefix(state)
+                + "\n\nADDITIONAL FEEDBACK:\n"
+                + "\n\n".join(feedback_parts)
+            )
 
         prompt = build_planning_prompt(
             task_description=task_description,
             directory_tree=render_directory_tree(self._repo_root),
+            workspace_trees=self._workspace_trees(state, max_depth=2),
             key_file_contents=collect_file_context(
                 self._repo_root,
                 default_planning_files(self._repo_root),
@@ -443,6 +458,7 @@ class Engine:
         task_description = state.normalized_task or state.task
         plan_json = json_block(plan)
         directory_tree = render_directory_tree(worktree_dir)
+        workspace_trees = self._workspace_trees(state, max_depth=2)
         adapter = self._adapter_for_phase("feasibility")
         cli_name = self._phase_cli("feasibility", config_name="feasibility_checker")
         if cli_name == "codex":
@@ -450,6 +466,7 @@ class Engine:
                 task_description=task_description,
                 plan_json=plan_json,
                 directory_tree=directory_tree,
+                workspace_trees=workspace_trees,
                 result_file_path=str(result_path),
                 schema_json=json_block(schema),
             )
@@ -458,6 +475,7 @@ class Engine:
                 task_description=task_description,
                 plan_json=plan_json,
                 directory_tree=directory_tree,
+                workspace_trees=workspace_trees,
                 schema_json=json_block(schema),
             )
         self._artifacts.save_prompt(f"feasibility-{state.run_id[:8]}.md", prompt)
@@ -515,7 +533,10 @@ class Engine:
         if issues:
             feedback = (feedback + "\n\nBlocking issues:\n" + "\n".join(issues)).strip()
         self._artifacts.save_feedback(state.run_id, "planning", feedback)
-        self._discard_worktree(state, force=True)
+        if state.is_workspace:
+            self._reset_workspace_repos(state)
+        else:
+            self._discard_worktree(state, force=True)
         self._artifacts.clear_execution_manifest(state.run_id)
         return self._transition(state, WorkflowStatus.PLANNING)
 
@@ -527,6 +548,8 @@ class Engine:
         steps_by_number = {step["step_number"]: step for step in plan["steps"]}
 
         worktree_dir = self._ensure_worktree(state)
+        if state.is_workspace and not state.step_results and not manifest.get("completed_steps"):
+            self._check_workspace_clean(state)
         worker_name = self._phase_cli("executing", config_name="worker")
         worker = self._adapter_for_phase("executing")
         schema = load_bundled_schema("step_result.schema.json")
@@ -558,6 +581,7 @@ class Engine:
                     file_contents=file_contents,
                     result_file_path=pending_result_path,
                     schema_json=json_block(schema),
+                    workspace_trees=self._workspace_trees(state, max_depth=2),
                 )
                 invoke = lambda current_prompt, step_number=step_number: worker.invoke(
                     current_prompt,
@@ -578,6 +602,7 @@ class Engine:
                     plan_context=plan_context,
                     file_contents=file_contents,
                     schema_json=json_block(schema),
+                    workspace_trees=self._workspace_trees(state, max_depth=2),
                 )
                 invoke = lambda current_prompt: worker.invoke(
                     current_prompt,
@@ -598,7 +623,10 @@ class Engine:
                 nonlocal attempt_number
                 if attempt_number > 0:
                     self._artifacts.clear_pending_step_result(step_number)
-                    self._reset_worktree(worktree_dir)
+                    if state.is_workspace:
+                        self._reset_workspace_repos(state)
+                    else:
+                        self._reset_worktree(worktree_dir)
                 attempt_number += 1
                 result = invoke(current_prompt)
                 if result.get("status") == "failed":
@@ -610,6 +638,8 @@ class Engine:
                         "Execution step reported failed status",
                         validation_error=detail,
                     )
+                if state.is_workspace:
+                    result["workspace_diffs"] = self._collect_workspace_diffs(state)
                 return result
 
             self._artifacts.save_prompt(f"step-{step_number}.md", prompt)
@@ -633,7 +663,7 @@ class Engine:
             except StepFailure as exc:
                 return self._fail_run(state, exc.validation_error or str(exc))
 
-            self._commit_worktree_step(worktree_dir, step_number, step["description"])
+            self._commit_worktree_step(state, worktree_dir, step_number, step["description"])
             reference = self._artifacts.save_step_result(state.run_id, step_number, result)
             self._update_step_result_reference(state, step_number, reference)
             manifest = self._mark_step_completed(manifest, step_number)
@@ -705,6 +735,7 @@ class Engine:
         if adjudication_feedback:
             task_description = (
                 task_description
+                + self._workspace_feedback_prefix(state)
                 + "\n\nMERGE REJECTION FEEDBACK:\n"
                 + adjudication_feedback
             )
@@ -760,8 +791,6 @@ class Engine:
 
         verdict = result["verdict"]
         if verdict == "PASS":
-            if self._config.approval.require_merge_approval:
-                return self._transition(state, WorkflowStatus.APPROVAL_MERGE)
             return self._transition(state, WorkflowStatus.MERGING)
         if verdict == "REWORK":
             state.rework_count += 1
@@ -775,7 +804,10 @@ class Engine:
             self._state_mgr.save(state)
             if state.replan_count > self._replan_limit():
                 return self._fail_run(state, "Replan loop limit exceeded")
-            self._discard_worktree(state, force=True)
+            if state.is_workspace:
+                self._reset_workspace_repos(state)
+            else:
+                self._discard_worktree(state, force=True)
             state.step_results = []
             state.review_id = None
             self._state_mgr.save(state)
@@ -783,84 +815,67 @@ class Engine:
             return self._transition(state, WorkflowStatus.PLANNING)
         return self._fail_run(state, str(result.get("failure_reason") or "Adjudication failed"))
 
-    def _handle_merge_approval(self, state: RunState) -> RunState:
-        if not self._config.approval.require_merge_approval:
-            return self._transition(state, WorkflowStatus.MERGING)
-
-        decision = self._artifacts.consume_approval_decision(state.run_id, "merge")
-        if decision is None:
-            return self._transition(
-                state,
-                WorkflowStatus.PAUSED,
-                current_phase=WorkflowStatus.APPROVAL_MERGE.value,
-            )
-        if decision.get("decision") == "reject":
-            self._artifacts.clear_processed_approval(state.run_id, "merge")
-            self._artifacts.save_feedback(
-                state.run_id,
-                "adjudication",
-                str(decision.get("reason") or ""),
-            )
-            return self._transition(state, WorkflowStatus.ADJUDICATING)
-        return self._transition(state, WorkflowStatus.MERGING)
-
     def _run_merge(self, state: RunState) -> RunState:
-        approval = self._artifacts.latest_processed_approval(state.run_id, "merge") or {}
-        force = bool(approval.get("force"))
+        base_branch = self._config.worktree.base_branch
+        task_summary = self._task_summary(state.task)
 
-        merge_head = self._repo_root / ".git" / "MERGE_HEAD"
-        if merge_head.exists():
-            try:
-                self._worktrees.continue_merge()
-            except WorktreeError as exc:
-                message = str(exc)
-                if "conflict" in message.lower():
-                    return self._transition(
-                        state,
-                        WorkflowStatus.CONFLICT,
-                        current_phase=WorkflowStatus.CONFLICT.value,
-                        error=message,
-                    )
-                return self._fail_run(state, message)
-        else:
+        if not state.is_workspace:
             try:
                 self._worktrees.verify_merge_preconditions(
-                    self._config.worktree.base_branch,
+                    base_branch,
                     state.base_commit,
-                    allow_base_commit_mismatch=force,
+                    allow_base_commit_mismatch=False,
                 )
             except WorktreeError as exc:
-                message = str(exc)
-                if "force approval" in message.lower():
-                    return self._transition(
-                        state,
-                        WorkflowStatus.PAUSED,
-                        current_phase=WorkflowStatus.APPROVAL_MERGE.value,
-                        error=message,
-                    )
-                return self._fail_run(state, message)
+                return self._fail_run(state, str(exc))
 
-            try:
-                self._worktrees.merge(
-                    self._config.worktree.base_branch,
-                    state.worktree_branch or "",
-                    self._task_summary(state.task),
+            checkout = subprocess.run(
+                ["git", "checkout", base_branch],
+                cwd=self._repo_root,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if checkout.returncode != 0:
+                return self._fail_run(
+                    state,
+                    f"git checkout {base_branch} failed: {checkout.stderr.strip() or checkout.stdout.strip()}",
                 )
-            except WorktreeError as exc:
-                message = str(exc)
-                if "conflict" in message.lower():
-                    return self._transition(
-                        state,
-                        WorkflowStatus.CONFLICT,
-                        current_phase=WorkflowStatus.CONFLICT.value,
-                        error=message,
-                    )
-                return self._fail_run(state, message)
 
-        self._discard_worktree(state, force=False)
+            branch = state.worktree_branch or ""
+            result = subprocess.run(
+                ["git", "merge", "--squash", branch],
+                cwd=self._repo_root,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                return self._fail_run(
+                    state,
+                    f"git merge --squash failed: {result.stderr.strip() or result.stdout.strip()}",
+                )
+
+            self._discard_worktree(state, force=True)
+            commands = [
+                "# Review staged changes:",
+                "git status",
+                "git diff --cached",
+                "",
+                f'git commit -m "aio: {task_summary}"',
+                f"git push origin {base_branch}",
+            ]
+        else:
+            commands = self._generate_workspace_commands(state)
+
+        state.commit_commands = commands
         self._artifacts.clear_processed_approval(state.run_id, "merge")
         state.error = None
         self._state_mgr.save(state)
+        if self._ui:
+            self._ui.print_commit_suggestions(commands)
         return self._transition(state, WorkflowStatus.DONE)
 
     def _transition(
@@ -995,6 +1010,8 @@ class Engine:
         return self._config.orchestrator.execution_timeout_medium or timeouts.get("medium", 300)
 
     def _ensure_worktree(self, state: RunState) -> Path:
+        if state.is_workspace:
+            return self._repo_root
         if state.worktree_path:
             return Path(state.worktree_path)
         worktree_path, branch_name, base_commit = self._worktrees.create(
@@ -1015,6 +1032,8 @@ class Engine:
             raise EngineError(f"Failed to reset worktree: {exc}") from exc
 
     def _discard_worktree(self, state: RunState, *, force: bool) -> None:
+        if state.is_workspace:
+            return
         if not state.worktree_path or not state.worktree_branch:
             return
         try:
@@ -1064,7 +1083,15 @@ class Engine:
         updated["completed_steps"] = completed
         return updated
 
-    def _commit_worktree_step(self, worktree_dir: Path, step_number: int, description: str) -> None:
+    def _commit_worktree_step(
+        self,
+        state: RunState,
+        worktree_dir: Path,
+        step_number: int,
+        description: str,
+    ) -> None:
+        if state.is_workspace:
+            return
         status = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=worktree_dir,
@@ -1101,6 +1128,8 @@ class Engine:
             raise EngineError(f"git commit failed: {commit.stderr.strip() or commit.stdout.strip()}")
 
     def _implementation_diff(self, state: RunState) -> str:
+        if state.is_workspace:
+            return self._aggregate_workspace_diffs(state)
         if not state.base_commit or not state.worktree_branch:
             return ""
         completed = subprocess.run(
@@ -1117,6 +1146,118 @@ class Engine:
 
     def _load_step_results(self, state: RunState) -> list[dict[str, Any]]:
         return [self._artifacts.read_json(reference) for reference in state.step_results]
+
+    def _workspace_trees(self, state: RunState, *, max_depth: int) -> dict[str, str] | None:
+        if not state.is_workspace:
+            return None
+        return {
+            repo: render_directory_tree(self._repo_root / repo, max_depth=max_depth)
+            for repo in state.workspace_repos
+        }
+
+    def _check_workspace_clean(self, state: RunState) -> None:
+        for repo in state.workspace_repos:
+            repo_path = self._repo_root / repo
+            if not repo_path.exists() or not (repo_path / ".git").exists():
+                raise EngineError(f"Workspace repo '{repo}' is missing or is not a git repository.")
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise EngineError(
+                    f"Failed to inspect workspace repo '{repo}': {result.stderr.strip() or result.stdout.strip()}"
+                )
+            if result.stdout.strip():
+                raise EngineError(
+                    f"Repo '{repo}' has uncommitted changes. Commit or stash all changes before starting a workspace run."
+                )
+
+    def _reset_workspace_repos(self, state: RunState) -> None:
+        for repo in state.workspace_repos:
+            repo_path = self._repo_root / repo
+            subprocess.run(
+                ["git", "checkout", "--", "."],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            subprocess.run(
+                ["git", "clean", "-fd"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+
+    def _collect_workspace_diffs(self, state: RunState) -> dict[str, str]:
+        diffs: dict[str, str] = {}
+        for repo in state.workspace_repos:
+            repo_path = self._repo_root / repo
+            result = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise EngineError(
+                    f"Failed to collect workspace diff for '{repo}': {result.stderr.strip() or result.stdout.strip()}"
+                )
+            if result.stdout.strip():
+                diffs[repo] = result.stdout
+        return diffs
+
+    def _aggregate_workspace_diffs(self, state: RunState) -> str:
+        all_diffs: list[str] = []
+        for ref in state.step_results:
+            result = self._artifacts.read_json(ref)
+            for repo, diff in (result.get("workspace_diffs") or {}).items():
+                all_diffs.append(f"--- {repo}/ ---\n{diff}")
+        return "\n\n".join(all_diffs)
+
+    def _generate_workspace_commands(self, state: RunState) -> list[str]:
+        task_summary = self._task_summary(state.task)
+        base_branch = self._config.worktree.base_branch
+        commands: list[str] = []
+        for repo in state.workspace_repos:
+            repo_path = self._repo_root / repo
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise EngineError(
+                    f"Failed to inspect workspace repo '{repo}': {result.stderr.strip() or result.stdout.strip()}"
+                )
+            if result.stdout.strip():
+                commands.extend(
+                    [
+                        f"# {repo}/",
+                        f"cd {repo}",
+                        "git add .",
+                        f'git commit -m "aio: {task_summary}"',
+                        f"git push origin {base_branch}",
+                        "cd ..",
+                        "",
+                    ]
+                )
+        if not commands:
+            return ["# No changes detected in any workspace repo."]
+        return commands
 
     def _completed_step_numbers(self, state: RunState) -> list[int]:
         numbers: list[int] = []
@@ -1154,8 +1295,15 @@ class Engine:
         return {
             "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
-            "merge": WorkflowStatus.APPROVAL_MERGE.value,
         }[gate]
+
+    def _workspace_feedback_prefix(self, state: RunState) -> str:
+        if not state.is_workspace:
+            return ""
+        aggregated = self._aggregate_workspace_diffs(state)
+        if not aggregated:
+            return ""
+        return f"\n\nWorkspace changes at time of failure:\n{aggregated}\n"
 
     def _task_summary(self, task: str) -> str:
         summary = " ".join(task.split())

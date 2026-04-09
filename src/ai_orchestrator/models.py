@@ -30,7 +30,6 @@ class WorkflowStatus(str, Enum):
     EXECUTING = "EXECUTING"
     REVIEWING = "REVIEWING"
     ADJUDICATING = "ADJUDICATING"
-    APPROVAL_MERGE = "APPROVAL_MERGE"
     MERGING = "MERGING"
     DONE = "DONE"
     FAILED = "FAILED"
@@ -145,6 +144,7 @@ class StepResult(BaseModel):
     summary: str = Field(min_length=1)
     issues: list[str] = Field(default_factory=list)
     test_commands: list[str] = Field(default_factory=list)
+    workspace_diffs: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +210,7 @@ class RunState(BaseModel):
     normalized_task: str | None = None
     complexity_tier: str | None = None
     step_results: list[str] = Field(default_factory=list)
+    commit_commands: list[str] = Field(default_factory=list)
     review_id: str | None = None
     adjudication_id: str | None = None
     feasibility_id: str | None = None
@@ -222,5 +223,7 @@ class RunState(BaseModel):
     base_commit: str = ""
     worktree_path: str | None = None
     worktree_branch: str | None = None
+    is_workspace: bool = False
+    workspace_repos: list[str] = Field(default_factory=list)
 
     model_config = {"use_enum_values": True}

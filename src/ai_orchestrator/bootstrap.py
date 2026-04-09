@@ -65,6 +65,10 @@ require_merge_approval = true
 base_branch = "main"
 branch_prefix = "aio/"
 
+# Uncomment for multi-repo workspace mode:
+# [workspace]
+# repos = ["frontend", "backend"]
+
 [logging]
 retain_raw_output = false
 retain_prompts = false
@@ -120,10 +124,8 @@ phases:
       replan: 2
 
   merging:
-    approval_gate: merge
-    pre_checks:
-      - clean_working_tree
-      - base_commit_match
+    # Applies changes as a staged diff via git merge --squash; never commits.
+    # No approval gate — triggered automatically after adjudication passes.
 """
 
 GITIGNORE_BLOCK = """# ai-orchestrator runtime artifacts
@@ -149,7 +151,16 @@ def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[s
 
     config_existed = config_path.exists()
     if force or not config_existed:
-        _write_text(config_path, DEFAULT_CONFIG)
+        config_content = DEFAULT_CONFIG
+        workspace_repos = _detect_workspace_repos(repo_root)
+        if workspace_repos:
+            repos_value = ", ".join(f'"{repo}"' for repo in workspace_repos)
+            config_content = (
+                DEFAULT_CONFIG.rstrip()
+                + "\n\n[workspace]\n"
+                + f"repos = [{repos_value}]\n"
+            )
+        _write_text(config_path, config_content)
         actions.append(("updated" if config_existed else "created", "aio.toml"))
 
     workflow_existed = workflow_path.exists()
@@ -250,6 +261,16 @@ def _append_line_once(path: Path, line: str, *, force: bool) -> None:
 def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _detect_workspace_repos(repo_root: Path) -> list[str]:
+    if (repo_root / ".git").exists():
+        return []
+    return [
+        path.name
+        for path in sorted(repo_root.iterdir())
+        if path.is_dir() and (path / ".git").exists()
+    ]
 
 
 __all__ = [

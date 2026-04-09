@@ -40,6 +40,7 @@ def build_planning_prompt(
     directory_tree: str,
     key_file_contents: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the planning phase prompt.
 
@@ -59,13 +60,14 @@ def build_planning_prompt(
     str
         Fully rendered prompt for the planner CLI.
     """
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a software planning agent. Given the following task and repository context,\n"
         "produce a JSON plan conforming to the schema below.\n\n"
         "TASK:\n"
         f"{task_description}\n\n"
         "REPOSITORY STRUCTURE:\n"
-        f"{directory_tree}\n\n"
+        f"{directory_tree}{workspace_section}\n\n"
         "KEY FILE CONTENTS:\n"
         f"{key_file_contents}\n\n"
         "OUTPUT SCHEMA:\n"
@@ -79,8 +81,10 @@ def build_scoping_prompt(
     repo_summary: str,
     directory_tree: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the scoping phase prompt."""
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a task intake agent for an automated software orchestrator.\n\n"
         "Your only job is to validate and normalize the task below. Do not implement\n"
@@ -91,7 +95,7 @@ def build_scoping_prompt(
         "REPOSITORY SUMMARY:\n"
         f"{repo_summary}\n\n"
         "REPOSITORY STRUCTURE (depth 2):\n"
-        f"{directory_tree}\n\n"
+        f"{directory_tree}{workspace_section}\n\n"
         "---\n\n"
         "RULES:\n"
         "1. If the task is actionable and scoped to this repository:\n"
@@ -125,11 +129,13 @@ def build_execution_prompt_codex(
     file_contents: str,
     result_file_path: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the execution phase prompt for the Codex adapter.
 
     The prompt instructs Codex to write its result to *result_file_path*.
     """
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a software implementation agent. Implement the following step.\n\n"
         "STEP:\n"
@@ -138,6 +144,7 @@ def build_execution_prompt_codex(
         f"{plan_context}\n\n"
         "RELEVANT FILES:\n"
         f"{file_contents}\n\n"
+        f"{workspace_section}"
         "After making changes, write a JSON result file to the path:\n"
         f"{result_file_path}\n\n"
         "The JSON must conform to this schema:\n"
@@ -152,8 +159,10 @@ def build_feasibility_prompt_codex(
     directory_tree: str,
     result_file_path: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the feasibility phase prompt for the Codex adapter."""
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a feasibility checker for an automated software orchestrator.\n\n"
         "Your job is to verify that the following plan can be executed in the current\n"
@@ -164,7 +173,7 @@ def build_feasibility_prompt_codex(
         "PLAN:\n"
         f"{plan_json}\n\n"
         "REPOSITORY STRUCTURE:\n"
-        f"{directory_tree}\n\n"
+        f"{directory_tree}{workspace_section}\n\n"
         "CHECKS TO PERFORM:\n"
         '1. Verify that all paths listed in "files_to_read" across all plan steps exist\n'
         "   in the repository. Paths that don't exist and aren't listed in any step's\n"
@@ -188,8 +197,10 @@ def build_feasibility_prompt_claude(
     plan_json: str,
     directory_tree: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the feasibility phase prompt for the Claude adapter."""
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a feasibility checker for an automated software orchestrator.\n\n"
         "Your job is to review the following plan and identify any conditions in the\n"
@@ -201,7 +212,7 @@ def build_feasibility_prompt_claude(
         "PLAN:\n"
         f"{plan_json}\n\n"
         "REPOSITORY STRUCTURE:\n"
-        f"{directory_tree}\n\n"
+        f"{directory_tree}{workspace_section}\n\n"
         "CHECKS TO PERFORM:\n"
         '1. Verify all "files_to_read" paths exist or will exist by the time the step\n'
         "   runs (i.e., an earlier step creates them).\n"
@@ -221,8 +232,10 @@ def build_execution_prompt_claude(
     plan_context: str,
     file_contents: str,
     schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
 ) -> str:
     """Build the execution phase prompt for the Claude adapter."""
+    workspace_section = _workspace_section(workspace_trees)
     return (
         "You are a software implementation agent. Implement the following step.\n\n"
         "STEP:\n"
@@ -231,6 +244,7 @@ def build_execution_prompt_claude(
         f"{plan_context}\n\n"
         "RELEVANT FILES:\n"
         f"{file_contents}\n\n"
+        f"{workspace_section}"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
@@ -407,6 +421,14 @@ def repo_summary(repo_root: Path) -> str:
 def json_block(data: Any) -> str:
     """Serialize a structure to stable, indented JSON for prompt inclusion."""
     return json.dumps(data, indent=2, sort_keys=True)
+
+
+def _workspace_section(workspace_trees: dict[str, str] | None) -> str:
+    if not workspace_trees:
+        return ""
+    return "\n\nWorkspace repos:\n" + "\n".join(
+        f"## {name}/\n{tree}" for name, tree in workspace_trees.items()
+    )
 
 
 def _contains_secret(path: str, content: str) -> bool:

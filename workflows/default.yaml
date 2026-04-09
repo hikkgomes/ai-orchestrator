@@ -44,7 +44,5 @@ phases:
       replan: 2
 
   merging:
-    approval_gate: merge
-    pre_checks:
-      - clean_working_tree
-      - base_commit_match
+    # Applies changes as a staged diff via git merge --squash; never commits.
+    # No approval gate — triggered automatically after adjudication passes.

@@ -57,6 +57,10 @@ require_merge_approval = true
 base_branch = "main"
 branch_prefix = "aio/"
 
+# Uncomment for multi-repo workspace mode:
+# [workspace]
+# repos = ["frontend", "backend"]
+
 [logging]
 retain_raw_output = false
 retain_prompts = false

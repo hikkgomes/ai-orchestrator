@@ -161,6 +161,11 @@ class WorktreeConfig:
 
 
 @dataclass
+class WorkspaceConfig:
+    repos: list[str] = field(default_factory=list)
+
+
+@dataclass
 class LoggingConfig:
     retain_raw_output: bool = False
     retain_prompts: bool = False
@@ -181,6 +186,7 @@ class Config:
     complexity_routing: ComplexityRoutingConfig = field(default_factory=ComplexityRoutingConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
+    workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     cli_compat: CliCompatConfig = field(default_factory=CliCompatConfig)
 
@@ -273,6 +279,11 @@ def _validate_string(name: str, value: Any) -> None:
         raise ConfigError(f"Config value '{name}' must be a string")
 
 
+def _validate_string_list(name: str, value: Any) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ConfigError(f"Config value '{name}' must be an array of strings")
+
+
 def _validate_config_tree(data: dict[str, Any]) -> None:
     orchestrator = _expect_mapping("orchestrator", data.get("orchestrator"))
     for key in (
@@ -347,6 +358,10 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
         if key in worktree:
             _validate_string(f"worktree.{key}", worktree[key])
 
+    workspace = _expect_mapping("workspace", data.get("workspace"))
+    if "repos" in workspace:
+        _validate_string_list("workspace.repos", workspace["repos"])
+
     logging = _expect_mapping("logging", data.get("logging"))
     for key in ("retain_raw_output", "retain_prompts"):
         if key in logging:
@@ -406,6 +421,7 @@ def load_config(repo_root: Path | None = None) -> Config:
             "complexity_routing",
             "approval",
             "worktree",
+            "workspace",
             "logging",
             "cli_compat",
         },
@@ -508,6 +524,11 @@ def load_config(repo_root: Path | None = None) -> Config:
             WorktreeConfig,
             _expect_mapping("worktree", merged.get("worktree")),
             section_name="worktree",
+        ),
+        workspace=_apply_section(
+            WorkspaceConfig,
+            _expect_mapping("workspace", merged.get("workspace")),
+            section_name="workspace",
         ),
         logging=_apply_section(
             LoggingConfig,
