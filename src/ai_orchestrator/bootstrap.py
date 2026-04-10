@@ -118,6 +118,7 @@ phases:
   reviewing:
     cli: claude
     retries: 3
+    max_turns: 5
 
   adjudicating:
     cli: codex

@@ -1,6 +1,6 @@
 """Claude Code CLI adapter.
 
-Invokes ``claude -p "<prompt>" --output-format json --max-turns 1`` as a
+Invokes ``claude -p "<prompt>" --output-format json --max-turns N`` as a
 subprocess per AGENTS.md.
 
 Output parsing strategy (strict → lenient fallback):

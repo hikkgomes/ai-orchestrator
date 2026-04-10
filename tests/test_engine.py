@@ -1302,6 +1302,26 @@ def test_workflow_default_max_turns_applies_to_scoping(tmp_repo, artifact_root, 
     assert scoping_call["max_turns_override"] == 3
 
 
+def test_workflow_default_max_turns_applies_to_reviewing(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "5e5e5e5e-5e5e-5e5e-5e5e-5e5e5e5e5e5e")
+
+    assert state.status == "DONE"
+    review_call = next(call for call in claude.invocations if call["title"] == "Review")
+    assert review_call["max_turns_override"] == 5
+
+
 def test_phase_max_turns_override_wins_over_workflow_default(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False

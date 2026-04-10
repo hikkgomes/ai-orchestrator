@@ -75,6 +75,7 @@ def test_init_scaffolds_repo_files():
         workflow_text = Path("workflows/default.yaml").read_text(encoding="utf-8")
         assert "authoritative workflow definition" in workflow_text
         assert "scoping:\n    cli: claude\n    retries: 2\n    max_turns: 3" in workflow_text
+        assert "reviewing:\n    cli: claude\n    retries: 3\n    max_turns: 5" in workflow_text
         assert ".ai-orchestrator/results/" in Path(".gitignore").read_text(encoding="utf-8")
         assert ".ai-orchestrator/feasibility/" in Path(".gitignore").read_text(encoding="utf-8")
 
