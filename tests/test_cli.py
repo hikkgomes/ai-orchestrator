@@ -6,6 +6,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from ai_orchestrator.bootstrap import DEFAULT_WORKFLOW
 from ai_orchestrator.cli import main
 from ai_orchestrator.models import RunState
 from ai_orchestrator.state import StateManager
@@ -262,6 +263,52 @@ dependencies = ["fastapi>=0.1"]
         updated = json.loads(Path(".ai-review/config.json").read_text(encoding="utf-8"))
         assert "manual note" in updated["notes"]
         assert "review_categories:" in Path(".ai-review/rules.yaml").read_text(encoding="utf-8")
+
+
+def test_sync_updates_stale_workflow_file():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("pyproject.toml").write_text(
+            """
+[project]
+name = "demo"
+dependencies = ["fastapi>=0.1"]
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        Path("workflows").mkdir()
+        stale_workflow = DEFAULT_WORKFLOW.replace("    max_turns: 5\n", "", 1)
+        Path("workflows/default.yaml").write_text(stale_workflow, encoding="utf-8")
+
+        result = runner.invoke(main, ["sync"])
+
+        assert result.exit_code == 0
+        assert Path("workflows/default.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
+        assert "workflows/default.yaml" in result.output
+        assert "updated" in result.output
+
+
+def test_sync_skips_up_to_date_workflow_file():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("pyproject.toml").write_text(
+            """
+[project]
+name = "demo"
+dependencies = ["fastapi>=0.1"]
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        Path("workflows").mkdir()
+        Path("workflows/default.yaml").write_text(DEFAULT_WORKFLOW, encoding="utf-8")
+
+        result = runner.invoke(main, ["sync"])
+
+        assert result.exit_code == 0
+        assert Path("workflows/default.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
+        assert "workflows/default.yaml" not in result.output
 
 
 def test_self_update_local_pipx_pulls_and_reinstalls(monkeypatch):

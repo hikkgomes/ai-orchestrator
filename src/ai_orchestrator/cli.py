@@ -13,7 +13,7 @@ from rich.console import RenderableType
 
 from . import __version__
 from .artifacts import ArtifactStore
-from .bootstrap import install_shell_integration, read_install_meta, scaffold_repository
+from .bootstrap import install_shell_integration, read_install_meta, refresh_workflow, scaffold_repository
 from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
@@ -342,6 +342,9 @@ def cmd_self_update(ctx: click.Context) -> None:
 def cmd_sync(ctx: click.Context) -> None:
     """Refresh workspace AI configs for the current repository."""
     ui = ctx.obj["ui"]
+    actions = refresh_workflow(ctx.obj["repo_root"])
+    if actions:
+        ui.print_file_updates(actions)
     ui.info("Refreshing reviewer config from repo heuristics and bundled rules ...")
     ctx.invoke(cmd_review_analyze)
     ui.info("Workspace sync complete.")

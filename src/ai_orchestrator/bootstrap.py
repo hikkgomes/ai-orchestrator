@@ -184,6 +184,18 @@ def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[s
     return actions
 
 
+def refresh_workflow(repo_root: Path) -> list[tuple[str, str]]:
+    """Update ``workflows/default.yaml`` when it differs from the bundled default."""
+    workflow_path = repo_root / "workflows" / "default.yaml"
+    if not workflow_path.exists():
+        return []
+    current = workflow_path.read_text(encoding="utf-8")
+    if current == DEFAULT_WORKFLOW:
+        return []
+    _write_text(workflow_path, DEFAULT_WORKFLOW)
+    return [("updated", "workflows/default.yaml")]
+
+
 def install_shell_integration(
     *,
     shell: str | None = None,
@@ -311,6 +323,7 @@ __all__ = [
     "detect_shell",
     "install_shell_integration",
     "read_install_meta",
+    "refresh_workflow",
     "scaffold_repository",
     "write_install_meta",
 ]
