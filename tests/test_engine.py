@@ -1282,6 +1282,26 @@ def test_workflow_default_max_turns_applies_to_planning(tmp_repo, artifact_root,
     assert planning_call["max_turns_override"] == 5
 
 
+def test_workflow_default_max_turns_applies_to_scoping(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "3c3c3c3c-3c3c-3c3c-3c3c-3c3c3c3c3c3c")
+
+    assert state.status == "DONE"
+    scoping_call = next(call for call in claude.invocations if call["title"] == "TaskDefinition")
+    assert scoping_call["max_turns_override"] == 3
+
+
 def test_phase_max_turns_override_wins_over_workflow_default(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
@@ -1355,3 +1375,66 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
     assert state.error is not None
     assert "stderr: error: unknown option '--effort'" in state.error
     assert "exit_code: 2" in state.error
+
+
+def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
+    tmp_repo, artifact_root, default_config
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+
+    class FailingClaudeAdapter(FakeClaudeAdapter):
+        def invoke(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            schema,
+            *,
+            step_number=None,
+            reasoning_effort_override=None,
+            model_override=None,
+            max_turns_override=None,
+        ):
+            if schema["title"] == "TaskDefinition":
+                raise StepFailure(
+                    "Claude CLI exited with a non-zero status",
+                    exit_code=1,
+                    stdout=json.dumps(
+                        {
+                            "type": "result",
+                            "subtype": "error_max_turns",
+                            "is_error": True,
+                            "result": "Reached maximum number of turns (1)",
+                        }
+                    ),
+                )
+            return super().invoke(
+                prompt,
+                working_dir,
+                timeout,
+                schema,
+                step_number=step_number,
+                reasoning_effort_override=reasoning_effort_override,
+                model_override=model_override,
+                max_turns_override=max_turns_override,
+            )
+
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={
+            "claude": FailingClaudeAdapter([_plan()], [_review()], [_pass_adjudication()]),
+            "codex": FakeCodexAdapter(),
+        },
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "4d4d4d4d-4d4d-4d4d-4d4d-4d4d4d4d4d4d")
+
+    assert state.status == "FAILED"
+    assert state.current_phase == "SCOPING"
+    assert state.error is not None
+    assert "stdout_errors: Reached maximum number of turns (1)" in state.error
+    assert "exit_code: 1" in state.error

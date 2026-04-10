@@ -93,6 +93,7 @@ phases:
   scoping:
     cli: claude
     retries: 2
+    max_turns: 3
 
   planning:
     cli: claude

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -1404,6 +1405,43 @@ class Engine:
         summary = " ".join(task.split())
         return summary[:72] if len(summary) > 72 else summary
 
+    @staticmethod
+    def _extract_stdout_error_messages(stdout: str) -> list[str]:
+        text = stdout.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(parsed, dict):
+            return []
+
+        messages: list[str] = []
+
+        def append_message(value: Any) -> None:
+            if isinstance(value, str):
+                message = value.strip()
+                if message:
+                    messages.append(message)
+                return
+            if isinstance(value, dict):
+                for key in ("message", "detail", "result", "error"):
+                    nested = value.get(key)
+                    if isinstance(nested, str) and nested.strip():
+                        messages.append(nested.strip())
+                        break
+
+        append_message(parsed.get("error"))
+        append_message(parsed.get("message"))
+        if isinstance(parsed.get("errors"), list):
+            for item in parsed["errors"]:
+                append_message(item)
+        if parsed.get("is_error"):
+            append_message(parsed.get("result"))
+
+        return list(dict.fromkeys(messages))
+
     def _format_step_failure(self, exc: StepFailure) -> str:
         parts: list[str] = []
         if exc.validation_error:
@@ -1412,6 +1450,9 @@ class Engine:
             parts.append(str(exc).strip())
         if exc.stderr and exc.stderr.strip():
             parts.append(f"stderr: {exc.stderr.strip()[:1000]}")
+        stdout_errors = self._extract_stdout_error_messages(exc.stdout)
+        if stdout_errors:
+            parts.append(f"stdout_errors: {'; '.join(stdout_errors)[:1000]}")
         if exc.exit_code is not None:
             parts.append(f"exit_code: {exc.exit_code}")
         return "\n".join(parts)
