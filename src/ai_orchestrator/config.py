@@ -252,7 +252,7 @@ def _warn_and_strip_deprecated_timeouts(data: dict[str, Any]) -> None:
             + ", ".join(deprecated_keys)
             + ". Use orchestrator.watchdog_timeout instead.",
             DeprecationWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
 
 
