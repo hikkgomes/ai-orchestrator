@@ -137,7 +137,6 @@ class BaseAdapter(ABC):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-        max_turns_override: int | None = None,
     ) -> dict[str, Any]:
         """Invoke the CLI with *prompt* and return a validated result dict.
 
@@ -157,8 +156,6 @@ class BaseAdapter(ABC):
             Optional phase-specific reasoning effort override.
         model_override:
             Optional phase-specific model override.
-        max_turns_override:
-            Optional phase-specific maximum turn count override for agentic CLIs.
 
         Returns
         -------

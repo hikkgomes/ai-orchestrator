@@ -238,7 +238,6 @@ scoper = "claude"
 
 [routing.phases.planning]
 reasoning_effort = "medium"
-max_turns = 5
 
 [scoping]
 enabled = true
@@ -257,7 +256,6 @@ Notes:
 
 - Complexity-based effort selection is built in.
 - Per-phase overrides in `[routing.phases.*]` win over complexity defaults.
-- `max_turns` is a phase-level override for Claude phases that need more than one turn.
 - `watchdog_timeout` is a global hung-process safety net, not a per-phase runtime budget.
 
 ## Repo Files and Runtime Artifacts

@@ -14,7 +14,7 @@ def test_parse_scalar_supports_simple_floats():
     assert _parse_scalar("0.5") == 0.5
 
 
-def test_load_workflow_definition_parses_phase_max_turns(tmp_path):
+def test_load_workflow_definition_ignores_legacy_phase_keys(tmp_path):
     workflow_dir = tmp_path / "workflows"
     workflow_dir.mkdir()
     (workflow_dir / "default.yaml").write_text(
@@ -35,4 +35,5 @@ def test_load_workflow_definition_parses_phase_max_turns(tmp_path):
 
     workflow = load_workflow_definition(tmp_path)
 
-    assert workflow.phase("planning").max_turns == 5
+    assert workflow.phase("planning").retries == 3
+    assert not hasattr(workflow.phase("planning"), "max_turns")

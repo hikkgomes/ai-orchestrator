@@ -112,54 +112,13 @@ class TestClaudeAdapter:
 
         assert result["task"] == "Example"
         assert calls[0][:5] == ["claude", "--model", "claude-sonnet", "--effort", "high"]
-        assert calls[0][-2:] == ["--max-turns", "1"]
+        assert calls[0][-2:] == ["--output-format", "json"]
         conn = sqlite3.connect(artifact_root / "metadata.sqlite3")
         row = conn.execute(
             "SELECT cli_name, model, reasoning_effort, output_source FROM invocations"
         ).fetchone()
         conn.close()
         assert row == ("claude", "claude-sonnet", "high", "stdout-json")
-
-    def test_invoke_respects_max_turns_override(
-        self,
-        tmp_path,
-        artifact_root,
-        default_config,
-        monkeypatch,
-    ):
-        calls = []
-        schema = _schema("plan.schema.json")
-        fake_popen, _ = _fake_popen_factory(
-            [
-                {
-                    "stdout": json.dumps(
-                        {
-                            "plan_id": "00000000-0000-0000-0000-000000000000",
-                            "task": "Example",
-                            "steps": [
-                                {
-                                    "step_number": 1,
-                                    "description": "One",
-                                    "files_to_read": [],
-                                    "files_to_modify": ["src/file.py"],
-                                    "depends_on": [],
-                                    "estimated_complexity": "low",
-                                }
-                            ],
-                            "reasoning": "Keep it simple",
-                        }
-                    ),
-                }
-            ],
-            calls,
-        )
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-        adapter = ClaudeAdapter(default_config, artifact_root)
-        result = adapter.invoke("plan this", tmp_path, 30, schema, max_turns_override=5)
-
-        assert result["task"] == "Example"
-        assert calls[0][-2:] == ["--max-turns", "5"]
 
     def test_invoke_retries_without_effort_flag_on_unsupported_option(
         self,

@@ -38,7 +38,7 @@ Implementation phases in dependency order. Each phase produces testable, working
 **Goal:** Working Claude adapter that invokes `claude -p`, parses output, validates against schema.
 
 - Implement `adapters/base.py`: abstract `BaseAdapter` with `invoke(prompt, working_dir, timeout, schema) -> dict` interface and `AdapterError` hierarchy
-- Implement `adapters/claude.py`: subprocess invocation with `claude -p "<prompt>" --output-format json --max-turns 1`, environment filtering, timeout handling
+- Implement `adapters/claude.py`: subprocess invocation with `claude -p "<prompt>" --output-format json`, environment filtering, timeout handling
 - JSON parsing: strict `json.loads()` first, lenient (strip fences, find boundaries) fallback, warning on lenient success
 - Schema validation of parsed output via `validator.py`
 - Exit code classification: auth/interactive detection → `BLOCKED_ON_CLI`, generic failure → `STEP_FAILURE`

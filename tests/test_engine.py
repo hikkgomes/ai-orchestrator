@@ -43,7 +43,6 @@ class FakeClaudeAdapter:
         step_number=None,
         reasoning_effort_override=None,
         model_override=None,
-        max_turns_override=None,
     ):
         self.invocations.append(
             {
@@ -51,7 +50,6 @@ class FakeClaudeAdapter:
                 "prompt": prompt,
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
-                "max_turns_override": max_turns_override,
             }
         )
         title = schema["title"]
@@ -104,7 +102,6 @@ class FakeCodexAdapter:
         step_number=None,
         reasoning_effort_override=None,
         model_override=None,
-        max_turns_override=None,
     ):
         self.invocations.append(
             {
@@ -112,7 +109,6 @@ class FakeCodexAdapter:
                 "prompt": prompt,
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
-                "max_turns_override": max_turns_override,
             }
         )
         if schema["title"] == "FeasibilityResult":
@@ -275,7 +271,6 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             result = super().invoke(
                 prompt,
@@ -285,7 +280,6 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
-                max_turns_override=max_turns_override,
             )
             if schema["title"] == "StepResult" and step_number == 1:
                 (working_dir / "step-1.txt").write_text('dummy_key = "changeme"\n', encoding="utf-8")
@@ -611,7 +605,6 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 return {
@@ -690,7 +683,6 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             self.prompts.append(prompt)
             title = schema["title"]
@@ -751,7 +743,6 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 return {
@@ -823,7 +814,6 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 return {
@@ -913,7 +903,6 @@ def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             raise BlockedOnCLI("auth refresh required", exit_code=1, stderr="login required")
 
@@ -980,7 +969,6 @@ def test_reset_worktree_failure_raises_engine_error(tmp_repo, artifact_root, def
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 return {
@@ -1102,7 +1090,6 @@ def test_feasibility_blocked_replans_with_feedback(tmp_repo, artifact_root, defa
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 self.feasibility_calls += 1
@@ -1128,7 +1115,6 @@ def test_feasibility_blocked_replans_with_feedback(tmp_repo, artifact_root, defa
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
-                max_turns_override=max_turns_override,
             )
 
     codex = BlockingFeasibilityCodex()
@@ -1165,7 +1151,6 @@ def test_feasibility_blocked_at_replan_limit_fails(tmp_repo, artifact_root, defa
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "FeasibilityResult":
                 self.feasibility_calls += 1
@@ -1184,7 +1169,6 @@ def test_feasibility_blocked_at_replan_limit_fails(tmp_repo, artifact_root, defa
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
-                max_turns_override=max_turns_override,
             )
 
     codex = AlwaysBlockedCodex()
@@ -1259,88 +1243,6 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     assert feasibility_call["reasoning_effort_override"] == "max"
     assert execute_call["reasoning_effort_override"] == "xhigh"
     assert review_call["reasoning_effort_override"] == "max"
-    assert planning_call["max_turns_override"] == 5
-
-
-def test_workflow_default_max_turns_applies_to_planning(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-    codex = FakeCodexAdapter()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a")
-
-    assert state.status == "DONE"
-    planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
-    assert planning_call["max_turns_override"] == 5
-
-
-def test_workflow_default_max_turns_applies_to_scoping(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-    codex = FakeCodexAdapter()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "3c3c3c3c-3c3c-3c3c-3c3c-3c3c3c3c3c3c")
-
-    assert state.status == "DONE"
-    scoping_call = next(call for call in claude.invocations if call["title"] == "TaskDefinition")
-    assert scoping_call["max_turns_override"] == 3
-
-
-def test_workflow_default_max_turns_applies_to_reviewing(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-    codex = FakeCodexAdapter()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "5e5e5e5e-5e5e-5e5e-5e5e-5e5e5e5e5e5e")
-
-    assert state.status == "DONE"
-    review_call = next(call for call in claude.invocations if call["title"] == "Review")
-    assert review_call["max_turns_override"] == 5
-
-
-def test_phase_max_turns_override_wins_over_workflow_default(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    default_config.routing.phases["planning"] = PhaseRoutingOverride(max_turns=7)
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-    codex = FakeCodexAdapter()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "2b2b2b2b-2b2b-2b2b-2b2b-2b2b2b2b2b2b")
-
-    assert state.status == "DONE"
-    planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
-    assert planning_call["max_turns_override"] == 7
 
 
 def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_root, default_config):
@@ -1358,7 +1260,6 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "TaskDefinition":
                 raise StepFailure(
@@ -1374,7 +1275,6 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
-                max_turns_override=max_turns_override,
             )
 
     engine = Engine(
@@ -1414,7 +1314,6 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
-            max_turns_override=None,
         ):
             if schema["title"] == "TaskDefinition":
                 raise StepFailure(
@@ -1437,7 +1336,6 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
-                max_turns_override=max_turns_override,
             )
 
     engine = Engine(

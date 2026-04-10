@@ -126,9 +126,9 @@ Two adapter classes implementing a common interface:
 #### ClaudeAdapter
 
 ```
-Invocation: claude -p "<prompt>" --output-format json --max-turns 1
+Invocation: claude -p "<prompt>" --output-format json
 Working dir: worktree path or repo root
-Timeout: configurable per phase
+Timeout: global watchdog timeout
 Output: JSON parsed from stdout (strict, then lenient fallback)
 ```
 
@@ -137,7 +137,7 @@ Output: JSON parsed from stdout (strict, then lenient fallback)
 ```
 Invocation: codex exec "<prompt>"
 Working dir: worktree path
-Timeout: configurable per phase
+Timeout: global watchdog timeout
 Output: files_changed from git diff; metadata from result file or stdout (best-effort)
 ```
 
@@ -286,7 +286,7 @@ No AI SDKs. No API client libraries. No network dependencies at runtime.
 
 These assumptions are accepted for v1. If any proves false during implementation, the affected phase must be redesigned.
 
-1. `claude -p --output-format json --max-turns 1` produces parseable JSON on stdout for the tested version range.
+1. `claude -p --output-format json` produces parseable JSON on stdout for the tested version range.
 2. `codex exec` can be instructed via prompt to write a result file to a known path.
 3. Both CLIs support non-interactive execution without hanging for user input when properly invoked.
 4. `git worktree` is available on all supported platforms with git 2.20+.

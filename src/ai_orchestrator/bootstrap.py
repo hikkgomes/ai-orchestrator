@@ -85,13 +85,11 @@ phases:
   scoping:
     cli: claude
     retries: 2
-    max_turns: 3
 
   planning:
     cli: claude
     approval_gate: plan
     retries: 3
-    max_turns: 5
 
   feasibility:
     cli: codex
@@ -106,7 +104,6 @@ phases:
   reviewing:
     cli: claude
     retries: 3
-    max_turns: 5
 
   adjudicating:
     cli: codex

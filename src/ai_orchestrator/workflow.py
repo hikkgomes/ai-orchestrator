@@ -29,7 +29,6 @@ class WorkflowPhase:
     approval_gate: str | None = None
     worktree: bool = False
     retries: int = 0
-    max_turns: int = 0
     loop_limits: dict[str, int] = field(default_factory=dict)
     pre_checks: list[str] = field(default_factory=list)
 
@@ -73,7 +72,6 @@ def load_workflow_definition(repo_root: Path) -> WorkflowDefinition:
             approval_gate=_string_or_none(raw_phase.get("approval_gate")),
             worktree=bool(raw_phase.get("worktree", False)),
             retries=int(raw_phase.get("retries", 0)),
-            max_turns=int(raw_phase.get("max_turns", 0)),
             loop_limits=_int_mapping(raw_phase.get("loop_limits", {})),
             pre_checks=_string_list(raw_phase.get("pre_checks", [])),
         )

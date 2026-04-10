@@ -52,7 +52,6 @@ class TestLoadConfig:
                     "[routing.phases.executing]",
                     'cli = "claude"',
                     'model = "claude-sonnet"',
-                    'max_turns = 7',
                     "[scoping]",
                     "enabled = false",
                     "[feasibility]",
@@ -68,7 +67,6 @@ class TestLoadConfig:
         assert cfg.routing.phases["reviewing"].reasoning_effort == "max"
         assert cfg.routing.phases["executing"].cli == "claude"
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
-        assert cfg.routing.phases["executing"].max_turns == 7
         assert cfg.scoping.enabled is False
         assert cfg.feasibility.enabled is True
         assert cfg.complexity_routing.simple["reviewing"] == "max"
@@ -156,3 +154,23 @@ class TestLoadConfig:
             cfg = load_config(repo_root=tmp_path)
 
         assert cfg.feasibility.enabled is False
+
+    def test_deprecated_phase_max_turns_warns_and_is_ignored(self, tmp_path):
+        (tmp_path / "aio.toml").write_text(
+            "\n".join(
+                [
+                    "[routing.phases.executing]",
+                    'cli = "claude"',
+                    "max_turns = 7",
+                ]
+            )
+        )
+
+        with pytest.warns(
+            DeprecationWarning,
+            match=r"routing\.phases\.executing\.max_turns|watchdog_timeout",
+        ):
+            cfg = load_config(repo_root=tmp_path)
+
+        assert cfg.routing.phases["executing"].cli == "claude"
+        assert not hasattr(cfg.routing.phases["executing"], "max_turns")

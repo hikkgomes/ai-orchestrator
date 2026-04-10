@@ -67,7 +67,7 @@ class BaseAdapter:
 ### Invocation
 
 ```bash
-claude -p "<prompt>" --output-format json --max-turns 1
+claude -p "<prompt>" --output-format json
 ```
 
 ### Flags
@@ -76,7 +76,6 @@ claude -p "<prompt>" --output-format json --max-turns 1
 |---|---|---|
 | `-p "<prompt>"` | Non-interactive prompt mode | Yes |
 | `--output-format json` | Request JSON output | Yes |
-| `--max-turns 1` | Prevent multi-turn behavior | Yes |
 
 ### Output parsing strategy
 
@@ -206,7 +205,7 @@ Max retries configurable via `orchestrator.max_retries` (default: 3).
 
 ## Timeout Strategy
 
-All CLI invocations use a single global watchdog timeout from `orchestrator.watchdog_timeout` (default: 3600 seconds). This watchdog exists only as a safety net for genuinely hung subprocesses; normal phase completion is governed by the vendor CLI's own lifecycle controls (`--max-turns` for Claude, task completion for Codex), so long-running but healthy planning or execution work is not cut off by per-phase limits.
+All CLI invocations use a single global watchdog timeout from `orchestrator.watchdog_timeout` (default: 3600 seconds). This watchdog exists only as a safety net for genuinely hung subprocesses; normal phase completion is governed by the vendor CLI exiting when its work is done, so long-running but healthy planning or execution work is not cut off by per-phase limits.
 
 **Termination sequence:**
 - macOS/Linux: SIGTERM, wait 10s, SIGKILL if still alive

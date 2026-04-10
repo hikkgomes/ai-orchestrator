@@ -79,8 +79,9 @@ def test_init_scaffolds_repo_files():
         assert Path(".ai-review/rules.yaml").exists()
         workflow_text = Path("workflows/default.yaml").read_text(encoding="utf-8")
         assert "authoritative workflow definition" in workflow_text
-        assert "scoping:\n    cli: claude\n    retries: 2\n    max_turns: 3" in workflow_text
-        assert "reviewing:\n    cli: claude\n    retries: 3\n    max_turns: 5" in workflow_text
+        assert "scoping:\n    cli: claude\n    retries: 2" in workflow_text
+        assert "reviewing:\n    cli: claude\n    retries: 3" in workflow_text
+        assert "max_turns:" not in workflow_text
         assert ".ai-orchestrator/results/" in Path(".gitignore").read_text(encoding="utf-8")
         assert ".ai-orchestrator/feasibility/" in Path(".gitignore").read_text(encoding="utf-8")
 
@@ -278,7 +279,7 @@ dependencies = ["fastapi>=0.1"]
             encoding="utf-8",
         )
         Path("workflows").mkdir()
-        stale_workflow = DEFAULT_WORKFLOW.replace("    max_turns: 5\n", "", 1)
+        stale_workflow = DEFAULT_WORKFLOW.replace("    retries: 3\n", "    retries: 4\n", 1)
         Path("workflows/default.yaml").write_text(stale_workflow, encoding="utf-8")
 
         result = runner.invoke(main, ["sync"])

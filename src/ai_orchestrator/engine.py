@@ -313,7 +313,6 @@ class Engine:
                         cli_name,
                     ),
                     model_override=self._resolve_model_for_phase("scoping", cli_name),
-                    max_turns_override=self._resolve_max_turns_for_phase("scoping"),
                 ),
                 initial_prompt=prompt,
             )
@@ -396,7 +395,6 @@ class Engine:
                         "planning",
                         self._phase_cli("planning", config_name="planner"),
                     ),
-                    max_turns_override=self._resolve_max_turns_for_phase("planning"),
                 ),
                 initial_prompt=prompt,
             )
@@ -503,7 +501,6 @@ class Engine:
                         cli_name,
                     ),
                     model_override=self._resolve_model_for_phase("feasibility", cli_name),
-                    max_turns_override=self._resolve_max_turns_for_phase("feasibility"),
                 ),
                 initial_prompt=prompt,
             )
@@ -602,7 +599,6 @@ class Engine:
                         worker_name,
                     ),
                     model_override=self._resolve_model_for_phase("executing", worker_name),
-                    max_turns_override=self._resolve_max_turns_for_phase("executing"),
                 )
             else:
                 prompt = build_execution_prompt_claude(
@@ -623,7 +619,6 @@ class Engine:
                         worker_name,
                     ),
                     model_override=self._resolve_model_for_phase("executing", worker_name),
-                    max_turns_override=self._resolve_max_turns_for_phase("executing"),
                 )
 
             attempt_number = 0
@@ -730,7 +725,6 @@ class Engine:
                         cli_name,
                     ),
                     model_override=self._resolve_model_for_phase("reviewing", cli_name),
-                    max_turns_override=self._resolve_max_turns_for_phase("reviewing"),
                 ),
                 initial_prompt=review_prompt,
             )
@@ -856,7 +850,6 @@ class Engine:
                             cli_name,
                         ),
                         model_override=self._resolve_model_for_phase("adjudicating", cli_name),
-                        max_turns_override=self._resolve_max_turns_for_phase("adjudicating"),
                     ),
                     validator,
                     plan_step_numbers,
@@ -1078,13 +1071,6 @@ class Engine:
         if override and override.model:
             return override.model
         return getattr(getattr(self._config.routing, cli_name), "model", "") or None
-
-    def _resolve_max_turns_for_phase(self, phase_name: str) -> int | None:
-        override = self._config.routing.phases.get(phase_name)
-        if override and override.max_turns:
-            return override.max_turns
-        max_turns = self._workflow.phase(phase_name).max_turns
-        return max_turns or None
 
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries

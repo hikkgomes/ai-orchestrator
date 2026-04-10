@@ -58,7 +58,6 @@ class PhaseRoutingOverride:
     cli: str = ""
     reasoning_effort: str = ""
     model: str = ""
-    max_turns: int = 0
 
 
 @dataclass
@@ -222,7 +221,7 @@ def _warn_unknown_keys(section_name: str, data: dict[str, Any], known: set[str])
         )
 
 
-def _warn_and_strip_deprecated_timeouts(data: dict[str, Any]) -> None:
+def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
     deprecated_keys: list[str] = []
 
     orchestrator = data.get("orchestrator")
@@ -246,11 +245,20 @@ def _warn_and_strip_deprecated_timeouts(data: dict[str, Any]) -> None:
         deprecated_keys.append("feasibility.timeout")
         feasibility.pop("timeout", None)
 
+    routing = data.get("routing")
+    if isinstance(routing, dict):
+        phases = routing.get("phases")
+        if isinstance(phases, dict):
+            for phase_name, phase_data in phases.items():
+                if isinstance(phase_data, dict) and "max_turns" in phase_data:
+                    deprecated_keys.append(f"routing.phases.{phase_name}.max_turns")
+                    phase_data.pop("max_turns", None)
+
     if deprecated_keys:
         warnings.warn(
-            "Deprecated timeout config keys are ignored: "
+            "Deprecated config keys are ignored: "
             + ", ".join(deprecated_keys)
-            + ". Use orchestrator.watchdog_timeout instead.",
+            + ". Use orchestrator.watchdog_timeout for timeout control.",
             DeprecationWarning,
             stacklevel=3,
         )
@@ -351,8 +359,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
                         value,
                         {"claude", "codex"},
                     )
-            elif key == "max_turns":
-                _validate_int(f"routing.phases.{phase_name}.max_turns", value, minimum=0)
 
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
@@ -427,7 +433,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 
-    _warn_and_strip_deprecated_timeouts(merged)
+    _warn_and_strip_deprecated_keys(merged)
     _validate_config_tree(merged)
 
     routing_data = _expect_mapping("routing", merged.get("routing"))
@@ -474,7 +480,7 @@ def load_config(repo_root: Path | None = None) -> Config:
         _warn_unknown_keys(
             f"routing.phases.{phase_name}",
             phase_mapping,
-            {"cli", "reasoning_effort", "model", "max_turns"},
+            {"cli", "reasoning_effort", "model"},
         )
         phase_overrides[phase_name] = _apply_section(
             PhaseRoutingOverride,

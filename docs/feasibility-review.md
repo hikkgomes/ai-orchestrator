@@ -30,7 +30,7 @@ This product is directionally interesting but materially overclaims what a subsc
 **Classification:** fatal issue
 
 - **Issue:** The adapter contracts treat vendor CLI behavior as stable product surface without any compatibility strategy.
-- **Why it matters:** `claude -p`, `--output-format json`, the wrapper `result` field, ANSI behavior, `--max-turns 1`, `codex exec` mutating files directly, and stdout containing a final JSON object are all presented as dependable contracts in [AGENTS.md](AGENTS.md). The install story in [docs/install.md](docs/install.md) then says to use the “latest” CLI versions. That combination is not viable: latest-version subscription CLIs change behavior, flags, envelopes, and auth flows without compatibility guarantees comparable to APIs.
+- **Why it matters:** `claude -p`, `--output-format json`, the wrapper `result` field, ANSI behavior, `codex exec` mutating files directly, and stdout containing a final JSON object are all presented as dependable contracts in [AGENTS.md](AGENTS.md). The install story in [docs/install.md](docs/install.md) then says to use the “latest” CLI versions. That combination is not viable: latest-version subscription CLIs change behavior, flags, envelopes, and auth flows without compatibility guarantees comparable to APIs.
 - **Affected files or design areas:** `AGENTS.md`, `docs/install.md`, `docs/architecture.md`, adapter design, `aio doctor`.
 - **Proposed fix:** Pin and test against an explicit supported version matrix, add startup capability probes for each required flag/behavior, and fail closed when a CLI version does not match a known compatibility profile.
 

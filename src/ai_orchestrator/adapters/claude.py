@@ -1,7 +1,7 @@
 """Claude Code CLI adapter.
 
-Invokes ``claude -p "<prompt>" --output-format json --max-turns N`` as a
-subprocess per AGENTS.md.
+Invokes ``claude -p "<prompt>" --output-format json`` as a subprocess per
+AGENTS.md.
 
 Output parsing strategy (strict → lenient fallback):
 1. ``json.loads(stdout)`` — strict
@@ -61,7 +61,6 @@ class ClaudeAdapter(BaseAdapter):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-        max_turns_override: int | None = None,
     ) -> dict[str, Any]:
         """Invoke ``claude -p`` and return a validated output dict.
 
@@ -76,7 +75,6 @@ class ClaudeAdapter(BaseAdapter):
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
-            max_turns=max_turns_override or 1,
         )
         return self._invoke_command(
             command,
@@ -94,7 +92,6 @@ class ClaudeAdapter(BaseAdapter):
         *,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-        max_turns: int = 1,
     ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME]
         model = model_override or getattr(self._config.routing.claude, "model", "") or None
@@ -107,7 +104,7 @@ class ClaudeAdapter(BaseAdapter):
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:
             command.extend([self._EFFORT_FLAG, reasoning_effort])
-        command.extend(["-p", prompt, "--output-format", "json", "--max-turns", str(max_turns)])
+        command.extend(["-p", prompt, "--output-format", "json"])
         return command, model, reasoning_effort
 
     def _invoke_command(
