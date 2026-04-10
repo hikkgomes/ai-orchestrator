@@ -82,7 +82,7 @@ scripts/install.sh   # Unix wrapper: installs from this checkout, writes update 
 To update the CLI later from any directory:
 
 ```bash
-orch self-update
+orch update
 ```
 
 ### From PyPI (recommended)
@@ -117,13 +117,13 @@ pwsh -File scripts/install-windows.ps1
 ```
 
 Add `--editable` (or `-Editable` on Windows) for a local dev install. The Unix install
-scripts write install metadata so `orch self-update` can update and reinstall from anywhere.
+scripts write install metadata so `orch update` can update and reinstall from anywhere.
 
 ### Updating
 
 ```bash
 # Update the CLI (pull latest source + reinstall) from any directory
-orch self-update
+orch update
 
 # After updating, refresh workspace configs in each project repo you use
 cd <project>
@@ -143,7 +143,7 @@ orch install-shell  # installs shell integration and `aio` alias
 orch doctor         # verifies everything is working
 ```
 
-If the repo changes significantly, or after running `orch self-update`, refresh
+If the repo changes significantly, or after running `orch update`, refresh
 the reviewer context without discarding curated notes or risk paths:
 
 ```bash
@@ -196,7 +196,7 @@ orch logs <run-id>               # view event log
 orch logs <run-id> 3             # view a specific step result
 orch resume <run-id>             # resume a paused or blocked run
 orch sync                        # refresh .ai-review/ config and rules after an update
-orch self-update                 # pull latest source and reinstall the CLI
+orch update                      # pull latest source and reinstall the CLI
 orch config                      # show effective configuration
 orch clean                       # remove completed run artifacts
 orch clean --all                 # remove all run artifacts

@@ -24,7 +24,7 @@ def test_root_help_lists_primary_commands():
         "resume",
         "logs",
         "doctor",
-        "self-update",
+        "update",
         "sync",
         "install-shell",
         "review-install",
@@ -45,7 +45,7 @@ def test_command_help_smoke():
         "status",
         "logs",
         "doctor",
-        "self-update",
+        "update",
         "sync",
         "install-shell",
         "review-install",
@@ -192,7 +192,7 @@ def test_self_update_local_pipx_pulls_and_reinstalls(monkeypatch):
     monkeypatch.setattr("ai_orchestrator.cli.subprocess.run", fake_run)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["self-update"])
+    result = runner.invoke(main, ["update"])
 
     assert result.exit_code == 0
     assert calls == [
@@ -217,7 +217,7 @@ def test_self_update_pypi_falls_back_to_pip(monkeypatch):
     monkeypatch.setattr("ai_orchestrator.cli.subprocess.run", fake_run)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["self-update"])
+    result = runner.invoke(main, ["update"])
 
     assert result.exit_code == 0
     assert calls[0] == ["pipx", "upgrade", "ai-orchestrator"]
@@ -240,7 +240,7 @@ def test_self_update_pip_user_falls_back_to_pip(monkeypatch):
     monkeypatch.setattr("ai_orchestrator.cli.subprocess.run", fake_run)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["self-update"])
+    result = runner.invoke(main, ["update"])
 
     assert result.exit_code == 0
     assert calls[0] == ["pipx", "upgrade", "ai-orchestrator"]

@@ -250,7 +250,7 @@ def cmd_doctor(ctx: click.Context) -> None:
     ctx.obj["ui"].print_doctor_report(report)
 
 
-@main.command("self-update")
+@main.command("update")
 @click.pass_context
 def cmd_self_update(ctx: click.Context) -> None:
     """Pull the latest source and reinstall."""

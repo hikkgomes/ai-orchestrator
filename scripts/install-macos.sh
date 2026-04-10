@@ -36,7 +36,7 @@ else
   fi
 fi
 
-# Write install metadata so `orch self-update` knows where to pull from.
+# Write install metadata so `orch update` knows where to pull from.
 INSTALL_META_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator"
 mkdir -p "$INSTALL_META_DIR"
 SOURCE_PATH="$(pwd)"

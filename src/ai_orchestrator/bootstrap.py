@@ -294,7 +294,7 @@ def read_install_meta() -> dict:
 
 
 def write_install_meta(source_repo_path: str, install_mode: str) -> None:
-    """Persist install metadata for self-update flows."""
+    """Persist install metadata for CLI update flows."""
     _GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     _INSTALL_META.write_text(
         _json.dumps({"source_repo_path": source_repo_path, "install_mode": install_mode}),
