@@ -1,7 +1,7 @@
 # Skill: fix-planner
 
 > Claude Code skill for the REPLAN loop of ai-orchestrator.
-> Invoked as: `claude -p "<fix-plan prompt>" --output-format json --max-turns 1`
+> Invoked as: `claude -p "<fix-plan prompt>" --output-format json`
 > Prompt template: `docs/prompts/fix-plan.md`
 > Triggered by: adjudication verdict = REPLAN
 

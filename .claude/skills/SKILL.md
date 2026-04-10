@@ -11,7 +11,7 @@ ai-orchestrator run.
 
 Each skill is invoked via:
 ```
-claude -p "<rendered prompt>" --output-format json --max-turns 1
+claude -p "<rendered prompt>" --output-format json
 ```
 
 All invocations are fresh subprocesses. No transcript carry-over. The orchestrator
@@ -61,7 +61,7 @@ Application-level validation enforces this.
 ## Notes
 
 - Each skill receives the full JSON schema for its expected output embedded in the prompt.
-- `--output-format json` and `--max-turns 1` are always passed.
+- `--output-format json` is always passed.
 - If the CLI returns non-JSON or schema-invalid JSON, the orchestrator retries up
   to `max_retries` times with an explicit error message in the retry prompt.
 - The adjudicator (ADJUDICATING phase) also uses Claude by default. Its instruction

@@ -1,7 +1,7 @@
 # Skill: orchestration-reviewer
 
 > Claude Code skill for the REVIEWING phase of ai-orchestrator.
-> Invoked as: `claude -p "<review prompt>" --output-format json --max-turns 1`
+> Invoked as: `claude -p "<review prompt>" --output-format json`
 > Prompt template: `docs/prompts/review.md`
 
 ---
@@ -50,7 +50,7 @@ A JSON object conforming to `schemas/review.schema.json`:
 
 **Output format:**
 - Respond with ONLY valid JSON. No markdown fences. No prose. No commentary.
-- `--output-format json` and `--max-turns 1` are always passed.
+- `--output-format json` is always passed.
 
 **Verdict rules (enforced by schema):**
 - If `verdict = "reject"`: `blocks_merge` MUST be `true`.

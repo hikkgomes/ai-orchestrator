@@ -1,7 +1,7 @@
 # Skill: orchestration-architect
 
 > Claude Code skill for the PLANNING phase of ai-orchestrator.
-> Invoked as: `claude -p "<planning prompt>" --output-format json --max-turns 1`
+> Invoked as: `claude -p "<planning prompt>" --output-format json`
 > Prompt template: `docs/prompts/plan.md` (first plan) or `docs/prompts/fix-plan.md` (replan)
 
 ---
@@ -45,8 +45,7 @@ A JSON object conforming to `schemas/plan.schema.json`:
 
 **Output format:**
 - Respond with ONLY valid JSON. No markdown fences. No prose. No commentary.
-- `--output-format json` and `--max-turns 1` are always passed. Do not attempt
-  multi-turn dialogue.
+- `--output-format json` is always passed.
 
 **Plan structure:**
 - `step_number` values must be sequential starting from 1 with no gaps.
