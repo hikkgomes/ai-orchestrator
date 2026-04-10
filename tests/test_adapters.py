@@ -218,6 +218,68 @@ class TestClaudeAdapter:
         parsed = ClaudeAdapter._lenient_parse("```json\n{\"a\": 1}\n```")
         assert parsed == {"a": 1}
 
+    def test_extract_payload_handles_fenced_result(self):
+        envelope = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": (
+                "```json\n"
+                '{"actionable": true, "normalized_task": "Do something", '
+                '"assumptions": [], "complexity_tier": "simple"}\n'
+                "```"
+            ),
+        }
+
+        with pytest.warns(RuntimeWarning, match="envelope result field"):
+            extracted = ClaudeAdapter._extract_payload(envelope)
+
+        assert extracted["normalized_task"] == "Do something"
+        assert "type" not in extracted
+
+    def test_extract_payload_handles_fenced_result_with_leading_whitespace(self):
+        envelope = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": (
+                "\n\n```json\n"
+                '{"actionable": true, "normalized_task": "Do something", '
+                '"assumptions": [], "complexity_tier": "simple"}\n'
+                "```"
+            ),
+        }
+
+        with pytest.warns(RuntimeWarning, match="envelope result field"):
+            extracted = ClaudeAdapter._extract_payload(envelope)
+
+        assert extracted["normalized_task"] == "Do something"
+        assert "type" not in extracted
+
+    def test_parse_stdout_handles_fenced_result_in_envelope(self):
+        envelope = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": (
+                "\n\n```json\n"
+                '{'
+                '"actionable": true, '
+                '"normalized_task": "Do something", '
+                '"assumptions": [], '
+                '"complexity_tier": "simple"'
+                '}\n'
+                "```"
+            ),
+        }
+        adapter = ClaudeAdapter.__new__(ClaudeAdapter)
+
+        with pytest.warns(RuntimeWarning, match="envelope result field"):
+            parsed = adapter._parse_stdout(json.dumps(envelope))
+
+        assert parsed["normalized_task"] == "Do something"
+        assert "type" not in parsed
+
     def test_timeout_terminates_process_before_blocking(
         self,
         tmp_path,

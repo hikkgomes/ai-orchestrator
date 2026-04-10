@@ -217,7 +217,13 @@ class ClaudeAdapter(BaseAdapter):
                 try:
                     nested = json.loads(result)
                 except json.JSONDecodeError:
-                    pass
+                    lenient = ClaudeAdapter._lenient_parse(result)
+                    if lenient is not None:
+                        warnings.warn(
+                            "Claude adapter used lenient JSON parsing on envelope result field",
+                            RuntimeWarning,
+                        )
+                        return lenient
                 else:
                     if isinstance(nested, dict):
                         return nested
