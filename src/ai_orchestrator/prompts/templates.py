@@ -154,7 +154,7 @@ def build_execution_prompt_codex(
         f"{result_file_path}\n\n"
         "The JSON must conform to this schema:\n"
         f"{schema_json}\n\n"
-        "Do not print the JSON to stdout. Write it to the file path above.\n"
+        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -192,7 +192,7 @@ def build_feasibility_prompt_codex(
         f"{result_file_path}\n\n"
         "The JSON must conform to this schema:\n"
         f"{schema_json}\n\n"
-        "Do NOT print the JSON to stdout. Write it to the file path above only.\n"
+        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
         "Do NOT modify any source files. Do NOT commit anything.\n"
     )
 

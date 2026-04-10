@@ -353,10 +353,12 @@ class TestCodexAdapter:
         assert result["files_changed"] == [
             {"path": "README.md", "action": "modified", "summary": "Modified README.md"}
         ]
-        assert commands[0][:5] == [
+        assert commands[0][:7] == [
             "codex",
             "exec",
             "--skip-git-repo-check",
+            "--sandbox",
+            "workspace-write",
             "--config",
             'model_reasoning_effort="medium"',
         ]

@@ -42,7 +42,7 @@ After checking, write your result JSON to:
 The JSON must conform to this schema:
 {feasibility_schema}
 
-Do NOT print the JSON to stdout. Write it to the file path above only.
+If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
 Do NOT modify any source files. Do NOT commit anything.
 ```
 

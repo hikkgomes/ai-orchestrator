@@ -1,6 +1,7 @@
 """Codex CLI adapter.
 
-Invokes ``codex exec "<prompt>"`` as a subprocess per AGENTS.md.
+Invokes ``codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"``
+as a subprocess per AGENTS.md.
 
 Three-tier output strategy:
 1. **Result file (primary)**: prompt instructs Codex to write a JSON result to
@@ -227,7 +228,13 @@ class CodexAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
     ) -> tuple[list[str], str | None, str | None]:
-        command = [self.CLI_NAME, "exec", "--skip-git-repo-check"]
+        command = [
+            self.CLI_NAME,
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "workspace-write",
+        ]
         model = model_override or getattr(self._config.routing.codex, "model", "") or None
         reasoning_effort = (
             reasoning_effort_override

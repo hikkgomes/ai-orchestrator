@@ -71,7 +71,8 @@ and let the engine decide what to do next.
   `test_commands` but do not run them.
 - Do not commit changes. The orchestrator commits after reading the result file.
 - Do not write to `.ai-orchestrator/` except the result file path specified.
-- Do not print the result JSON to stdout when using Codex. Write it to the file.
+- Prefer writing the result JSON to the specified result file path. If you
+  cannot write the file, respond with ONLY the raw JSON on stdout.
 
 ---
 
@@ -103,7 +104,7 @@ FILES YOU MAY MODIFY:
 After making all changes, write your result JSON to EXACTLY this path:
 {result_file_path}
 
-Do NOT print the JSON to stdout. Write it to the file path above only.
+If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
 
 The JSON must conform to this schema:
 {step_result_schema}

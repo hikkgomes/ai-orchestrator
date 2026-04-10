@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
+    build_execution_prompt_codex,
     build_feasibility_prompt_claude,
     build_feasibility_prompt_codex,
     build_review_prompt,
@@ -113,7 +114,22 @@ def test_build_feasibility_prompt_codex_renders_result_path():
 
     assert "After checking, write your result JSON to:" in prompt
     assert "/tmp/feasibility.json" in prompt
+    assert "If you cannot write the file, respond with ONLY the raw JSON." in prompt
     assert "Do NOT modify any source files." in prompt
+
+
+def test_build_execution_prompt_codex_allows_stdout_fallback():
+    prompt = build_execution_prompt_codex(
+        step_description="Update endpoint",
+        plan_context="Keep the change small",
+        file_contents="# src/api.py\npass\n",
+        result_file_path="/tmp/step.json",
+        schema_json='{"title":"StepResult"}',
+    )
+
+    assert "After making changes, write a JSON result file to the path:" in prompt
+    assert "/tmp/step.json" in prompt
+    assert "If you cannot write the file, respond with ONLY the raw JSON." in prompt
 
 
 def test_build_feasibility_prompt_claude_renders_static_analysis_rules():

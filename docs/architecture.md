@@ -135,7 +135,7 @@ Output: JSON parsed from stdout (strict, then lenient fallback)
 #### CodexAdapter
 
 ```
-Invocation: codex exec "<prompt>"
+Invocation: codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"
 Working dir: worktree path
 Timeout: global watchdog timeout
 Output: files_changed from git diff; metadata from result file or stdout (best-effort)

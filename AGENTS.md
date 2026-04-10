@@ -108,7 +108,7 @@ If configured in `aio.toml` (`routing.claude.reasoning_effort`), the adapter att
 ### Invocation
 
 ```bash
-codex exec --skip-git-repo-check "<prompt>"
+codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"
 ```
 
 ### Flags
@@ -117,6 +117,7 @@ codex exec --skip-git-repo-check "<prompt>"
 |---|---|---|
 | `exec "<prompt>"` | Execute a task | Yes |
 | `--skip-git-repo-check` | Allow orchestrator-managed worktrees and other trusted non-standard git layouts | Yes |
+| `--sandbox workspace-write` | Allow Codex to write result artifacts and modify files inside the worktree without full system access | Yes |
 
 ### Output strategy (three-tier fallback)
 
@@ -308,7 +309,7 @@ After making changes, write a JSON result file to the path:
 The JSON must conform to this schema:
 {step_result.schema.json contents}
 
-Do not print the JSON to stdout. Write it to the file path above.
+If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
 ```
 
 ### Execution prompt (Claude)
