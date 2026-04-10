@@ -228,7 +228,7 @@ class CodexAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
     ) -> tuple[list[str], str | None, str | None]:
-        command = [self.CLI_NAME, "exec"]
+        command = [self.CLI_NAME, "exec", "--skip-git-repo-check"]
         model = model_override or getattr(self._config.routing.codex, "model", "") or None
         reasoning_effort = (
             reasoning_effort_override

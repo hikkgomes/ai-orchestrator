@@ -92,10 +92,21 @@ class OrchestratorUI:
             progress.add_task(description, total=None)
             yield
 
-    def print_plan(self, plan: Plan | dict[str, Any]) -> None:
-        """Render a plan summary table."""
+    def print_plan(
+        self,
+        plan: Plan | dict[str, Any],
+        *,
+        run_id: str | None = None,
+        detailed: bool = False,
+    ) -> None:
+        """Render a plan summary table or full detail view."""
         payload = self._coerce_plan(plan)
-        self.console.print(self._render_plan(payload))
+        renderable = (
+            self.render_plan_detail(payload, run_id=run_id)
+            if detailed
+            else self._render_plan(payload, run_id=run_id)
+        )
+        self.console.print(renderable)
 
     def print_scoping_result(self, result: dict[str, Any]) -> None:
         """Render the scoping output."""
@@ -338,7 +349,53 @@ class OrchestratorUI:
     def info(self, message: str) -> None:
         self.stderr_console.print(Text(message, style="dim"))
 
-    def _render_plan(self, plan: Plan) -> RenderableType:
+    def render_plan_detail(
+        self,
+        plan: Plan | dict[str, Any],
+        *,
+        run_id: str | None = None,
+    ) -> RenderableType:
+        """Render the full plan without truncation."""
+        payload = self._coerce_plan(plan)
+        sections: list[RenderableType] = [
+            Text(payload.task, style="bold"),
+            Panel(
+                Text(payload.reasoning, overflow="fold"),
+                title="Reasoning",
+                border_style="dim",
+            ),
+        ]
+
+        for step in payload.steps:
+            detail = Table.grid(expand=True, padding=(0, 1))
+            detail.add_column(style="bold cyan", width=12)
+            detail.add_column(ratio=1)
+            detail.add_row("Description", step.description)
+            detail.add_row("Complexity", step.estimated_complexity.value)
+            detail.add_row("Depends", ", ".join(str(item) for item in step.depends_on) or "-")
+            detail.add_row("Read", "\n".join(step.files_to_read) or "-")
+            detail.add_row("Modify", "\n".join(step.files_to_modify) or "-")
+            sections.append(
+                Panel(
+                    detail,
+                    title=f"Step {step.step_number}",
+                    border_style="cyan",
+                )
+            )
+
+        if run_id:
+            short_id = run_id[:8]
+            sections.append(
+                Text(
+                    f"Approve with `orch approve {short_id} plan` or reject with "
+                    f"`orch reject {short_id} plan --reason ...`",
+                    style="dim",
+                )
+            )
+
+        return Panel(Group(*sections), title="Implementation Plan", border_style="cyan")
+
+    def _render_plan(self, plan: Plan, *, run_id: str | None = None) -> RenderableType:
         table = Table(
             box=box.ROUNDED,
             expand=True,
@@ -359,12 +416,15 @@ class OrchestratorUI:
                 self._truncate(", ".join(step.files_to_modify) or "-", 26),
                 ", ".join(str(item) for item in step.depends_on) or "-",
             )
+        body: list[RenderableType] = [
+            Text(plan.task, style="bold"),
+            Text(self._truncate(plan.reasoning, 120), style="dim"),
+            table,
+        ]
+        if run_id:
+            body.append(Text(f"Run `orch show {run_id[:8]} plan` to view the full plan.", style="dim"))
         return Panel(
-            Group(
-                Text(plan.task, style="bold"),
-                Text(self._truncate(plan.reasoning, 120), style="dim"),
-                table,
-            ),
+            Group(*body),
             title="Implementation Plan",
             border_style="cyan",
         )

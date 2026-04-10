@@ -1,291 +1,251 @@
 # ai-orchestrator
 
-A local orchestrator that coordinates **Claude Code** (`claude -p`) and **Codex** (`codex exec`) as subprocess workers in a single automated workflow. No API keys, no SDK integration -- it runs entirely through the CLIs you already have with your existing subscriptions.
+ai-orchestrator runs Claude Code (`claude -p`) and Codex (`codex exec`) as local subprocess workers to scope, plan, implement, review, and hand off code changes from your terminal.
 
-`orch` is the primary command. `aio` is available as a compatibility alias.
-
-## How it works
-
-You describe a task. The orchestrator drives it through an automated pipeline:
-
-```
-SCOPING ─► PLANNING ─► APPROVAL ─► FEASIBILITY ─► EXECUTING ─► REVIEWING
-               ▲                                                    │
-               └─── replan ◄── ADJUDICATING ◄───────────────────────┘
-                                    │
-                                    ▼ (pass)
-                                   MERGING ─► DONE
-```
-
-1. **Scoping** (Claude) -- classifies task complexity, normalizes the prompt
-2. **Planning** (Claude) -- generates a step-by-step implementation plan
-3. **Plan approval** -- you review and approve or request changes
-4. **Feasibility** (Codex/GPT) -- validates the plan is executable in your repo
-5. **Execution** (Codex/GPT) -- implements each step in an isolated git worktree, or in-place across a workspace
-6. **Review** (Claude Opus) -- reviews the implementation for correctness and security
-7. **Adjudication** (Codex/GPT) -- pushes back on or accepts review findings
-8. **Fix loop** -- if issues found, plans and implements fixes, then re-reviews
-9. **Handoff** -- applies the final diff without committing and prints the suggested git commands
-
-Claude and GPT check each other's work at every stage. Model effort (low/medium/high/max) is automatically selected based on task complexity.
-
-The review phase can also inject non-AI evidence:
-
-- heuristic findings from the bundled AI-gotcha scanner on changed files
-- repo-aware review context from `.ai-review/config.json` when installed
+`orch` is the main command. `aio` is available as a compatibility alias.
 
 ## Requirements
 
 - Python 3.11+
-- Git 2.20+ (with worktree support)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated
+- Git 2.20+
+- Node.js 18+ for installing the vendor CLIs
+- Claude Code installed and authenticated
+- Codex CLI installed and authenticated
 
-## Install
+Official setup references:
+
+- [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/getting-started)
+- [Codex CLI getting started](https://help.openai.com/en/articles/11096431-openai-codex-ci-getting-started)
+- [Codex CLI sign-in with ChatGPT](https://help.openai.com/en/articles/11381614-codex-cli-and-sign-in-withgpt)
+
+## Quick Start
 
 ### New machine setup (macOS)
 
-On a brand new Mac, install the prerequisites in this order:
+Install the base tools first:
 
 ```bash
-# 1. Install Homebrew if needed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 2. Install required tools
-brew install git python@3.11 pipx claude codex
-
-# 3. Enable pipx in your shell
+brew install git python@3.11 pipx node
 pipx ensurepath
 exec zsh -l
-
-# 4. Verify the basics
-git --version
-python3.11 --version
-pipx --version
 ```
 
-Then install and authenticate the two AI CLIs using their normal vendor setup flows, and verify:
+Install and authenticate the vendor CLIs:
 
 ```bash
+npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex
+
 claude login
-codex login
+codex --login
 ```
 
-After that, install ai-orchestrator:
+### Install ai-orchestrator
+
+Choose one install mode. If you just want to use the tool, start with PyPI. If you want `orch update` to pull directly from a local clone of this repo, use Source checkout.
+
+**PyPI**: simplest if you just want to use the tool.
 
 ```bash
-git clone https://github.com/hikkgomes/ai-orchestrator.git
-cd ai-orchestrator
-scripts/install.sh   # Unix wrapper: installs from this checkout, writes update metadata, runs orch doctor
-```
-
-To update the CLI later from any directory:
-
-```bash
-orch update
-```
-
-### From PyPI (recommended)
-
-```bash
-python3.11 -m pip install --user pipx
-pipx ensurepath
-exec zsh -l
 pipx install ai-orchestrator
 orch doctor
 ```
 
-### From source (development)
+**Source checkout**: best if you want the latest repo changes and `orch update` to pull from this clone.
 
 ```bash
 git clone https://github.com/hikkgomes/ai-orchestrator.git
 cd ai-orchestrator
-scripts/install.sh --editable   # Unix wrapper: editable install + writes update metadata + orch doctor
+scripts/install.sh
 ```
 
-### Platform bootstrap scripts
+**Editable**: best if you are developing `ai-orchestrator` itself.
 
 ```bash
-# macOS
-scripts/install-macos.sh
-
-# Linux
-scripts/install-linux.sh
-
-# Windows (experimental)
-pwsh -File scripts/install-windows.ps1
+git clone https://github.com/hikkgomes/ai-orchestrator.git
+cd ai-orchestrator
+scripts/install.sh --editable
 ```
 
-Add `--editable` (or `-Editable` on Windows) for a local dev install. The Unix install
-scripts write install metadata so `orch update` can update and reinstall from anywhere.
+The Unix install scripts run `orch doctor` at the end and write install metadata used by `orch update`.
 
-### Updating
+Source installs on Unix use the platform wrapper:
+
+- macOS: `scripts/install-macos.sh`
+- Linux: `scripts/install-linux.sh`
+- Windows: `pwsh -File scripts/install-windows.ps1`
+
+### Set up a project repo
+
+Installing the CLI makes `orch` available on your machine. You still need to initialize each repository where you want to use it.
 
 ```bash
-# Update the CLI (pull latest source + reinstall) from any directory
+cd /path/to/project
+orch init
+orch doctor
+```
+
+Optional shell integration:
+
+```bash
+orch install-shell
+```
+
+### Update later
+
+Update the CLI itself:
+
+```bash
 orch update
-
-# After updating, refresh workspace configs in each project repo you use
-cd <project>
-orch sync
 ```
 
-## First-time repo setup
-
-Installing the CLI on your machine makes `orch` available in any terminal, including VS Code.
-You still need to initialize each repository or workspace you want to orchestrate.
-
-From the root of the repository or workspace you want to orchestrate:
+Then refresh each project repo you use:
 
 ```bash
-orch init           # writes aio.toml, workflows/default.yaml, .gitignore + .ai-review/ setup
-orch install-shell  # installs shell integration and `aio` alias
-orch doctor         # verifies everything is working
+cd /path/to/project
+orch sync
+orch doctor
 ```
 
-If the repo changes significantly, or after running `orch update`, refresh
-the reviewer context without discarding curated notes or risk paths:
+If you want to refresh scaffolded repo files such as `aio.toml` or `workflows/default.yaml`, run:
 
 ```bash
-orch sync
+orch init --force
 ```
 
-## Usage
+Use `--force` carefully. It rewrites scaffolded files in the current repo.
 
-### Start a run
+## What `update`, `init`, and `sync` mean
+
+- `orch update`: updates the CLI installed on your machine. It uses the current install mode automatically.
+- `orch init`: bootstraps the current repo. It creates or updates `aio.toml`, `workflows/default.yaml`, `.gitignore`, and `.ai-review/`.
+- `orch sync`: refreshes `.ai-review/config.json` and `.ai-review/rules.yaml` in the current repo. It does not rewrite `aio.toml` or `workflows/default.yaml`.
+- `orch install-shell`: installs shell completion and the `aio` alias.
+
+## Daily Use
+
+Start a run:
 
 ```bash
 orch new "Add a health check endpoint to the API"
 ```
 
-This launches the full pipeline. In interactive mode, plan approval pauses inline; final handoff does not require approval.
+`orch new` and `orch run` drive approval gates inline by default. Use `--detach`
+or `--no-interactive` if you want the command to return at the next pause.
 
-### Skip scoping
-
-If you already know exactly what you want:
+Skip scoping if the task is already precise:
 
 ```bash
 orch new "Fix the off-by-one in pagination" --skip-scoping
 ```
 
-### Non-interactive mode
+Common commands:
 
 ```bash
-orch run "Refactor auth middleware"
-```
-
-Non-interactive mode is the default. The run pauses at approval gates. Use `approve`/`reject` commands to drive it:
-
-```bash
-orch approve <run-id> plan
+orch status
+orch status latest
+orch status <run-id> --watch
+orch logs <run-id>
+orch logs <run-id> 3
+orch show latest plan
+orch approve latest plan
+orch approve <run-prefix> plan
 orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
-```
-
-If scoping flags the task as not actionable:
-
-```bash
 orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
+orch resume <run-id>
+orch sync
+orch update
+orch config
+orch clean
+orch clean --all
 ```
 
-### Monitor and manage
+`orch run` is also available and starts a new run like `orch new`.
 
-```bash
-orch status                      # overview of all runs
-orch status <run-id> --watch     # live status for a specific run
-orch logs <run-id>               # view event log
-orch logs <run-id> 3             # view a specific step result
-orch resume <run-id>             # resume a paused or blocked run
-orch sync                        # refresh .ai-review/ config and rules after an update
-orch update                      # pull latest source and reinstall the CLI
-orch config                      # show effective configuration
-orch clean                       # remove completed run artifacts
-orch clean --all                 # remove all run artifacts
+## How It Works
+
+`orch` drives work through this pipeline:
+
+```
+SCOPING -> PLANNING -> APPROVAL -> FEASIBILITY -> EXECUTING -> REVIEWING
+             ^                                                  |
+             |                                                  |
+             +--------------- replan <- ADJUDICATING <----------+
+                                         |
+                                         v
+                                       MERGING -> DONE
 ```
 
-## Using with VS Code
+Phase summary:
 
-ai-orchestrator works from any terminal, including the VS Code integrated terminal.
+1. Scoping: Claude normalizes the task and assigns a complexity tier.
+2. Planning: Claude generates a step-by-step plan.
+3. Plan approval: you approve or reject the plan.
+4. Feasibility: Codex or Claude checks that the plan is executable in your repo.
+5. Execution: Codex or Claude implements each step.
+6. Review: Claude reviews the resulting diff.
+7. Adjudication: Codex or Claude decides whether to pass, rework, or replan.
+8. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
 
-### Setup
+The review phase can also use non-model evidence:
 
-1. Install prerequisites (Python 3.11+, Git, Claude Code CLI, Codex CLI)
-2. Install ai-orchestrator (`pipx install ai-orchestrator`)
-3. Open your project in VS Code
-4. Open the integrated terminal (`Ctrl+`` ` or `Cmd+`` `)
-5. Run `orch init && orch doctor` if this is the first time using the orchestrator in this repo
+- heuristic findings from the bundled reviewer scanner
+- repo-aware context from `.ai-review/config.json`
 
-### Typical workflow in VS Code
+## VS Code
+
+`orch` works fine in the VS Code integrated terminal.
+
+Typical flow:
 
 ```bash
-# Start an orchestrated run
+# Terminal 1
 orch new "Implement user authentication with JWT"
 
-# The orchestrator will:
-#   1. Scope and classify the task
-#   2. Generate a plan and pause for your approval
-#   3. Run feasibility checks
-#   4. Execute the plan in an isolated worktree
-#   5. Review and adjudicate the result
-#   6. Stage the final diff and print commit/push suggestions
-
-# While the run executes, you can open a second terminal to monitor:
+# Terminal 2
 orch status <run-id> --watch
-
-# After handoff, the staged changes land in your working tree.
-# VS Code will detect the file changes automatically.
 ```
 
-### Tips
+If you prefer the older multi-terminal flow where the first command returns at
+approval gates, run `orch new --detach "Implement user authentication with JWT"`.
 
-- Use **split terminals** -- one for running `orch new`, another for `orch status --watch`
-- After handoff completes, VS Code's Source Control panel picks up the changes immediately
-- The `.ai-orchestrator/` directory is gitignored -- it won't clutter your Source Control view
-- You can keep coding in other files while a single-repo run executes; the orchestrator works in an isolated worktree
+When the run finishes, the staged changes land in your working tree and VS Code picks them up normally.
 
-## Workspace mode
+## Workspace Mode
 
 A workspace is a parent directory that is not itself a git repo but contains multiple git repos such as `frontend/` and `backend/`.
 
 - `orch init` auto-detects git subdirectories and writes `[workspace] repos = [...]` into `aio.toml`.
-- Agents run from the workspace root and can work across all configured repos in one run.
+- Workspace runs operate from the workspace root and can touch multiple repos in one run.
 - Workspace runs do not create worktrees; changes are applied in place.
-- At the end of the run, `orch` prints per-repo `git add` / `git commit` / `git push` suggestions instead of committing for you.
+- At the end of the run, `orch` prints per-repo `git add`, `git commit`, and `git push` suggestions instead of committing for you.
 - All workspace repos must be clean before execution starts.
-- Known limitation: workspace retries reset repo changes back to `HEAD`, so rollback is repo-wide rather than step-local.
 
 ## Configuration
 
-Edit `aio.toml` at your repo root. Key settings:
+Repo-local configuration lives in `aio.toml`. Use `orch config` to see the effective merged config.
+
+Minimal example:
 
 ```toml
 [routing]
-planner = "claude"              # which CLI plans (claude or codex)
-worker = "codex"                # which CLI implements
-reviewer = "claude"             # which CLI reviews
-adjudicator = "codex"           # which CLI adjudicates (cross-model by default)
-feasibility_checker = "codex"   # which CLI checks feasibility
-scoper = "claude"               # which CLI scopes tasks
+planner = "claude"
+worker = "codex"
+reviewer = "claude"
+adjudicator = "codex"
+feasibility_checker = "codex"
+scoper = "claude"
 
-[routing.phases.scoping]
-reasoning_effort = "high"       # per-phase effort override
-
-[routing.phases.reviewing]
-reasoning_effort = "high"
+[routing.phases.planning]
+reasoning_effort = "medium"
+max_turns = 5
 
 [scoping]
-enabled = true                  # set to false to skip scoping globally
+enabled = true
 
 [feasibility]
 enabled = true
 timeout = 120
-
-[approval]
-require_plan_approval = true
-# require_merge_approval may still appear in older configs but is no longer used.
-
-# Uncomment for multi-repo workspace mode:
-# [workspace]
-# repos = ["frontend", "backend"]
 
 [orchestrator]
 max_retries = 3
@@ -293,51 +253,60 @@ max_rework_loops = 3
 max_replan_loops = 2
 ```
 
-Complexity-adaptive effort selection is built in. When scoping classifies a task as `simple`, `moderate`, `complex`, or `architectural`, downstream phases automatically use appropriate effort levels. Per-phase overrides in `[routing.phases.*]` take precedence.
+Notes:
 
-## Reviewer setup
+- Complexity-based effort selection is built in.
+- Per-phase overrides in `[routing.phases.*]` win over complexity defaults.
+- `max_turns` is a phase-level override for Claude phases that need more than one turn.
 
-Reviewer heuristics run automatically during the review phase, even if you do
-not configure anything else. `orch review-install` adds repo-aware context that
-makes reviews more targeted. It creates:
+## Repo Files and Runtime Artifacts
 
-- `.ai-review/config.json` for detected stack, commands, architecture, and risk paths
-- `.ai-review/rules.yaml` for the bundled review categories used in the prompt
+`orch init` creates or updates:
 
-Use `orch sync` to refresh the detected fields after updating the CLI. This
-preserves manually curated notes and critical paths. If you only want to update
-the heuristics without pulling new CLI code, run `orch review-analyze` directly.
-Once config exists, `orch review-install` requires `--force` to overwrite it.
+- `aio.toml`
+- `workflows/default.yaml`
+- `.ai-review/config.json`
+- `.ai-review/rules.yaml`
+- `.gitignore` entries for `.ai-orchestrator/`
 
-## Runtime layout
+Runtime artifacts are written under `.ai-orchestrator/` and should stay gitignored:
 
-Artifacts are stored under `.ai-orchestrator/` (gitignored):
-
-```
+```text
 .ai-orchestrator/
-  state/           # run state JSON files
-  plans/           # plan artifacts
-  results/         # step result artifacts
-  reviews/         # review artifacts
-  adjudications/   # adjudication artifacts
-  feasibility/     # feasibility check artifacts
-  logs/            # event logs
-  worktrees/       # ephemeral git worktrees
-  approvals/       # approval decisions
-  feedback/        # rejection feedback
-  executions/      # execution manifests
-  prompts/         # rendered prompts (opt-in)
-  metadata.sqlite3 # invocation metadata
+  state/
+  plans/
+  results/
+  reviews/
+  adjudications/
+  feasibility/
+  logs/
+  worktrees/
+  approvals/
+  feedback/
+  executions/
+  prompts/         # only when prompt retention is enabled
+  metadata.sqlite3
 ```
 
-## Doctor checks
+## Reviewer Setup
+
+Reviewer heuristics run automatically during the review phase, even without extra setup. The repo-local reviewer files make those reviews much more specific.
+
+- `.ai-review/config.json` stores detected stack, commands, architecture, and risk paths.
+- `.ai-review/rules.yaml` stores the bundled review categories used by the prompt.
+
+Use `orch sync` when you want to refresh those files while keeping curated notes and critical paths.
+
+If you only want to refresh the reviewer heuristics without running the broader repo setup flow, `orch review-analyze` is still available. `orch review-install --force` overwrites the reviewer config from scratch.
+
+## Doctor Checks
 
 `orch doctor` verifies:
 
-- Python version (3.11+ required)
+- Python version
 - Git availability and version
-- `claude` CLI availability with auth hint
-- `codex` CLI availability with auth hint
+- Claude CLI availability
+- Codex CLI availability
 - Write access to `.ai-orchestrator/`
 - Repo config presence and validity
 
@@ -349,13 +318,13 @@ python3 -m pytest --cov=ai_orchestrator --cov-report=term-missing
 python3 -m ai_orchestrator.cli --help
 ```
 
-## Documentation
+## More Documentation
 
 - [Architecture](docs/architecture.md)
 - [Workflow](docs/workflow.md)
 - [Design decisions](docs/design-decisions.md)
 - [Output contracts](docs/output-contracts.md)
-- [Install](docs/install.md)
+- [Install details](docs/install.md)
 - [Security](docs/security.md)
 
 ## License

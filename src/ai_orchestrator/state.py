@@ -149,3 +149,38 @@ class StateManager:
             if name.startswith("run-"):
                 run_ids.append(name[4:])
         return run_ids
+
+    def resolve_run_id(self, prefix: str | None) -> str:
+        """Resolve *prefix* to a concrete run ID.
+
+        Resolution rules:
+        - ``None``, empty, or ``"latest"`` resolves to the most recently updated run
+        - exact matches return immediately
+        - unique prefixes are expanded to the full run ID
+
+        Raises
+        ------
+        StateError
+            If there are no runs, no matches, or multiple matching prefixes.
+        """
+        normalized = (prefix or "").strip()
+        run_ids = self.list_runs()
+        if not run_ids:
+            raise StateError("No runs found.")
+
+        if not normalized or normalized == "latest":
+            latest_path = max(self._state_dir.glob("run-*.json"), key=lambda path: path.stat().st_mtime_ns)
+            return latest_path.stem[4:]
+
+        if normalized in run_ids:
+            return normalized
+
+        matches = [run_id for run_id in run_ids if run_id.startswith(normalized)]
+        if not matches:
+            raise StateError(f"No run matches '{normalized}'.")
+        if len(matches) == 1:
+            return matches[0]
+
+        preview = ", ".join(match[:8] for match in matches[:5])
+        suffix = "..." if len(matches) > 5 else ""
+        raise StateError(f"Run ID prefix '{normalized}' is ambiguous: {preview}{suffix}")

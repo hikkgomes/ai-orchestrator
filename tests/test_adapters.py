@@ -394,7 +394,13 @@ class TestCodexAdapter:
         assert result["files_changed"] == [
             {"path": "README.md", "action": "modified", "summary": "Modified README.md"}
         ]
-        assert commands[0][:4] == ["codex", "exec", "--config", 'model_reasoning_effort="medium"']
+        assert commands[0][:5] == [
+            "codex",
+            "exec",
+            "--skip-git-repo-check",
+            "--config",
+            'model_reasoning_effort="medium"',
+        ]
 
     def test_invoke_falls_back_to_stdout_jsonl(
         self,

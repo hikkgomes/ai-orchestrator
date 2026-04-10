@@ -6,6 +6,7 @@ Phase 2 from build-plan.md: state read/write/atomicity.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 import pytest
@@ -54,6 +55,36 @@ class TestStateManager:
         mgr.save(RunState(run_id="one", task="1"))
         mgr.save(RunState(run_id="two", task="2"))
         assert mgr.list_runs() == ["one", "two"]
+
+    def test_resolve_run_id_supports_unique_prefix(self, artifact_root):
+        mgr = StateManager(artifact_root)
+        mgr.save(RunState(run_id="abc12345-0000-0000-0000-000000000000", task="first"))
+        mgr.save(RunState(run_id="def67890-0000-0000-0000-000000000000", task="second"))
+
+        assert mgr.resolve_run_id("abc12345") == "abc12345-0000-0000-0000-000000000000"
+
+    def test_resolve_run_id_returns_latest_by_state_file_mtime(self, artifact_root):
+        mgr = StateManager(artifact_root)
+        older = RunState(run_id="older111-0000-0000-0000-000000000000", task="older")
+        newer = RunState(run_id="newer222-0000-0000-0000-000000000000", task="newer")
+        mgr.save(older)
+        mgr.save(newer)
+
+        older_path = artifact_root / "state" / f"run-{older.run_id}.json"
+        newer_path = artifact_root / "state" / f"run-{newer.run_id}.json"
+        os.utime(older_path, (1, 1))
+        os.utime(newer_path, (2, 2))
+
+        assert mgr.resolve_run_id("latest") == newer.run_id
+        assert mgr.resolve_run_id("") == newer.run_id
+
+    def test_resolve_run_id_rejects_ambiguous_prefix(self, artifact_root):
+        mgr = StateManager(artifact_root)
+        mgr.save(RunState(run_id="abcd1111-0000-0000-0000-000000000000", task="one"))
+        mgr.save(RunState(run_id="abcd2222-0000-0000-0000-000000000000", task="two"))
+
+        with pytest.raises(StateError, match="ambiguous"):
+            mgr.resolve_run_id("abcd")
 
     def test_save_persists_run_metadata_in_sqlite(self, artifact_root):
         mgr = StateManager(artifact_root)

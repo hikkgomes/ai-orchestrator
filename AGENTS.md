@@ -109,7 +109,7 @@ If configured in `aio.toml` (`routing.claude.reasoning_effort`), the adapter att
 ### Invocation
 
 ```bash
-codex exec "<prompt>"
+codex exec --skip-git-repo-check "<prompt>"
 ```
 
 ### Flags
@@ -117,6 +117,7 @@ codex exec "<prompt>"
 | Flag | Purpose | Always used |
 |---|---|---|
 | `exec "<prompt>"` | Execute a task | Yes |
+| `--skip-git-repo-check` | Allow orchestrator-managed worktrees and other trusted non-standard git layouts | Yes |
 
 ### Output strategy (three-tier fallback)
 

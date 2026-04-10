@@ -19,7 +19,7 @@ from .doctor import run_doctor
 from .engine import Engine, EngineError
 from .models import RunState
 from .reviewer.installer import analyze_repo, install_reviewer
-from .state import StateManager
+from .state import StateError, StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
 from .worktree import WorktreeManager
 
@@ -50,6 +50,14 @@ def _resolve_workspace_repos(repo_root: Path, config: Config) -> list[str]:
         for path in sorted(repo_root.iterdir())
         if path.is_dir() and (path / ".git").exists()
     ]
+
+
+def _resolve_run_id_arg(ctx: click.Context, run_id: str) -> str:
+    state_mgr = StateManager(ctx.obj["artifact_root"])
+    try:
+        return state_mgr.resolve_run_id(run_id)
+    except StateError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -125,21 +133,33 @@ def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping
 
 @main.command("new")
 @click.argument("task")
-@click.option("--interactive", is_flag=True, default=False)
+@click.option(
+    "--interactive/--no-interactive",
+    default=True,
+    help="Drive approval gates inline instead of returning control at the first pause.",
+)
+@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
 @click.pass_context
-def cmd_new(ctx: click.Context, task: str, interactive: bool, skip_scoping: bool) -> None:
+def cmd_new(ctx: click.Context, task: str, interactive: bool, detach: bool, skip_scoping: bool) -> None:
     """Start a new orchestrated run for TASK."""
+    interactive = interactive and not detach
     _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
 
 
 @main.command("run")
 @click.argument("task")
-@click.option("--interactive", is_flag=True, default=False)
+@click.option(
+    "--interactive/--no-interactive",
+    default=True,
+    help="Drive approval gates inline instead of returning control at the first pause.",
+)
+@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
 @click.pass_context
-def cmd_run(ctx: click.Context, task: str, interactive: bool, skip_scoping: bool) -> None:
+def cmd_run(ctx: click.Context, task: str, interactive: bool, detach: bool, skip_scoping: bool) -> None:
     """Start a new orchestrated run for TASK."""
+    interactive = interactive and not detach
     _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
 
 
@@ -149,6 +169,7 @@ def cmd_run(ctx: click.Context, task: str, interactive: bool, skip_scoping: bool
 def cmd_resume(ctx: click.Context, run_id: str) -> None:
     """Resume a paused or crashed run."""
     engine = _build_engine(ctx)
+    run_id = _resolve_run_id_arg(ctx, run_id)
     try:
         state = engine.resume(run_id)
     except EngineError as exc:
@@ -164,6 +185,7 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None:
     """Approve a pending gate."""
     engine = _build_engine(ctx)
+    run_id = _resolve_run_id_arg(ctx, run_id)
     try:
         state = engine.approve(run_id, gate, force=force)
     except EngineError as exc:
@@ -179,6 +201,7 @@ def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None
 def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str) -> None:
     """Reject a pending gate with feedback."""
     engine = _build_engine(ctx)
+    run_id = _resolve_run_id_arg(ctx, run_id)
     try:
         state = engine.reject(run_id, gate, reason)
     except EngineError as exc:
@@ -201,6 +224,8 @@ def cmd_status(ctx: click.Context, run_id: str | None, watch: bool, refresh_inte
         ui.console.print(ui.render_runs_overview(states))
         return
 
+    run_id = _resolve_run_id_arg(ctx, run_id)
+
     if watch:
         ui.watch(
             lambda: _render_status(ctx, run_id),
@@ -222,6 +247,7 @@ def cmd_logs(ctx: click.Context, run_id: str, step: int | None, tail: int) -> No
     """View run event logs or a step-result artifact."""
     artifact_root = ctx.obj["artifact_root"]
     ui = ctx.obj["ui"]
+    run_id = _resolve_run_id_arg(ctx, run_id)
     if step is None:
         path = artifact_root / "logs" / f"run-{run_id}.log"
     else:
@@ -236,6 +262,29 @@ def cmd_logs(ctx: click.Context, run_id: str, step: int | None, tail: int) -> No
 
 
 main.add_command(cmd_logs, "log")
+
+
+@main.command("show")
+@click.argument("run_id")
+@click.argument("artifact", type=click.Choice(["plan"]))
+@click.pass_context
+def cmd_show(ctx: click.Context, run_id: str, artifact: str) -> None:
+    """Show a full artifact for a run."""
+    resolved_run_id = _resolve_run_id_arg(ctx, run_id)
+    state = StateManager(ctx.obj["artifact_root"]).load(resolved_run_id)
+    store = ArtifactStore(ctx.obj["artifact_root"])
+
+    if artifact == "plan":
+        if not state.plan_id:
+            raise click.ClickException(f"Run {resolved_run_id} does not have a saved plan yet.")
+        ctx.obj["ui"].print_plan(
+            store.read_json(state.plan_id),
+            run_id=resolved_run_id,
+            detailed=True,
+        )
+        return
+
+    raise click.ClickException(f"Unsupported artifact: {artifact}")
 
 
 @main.command("doctor")
@@ -406,7 +455,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 )
         elif gate == "plan" and state.plan_id:
             plan = ArtifactStore(ctx.obj["artifact_root"]).read_json(state.plan_id)
-            ui.print_plan(plan)
+            ui.print_plan(plan, run_id=state.run_id, detailed=True)
         if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
             state = engine.approve(run_id, gate)
         else:
@@ -437,7 +486,7 @@ def _render_run_snapshot(ctx: click.Context, run_id: str, *, state=None) -> None
             }
         )
     if state.current_phase == "APPROVAL_PLAN" and state.plan_id:
-        ctx.obj["ui"].print_plan(store.read_json(state.plan_id))
+        ctx.obj["ui"].print_plan(store.read_json(state.plan_id), run_id=state.run_id)
     if state.current_phase == "FEASIBILITY" and state.feasibility_id:
         ctx.obj["ui"].print_feasibility_result(store.read_json(state.feasibility_id))
     ctx.obj["ui"].print_status(

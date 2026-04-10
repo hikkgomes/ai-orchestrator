@@ -7,6 +7,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from ai_orchestrator.cli import main
+from ai_orchestrator.models import RunState
+from ai_orchestrator.state import StateManager
 
 
 def test_root_help_lists_primary_commands():
@@ -22,6 +24,7 @@ def test_root_help_lists_primary_commands():
         "approve",
         "reject",
         "resume",
+        "show",
         "logs",
         "doctor",
         "update",
@@ -43,6 +46,7 @@ def test_command_help_smoke():
         "approve",
         "reject",
         "status",
+        "show",
         "logs",
         "doctor",
         "update",
@@ -112,6 +116,86 @@ def test_run_help_lists_skip_scoping_option():
 
     assert result.exit_code == 0
     assert "--skip-scoping" in result.output
+
+
+def test_new_defaults_to_interactive(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_start_run(ctx, task, interactive, *, skip_scoping):
+        captured["task"] = task
+        captured["interactive"] = interactive
+        captured["skip_scoping"] = skip_scoping
+
+    monkeypatch.setattr("ai_orchestrator.cli._start_run", fake_start_run)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["new", "Ship it"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "task": "Ship it",
+        "interactive": True,
+        "skip_scoping": False,
+    }
+
+
+def test_run_detach_disables_interactive_default(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_start_run(ctx, task, interactive, *, skip_scoping):
+        captured["task"] = task
+        captured["interactive"] = interactive
+        captured["skip_scoping"] = skip_scoping
+
+    monkeypatch.setattr("ai_orchestrator.cli._start_run", fake_start_run)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "Ship it", "--detach"])
+
+    assert result.exit_code == 0
+    assert captured["interactive"] is False
+
+
+def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):
+    repo_root = tmp_path
+    artifact_root = repo_root / ".ai-orchestrator"
+    (artifact_root / "state").mkdir(parents=True)
+    (artifact_root / "plans").mkdir(parents=True)
+    mgr = StateManager(artifact_root)
+    plan_path = artifact_root / "plans" / "plan-12345678.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "plan_id": "plan-1",
+                "task": "Inspect the full plan",
+                "steps": [
+                    {
+                        "step_number": 1,
+                        "description": "Read every file listed in the plan",
+                        "files_to_read": ["src/ai_orchestrator/cli.py", "src/ai_orchestrator/ui.py"],
+                        "files_to_modify": ["src/ai_orchestrator/ui.py"],
+                        "depends_on": [],
+                        "estimated_complexity": "medium",
+                    }
+                ],
+                "reasoning": "The user needs the whole plan, not a truncated preview.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state = RunState(run_id="12345678-0000-0000-0000-000000000000", task="Inspect plan")
+    state.plan_id = "plans/plan-12345678.json"
+    mgr.save(state)
+
+    monkeypatch.chdir(repo_root)
+    runner = CliRunner()
+    result = runner.invoke(main, ["show", "latest", "plan"])
+
+    assert result.exit_code == 0
+    assert "The user needs the whole plan, not a truncated preview." in result.output
+    assert "src/ai_orchestrator/ui.py" in result.output
+    assert "orch approve 12345678 plan" in result.output
 
 
 def test_review_install_and_analyze_commands_manage_config_files():

@@ -39,6 +39,69 @@ def test_print_plan_renders_table():
     assert "Render a status dashboard" in output
 
 
+def test_print_plan_summary_includes_show_hint_when_run_id_is_available():
+    ui, console, _ = _ui()
+
+    ui.print_plan(
+        {
+            "plan_id": "00000000-0000-0000-0000-000000000000",
+            "task": "Ship the terminal UI",
+            "steps": [
+                {
+                    "step_number": 1,
+                    "description": "Render a status dashboard",
+                    "files_to_read": ["src/ai_orchestrator/ui.py"],
+                    "files_to_modify": ["src/ai_orchestrator/ui.py"],
+                    "depends_on": [],
+                    "estimated_complexity": "medium",
+                }
+            ],
+            "reasoning": "Single focused UI change.",
+        },
+        run_id="12345678-0000-0000-0000-000000000000",
+    )
+
+    output = console.export_text()
+    assert "orch show 12345678 plan" in output
+
+
+def test_render_plan_detail_shows_full_reasoning_and_file_lists():
+    ui, console, _ = _ui()
+    reasoning = "Because the approval decision depends on reading the full step context without truncation."
+
+    ui.print_plan(
+        {
+            "plan_id": "00000000-0000-0000-0000-000000000000",
+            "task": "Ship the terminal UI",
+            "steps": [
+                {
+                    "step_number": 1,
+                    "description": "Render a status dashboard with panels and untruncated file lists",
+                    "files_to_read": [
+                        "src/ai_orchestrator/ui.py",
+                        "src/ai_orchestrator/cli.py",
+                    ],
+                    "files_to_modify": [
+                        "src/ai_orchestrator/ui.py",
+                        "src/ai_orchestrator/cli.py",
+                    ],
+                    "depends_on": [],
+                    "estimated_complexity": "medium",
+                }
+            ],
+            "reasoning": reasoning,
+        },
+        run_id="12345678-0000-0000-0000-000000000000",
+        detailed=True,
+    )
+
+    output = console.export_text()
+    assert reasoning in output
+    assert "src/ai_orchestrator/ui.py" in output
+    assert "src/ai_orchestrator/cli.py" in output
+    assert "orch approve 12345678 plan" in output
+
+
 def test_render_status_includes_run_metadata():
     ui, console, _ = _ui()
     state = RunState(run_id="run-123", task="Test the status UI")
