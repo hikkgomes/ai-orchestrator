@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ai_orchestrator.workflow import _parse_scalar
+from ai_orchestrator.workflow import load_workflow_definition
 
 
 def test_parse_scalar_supports_negative_integers():
@@ -9,3 +12,27 @@ def test_parse_scalar_supports_negative_integers():
 
 def test_parse_scalar_supports_simple_floats():
     assert _parse_scalar("0.5") == 0.5
+
+
+def test_load_workflow_definition_parses_phase_max_turns(tmp_path):
+    workflow_dir = tmp_path / "workflows"
+    workflow_dir.mkdir()
+    (workflow_dir / "default.yaml").write_text(
+        "\n".join(
+            [
+                "name: default",
+                "description: test",
+                "phases:",
+                "  planning:",
+                "    cli: claude",
+                "    retries: 3",
+                "    max_turns: 5",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    workflow = load_workflow_definition(tmp_path)
+
+    assert workflow.phase("planning").max_turns == 5

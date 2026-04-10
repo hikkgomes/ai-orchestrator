@@ -65,6 +65,7 @@ class PhaseRoutingOverride:
     cli: str = ""
     reasoning_effort: str = ""
     model: str = ""
+    max_turns: int = 0
 
 
 @dataclass
@@ -331,6 +332,8 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
                         value,
                         {"claude", "codex"},
                     )
+            elif key == "max_turns":
+                _validate_int(f"routing.phases.{phase_name}.max_turns", value, minimum=0)
 
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
@@ -453,7 +456,7 @@ def load_config(repo_root: Path | None = None) -> Config:
         _warn_unknown_keys(
             f"routing.phases.{phase_name}",
             phase_mapping,
-            {"cli", "reasoning_effort", "model"},
+            {"cli", "reasoning_effort", "model", "max_turns"},
         )
         phase_overrides[phase_name] = _apply_section(
             PhaseRoutingOverride,

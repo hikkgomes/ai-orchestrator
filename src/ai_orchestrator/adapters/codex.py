@@ -61,6 +61,7 @@ class CodexAdapter(BaseAdapter):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
+        max_turns_override: int | None = None,
     ) -> dict[str, Any]:
         """Invoke ``codex exec`` and return a validated output dict.
 

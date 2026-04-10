@@ -98,6 +98,7 @@ phases:
     cli: claude
     approval_gate: plan
     retries: 3
+    max_turns: 5
 
   feasibility:
     cli: codex
