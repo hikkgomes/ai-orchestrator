@@ -17,7 +17,7 @@ class TestLoadConfig:
         """load_config returns default values when no aio.toml exists."""
         cfg = load_config(repo_root=tmp_path)
         assert cfg.orchestrator.max_retries == 3
-        assert cfg.orchestrator.scoping_timeout == 60
+        assert cfg.orchestrator.watchdog_timeout == 3600
         assert cfg.routing.planner == "claude"
         assert cfg.routing.adjudicator == "codex"
         assert cfg.routing.feasibility_checker == "codex"
@@ -57,7 +57,6 @@ class TestLoadConfig:
                     "enabled = false",
                     "[feasibility]",
                     "enabled = true",
-                    "timeout = 45",
                     "[complexity_routing.simple]",
                     'reviewing = "max"',
                 ]
@@ -71,7 +70,7 @@ class TestLoadConfig:
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
         assert cfg.routing.phases["executing"].max_turns == 7
         assert cfg.scoping.enabled is False
-        assert cfg.feasibility.timeout == 45
+        assert cfg.feasibility.enabled is True
         assert cfg.complexity_routing.simple["reviewing"] == "max"
 
     def test_global_toml_is_merged_before_repo_overrides(self, tmp_path, monkeypatch):
@@ -112,3 +111,48 @@ class TestLoadConfig:
             cfg = load_config(repo_root=tmp_path)
 
         assert cfg.orchestrator.max_retries == 5
+
+    def test_deprecated_orchestrator_timeouts_warn_and_are_ignored(self, tmp_path):
+        (tmp_path / "aio.toml").write_text(
+            "\n".join(
+                [
+                    "[orchestrator]",
+                    "watchdog_timeout = 900",
+                    "step_timeout = 300",
+                    "scoping_timeout = 60",
+                    "planning_timeout = 120",
+                    "execution_timeout_low = 180",
+                    "execution_timeout_medium = 300",
+                    "execution_timeout_high = 600",
+                    "review_timeout = 180",
+                    "adjudication_timeout = 120",
+                ]
+            )
+        )
+
+        with pytest.warns(
+            DeprecationWarning,
+            match="orchestrator\\.step_timeout|orchestrator\\.adjudication_timeout|watchdog_timeout",
+        ):
+            cfg = load_config(repo_root=tmp_path)
+
+        assert cfg.orchestrator.watchdog_timeout == 900
+
+    def test_deprecated_feasibility_timeout_warns_and_is_ignored(self, tmp_path):
+        (tmp_path / "aio.toml").write_text(
+            "\n".join(
+                [
+                    "[feasibility]",
+                    "enabled = false",
+                    "timeout = 45",
+                ]
+            )
+        )
+
+        with pytest.warns(
+            DeprecationWarning,
+            match="feasibility\\.timeout|watchdog_timeout",
+        ):
+            cfg = load_config(repo_root=tmp_path)
+
+        assert cfg.feasibility.enabled is False

@@ -29,10 +29,6 @@ phases:
     cli: codex
     worktree: true
     retries: 3
-    complexity_timeouts:
-      low: 180
-      medium: 300
-      high: 600
 
   reviewing:
     cli: claude

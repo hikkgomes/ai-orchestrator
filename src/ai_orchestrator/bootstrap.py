@@ -11,14 +11,7 @@ DEFAULT_CONFIG = """[orchestrator]
 max_retries = 3
 max_rework_loops = 3
 max_replan_loops = 2
-step_timeout = 300
-scoping_timeout = 60
-planning_timeout = 120
-execution_timeout_low = 180
-execution_timeout_medium = 300
-execution_timeout_high = 600
-review_timeout = 180
-adjudication_timeout = 120
+watchdog_timeout = 3600
 
 [routing]
 planner = "claude"
@@ -56,7 +49,6 @@ enabled = true
 
 [feasibility]
 enabled = true
-timeout = 120
 
 [approval]
 require_plan_approval = true
@@ -110,10 +102,6 @@ phases:
     cli: codex
     worktree: true
     retries: 3
-    complexity_timeouts:
-      low: 180
-      medium: 300
-      high: 600
 
   reviewing:
     cli: claude

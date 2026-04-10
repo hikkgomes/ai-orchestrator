@@ -206,16 +206,7 @@ Max retries configurable via `orchestrator.max_retries` (default: 3).
 
 ## Timeout Strategy
 
-| Phase | Default timeout | Config key |
-|---|---|---|
-| Scoping | 60s | `orchestrator.scoping_timeout` |
-| Planning | 120s | `orchestrator.planning_timeout` |
-| Feasibility | 120s | `feasibility.timeout` |
-| Execution (low complexity) | 180s | `orchestrator.execution_timeout_low` |
-| Execution (medium complexity) | 300s | `orchestrator.execution_timeout_medium` |
-| Execution (high complexity) | 600s | `orchestrator.execution_timeout_high` |
-| Review | 180s | `orchestrator.review_timeout` |
-| Adjudication | 120s | `orchestrator.adjudication_timeout` |
+All CLI invocations use a single global watchdog timeout from `orchestrator.watchdog_timeout` (default: 3600 seconds). This watchdog exists only as a safety net for genuinely hung subprocesses; normal phase completion is governed by the vendor CLI's own lifecycle controls (`--max-turns` for Claude, task completion for Codex), so long-running but healthy planning or execution work is not cut off by per-phase limits.
 
 **Termination sequence:**
 - macOS/Linux: SIGTERM, wait 10s, SIGKILL if still alive

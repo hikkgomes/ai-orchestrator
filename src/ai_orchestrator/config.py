@@ -38,14 +38,7 @@ class OrchestratorConfig:
     max_retries: int = 3
     max_rework_loops: int = 3
     max_replan_loops: int = 2
-    step_timeout: int = 300
-    scoping_timeout: int = 60
-    planning_timeout: int = 120
-    execution_timeout_low: int = 180
-    execution_timeout_medium: int = 300
-    execution_timeout_high: int = 600
-    review_timeout: int = 180
-    adjudication_timeout: int = 120
+    watchdog_timeout: int = 3600
 
 
 @dataclass
@@ -95,7 +88,6 @@ class ScopingConfig:
 @dataclass
 class FeasibilityConfig:
     enabled: bool = True
-    timeout: int = 120
 
 
 def _default_complexity_phase_map(
@@ -230,6 +222,40 @@ def _warn_unknown_keys(section_name: str, data: dict[str, Any], known: set[str])
         )
 
 
+def _warn_and_strip_deprecated_timeouts(data: dict[str, Any]) -> None:
+    deprecated_keys: list[str] = []
+
+    orchestrator = data.get("orchestrator")
+    if isinstance(orchestrator, dict):
+        for key in (
+            "step_timeout",
+            "scoping_timeout",
+            "planning_timeout",
+            "execution_timeout_low",
+            "execution_timeout_medium",
+            "execution_timeout_high",
+            "review_timeout",
+            "adjudication_timeout",
+        ):
+            if key in orchestrator:
+                deprecated_keys.append(f"orchestrator.{key}")
+                orchestrator.pop(key, None)
+
+    feasibility = data.get("feasibility")
+    if isinstance(feasibility, dict) and "timeout" in feasibility:
+        deprecated_keys.append("feasibility.timeout")
+        feasibility.pop("timeout", None)
+
+    if deprecated_keys:
+        warnings.warn(
+            "Deprecated timeout config keys are ignored: "
+            + ", ".join(deprecated_keys)
+            + ". Use orchestrator.watchdog_timeout instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+
 def _apply_section(section_cls: type, data: dict[str, Any], *, section_name: str) -> Any:
     """Instantiate a dataclass from a dict, warning on unknown keys."""
     known = {f for f in section_cls.__dataclass_fields__}
@@ -291,14 +317,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
         "max_retries",
         "max_rework_loops",
         "max_replan_loops",
-        "step_timeout",
-        "scoping_timeout",
-        "planning_timeout",
-        "execution_timeout_low",
-        "execution_timeout_medium",
-        "execution_timeout_high",
-        "review_timeout",
-        "adjudication_timeout",
+        "watchdog_timeout",
     ):
         if key in orchestrator:
             _validate_int(f"orchestrator.{key}", orchestrator[key], minimum=1)
@@ -342,8 +361,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     feasibility = _expect_mapping("feasibility", data.get("feasibility"))
     if "enabled" in feasibility:
         _validate_bool("feasibility.enabled", feasibility["enabled"])
-    if "timeout" in feasibility:
-        _validate_int("feasibility.timeout", feasibility["timeout"], minimum=1)
 
     complexity_routing = _expect_mapping("complexity_routing", data.get("complexity_routing"))
     for tier_name, tier_data in complexity_routing.items():
@@ -410,6 +427,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 
+    _warn_and_strip_deprecated_timeouts(merged)
     _validate_config_tree(merged)
 
     routing_data = _expect_mapping("routing", merged.get("routing"))

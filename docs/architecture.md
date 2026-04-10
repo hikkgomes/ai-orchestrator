@@ -205,7 +205,7 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 max_retries = 3
 max_rework_loops = 3
 max_replan_loops = 2
-step_timeout = 300
+watchdog_timeout = 3600
 
 [routing]
 planner = "claude"

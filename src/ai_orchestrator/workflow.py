@@ -30,7 +30,6 @@ class WorkflowPhase:
     worktree: bool = False
     retries: int = 0
     max_turns: int = 0
-    complexity_timeouts: dict[str, int] = field(default_factory=dict)
     loop_limits: dict[str, int] = field(default_factory=dict)
     pre_checks: list[str] = field(default_factory=list)
 
@@ -75,7 +74,6 @@ def load_workflow_definition(repo_root: Path) -> WorkflowDefinition:
             worktree=bool(raw_phase.get("worktree", False)),
             retries=int(raw_phase.get("retries", 0)),
             max_turns=int(raw_phase.get("max_turns", 0)),
-            complexity_timeouts=_int_mapping(raw_phase.get("complexity_timeouts", {})),
             loop_limits=_int_mapping(raw_phase.get("loop_limits", {})),
             pre_checks=_string_list(raw_phase.get("pre_checks", [])),
         )

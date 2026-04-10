@@ -305,7 +305,7 @@ class Engine:
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
                     self._repo_root,
-                    self._config.orchestrator.scoping_timeout,
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
@@ -385,7 +385,7 @@ class Engine:
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
                     self._repo_root,
-                    self._config.orchestrator.planning_timeout,
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
@@ -495,7 +495,7 @@ class Engine:
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
                     worktree_dir,
-                    self._config.feasibility.timeout,
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
@@ -593,7 +593,7 @@ class Engine:
                 invoke = lambda current_prompt, step_number=step_number: worker.invoke(
                     current_prompt,
                     worktree_dir,
-                    self._execution_timeout(step["estimated_complexity"]),
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     step_number=step_number,
                     reasoning_effort_override=self._resolve_effort_for_phase(
@@ -615,7 +615,7 @@ class Engine:
                 invoke = lambda current_prompt: worker.invoke(
                     current_prompt,
                     worktree_dir,
-                    self._execution_timeout(step["estimated_complexity"]),
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
@@ -722,7 +722,7 @@ class Engine:
                 invoke=lambda current_prompt: adapter.invoke(
                     current_prompt,
                     self._repo_root,
-                    self._config.orchestrator.review_timeout,
+                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
@@ -848,7 +848,7 @@ class Engine:
                     adapter.invoke(
                         current_prompt,
                         self._repo_root,
-                        self._config.orchestrator.adjudication_timeout,
+                        self._config.orchestrator.watchdog_timeout,
                         schema,
                         reasoning_effort_override=self._resolve_effort_for_phase(
                             state,
@@ -1096,14 +1096,6 @@ class Engine:
 
     def _replan_limit(self) -> int:
         return self._config.orchestrator.max_replan_loops
-
-    def _execution_timeout(self, complexity: str) -> int:
-        timeouts = self._workflow.phase("executing").complexity_timeouts
-        if complexity == "low":
-            return self._config.orchestrator.execution_timeout_low or timeouts.get("low", 180)
-        if complexity == "high":
-            return self._config.orchestrator.execution_timeout_high or timeouts.get("high", 600)
-        return self._config.orchestrator.execution_timeout_medium or timeouts.get("medium", 300)
 
     def _ensure_worktree(self, state: RunState) -> Path:
         if state.is_workspace:

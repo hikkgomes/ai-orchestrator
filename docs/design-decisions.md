@@ -219,8 +219,6 @@ This document records decisions made during design, including responses to the f
 
 **Decision rationale:** This closes the gap between raw operator input and the planner input while giving downstream phases a single routing signal.
 
----
-
 ## DD-19: Add a feasibility phase before execution
 
 **Decision:** Introduce a non-mutating feasibility phase after plan approval and before execution.
@@ -242,3 +240,18 @@ This document records decisions made during design, including responses to the f
 **Decision:** Change the default adjudicator from Claude to Codex.
 
 **Decision rationale:** The default review/adjudication pair is now cross-model, which avoids asking Claude to adjudicate its own review loop by default.
+
+---
+
+## DD-22: Replace per-phase timeouts with a single watchdog
+
+**Decision:** Remove per-phase timeout settings and use one global `orchestrator.watchdog_timeout` safety net for all adapter invocations.
+
+**Context:** Claude Code and Codex already manage their own execution lifecycle. The extra per-phase orchestrator timeouts were redundant and caused false failures, especially on legitimate long-running planning or execution work that exceeded an arbitrary phase budget.
+
+**Alternatives considered:**
+1. Keep per-phase timeouts — brittle, duplicates vendor CLI lifecycle control, caused false `BLOCKED_ON_CLI` outcomes
+2. Remove orchestrator timeouts entirely — avoids false positives but leaves no protection against genuinely hung subprocesses
+3. Use one long watchdog timeout for every phase — preserves a hang safety net without constraining healthy work
+
+**Decision rationale:** Option 3. A single watchdog is the correct boundary for the orchestrator: it protects against stuck processes while letting the underlying CLI decide when a normal task is complete.
