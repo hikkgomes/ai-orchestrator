@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import os
 from pathlib import Path
 
@@ -273,11 +274,40 @@ def _detect_workspace_repos(repo_root: Path) -> list[str]:
     ]
 
 
+def _global_config_dir() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ai-orchestrator"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ai-orchestrator"
+
+
+_GLOBAL_CONFIG_DIR = _global_config_dir()
+_INSTALL_META = _GLOBAL_CONFIG_DIR / "install-meta.json"
+
+
+def read_install_meta() -> dict:
+    """Return install metadata, or {} if absent/corrupt."""
+    try:
+        return _json.loads(_INSTALL_META.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, _json.JSONDecodeError):
+        return {}
+
+
+def write_install_meta(source_repo_path: str, install_mode: str) -> None:
+    """Persist install metadata for self-update flows."""
+    _GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _INSTALL_META.write_text(
+        _json.dumps({"source_repo_path": source_repo_path, "install_mode": install_mode}),
+        encoding="utf-8",
+    )
+
+
 __all__ = [
     "DEFAULT_CONFIG",
     "DEFAULT_WORKFLOW",
     "GITIGNORE_BLOCK",
     "detect_shell",
     "install_shell_integration",
+    "read_install_meta",
     "scaffold_repository",
+    "write_install_meta",
 ]

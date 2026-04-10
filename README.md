@@ -74,16 +74,15 @@ codex login
 After that, install ai-orchestrator:
 
 ```bash
-git clone https://github.com/<org>/ai-orchestrator.git
+git clone https://github.com/hikkgomes/ai-orchestrator.git
 cd ai-orchestrator
-pipx install .
-orch doctor
+scripts/install.sh   # Unix wrapper: installs from this checkout, writes update metadata, runs orch doctor
 ```
 
-If you reinstall after local code changes:
+To update the CLI later from any directory:
 
 ```bash
-pipx install --force .
+orch self-update
 ```
 
 ### From PyPI (recommended)
@@ -99,10 +98,9 @@ orch doctor
 ### From source (development)
 
 ```bash
-git clone https://github.com/<org>/ai-orchestrator.git
+git clone https://github.com/hikkgomes/ai-orchestrator.git
 cd ai-orchestrator
-python3 -m pip install -e ".[dev]"
-orch doctor
+scripts/install.sh --editable   # Unix wrapper: editable install + writes update metadata + orch doctor
 ```
 
 ### Platform bootstrap scripts
@@ -118,7 +116,19 @@ scripts/install-linux.sh
 pwsh -File scripts/install-windows.ps1
 ```
 
-Add `--editable` (or `-Editable` on Windows) for a local dev install.
+Add `--editable` (or `-Editable` on Windows) for a local dev install. The Unix install
+scripts write install metadata so `orch self-update` can update and reinstall from anywhere.
+
+### Updating
+
+```bash
+# Update the CLI (pull latest source + reinstall) from any directory
+orch self-update
+
+# After updating, refresh workspace configs in each project repo you use
+cd <project>
+orch sync
+```
 
 ## First-time repo setup
 
@@ -128,17 +138,16 @@ You still need to initialize each repository or workspace you want to orchestrat
 From the root of the repository or workspace you want to orchestrate:
 
 ```bash
-orch init           # writes aio.toml, workflows/default.yaml, .gitignore entries
+orch init           # writes aio.toml, workflows/default.yaml, .gitignore + .ai-review/ setup
 orch install-shell  # installs shell integration and `aio` alias
-orch review-install # writes .ai-review/config.json and bundled review rules
 orch doctor         # verifies everything is working
 ```
 
-If the repo changes significantly later, refresh the reviewer context without
-discarding curated notes or risk paths:
+If the repo changes significantly, or after running `orch self-update`, refresh
+the reviewer context without discarding curated notes or risk paths:
 
 ```bash
-orch review-analyze
+orch sync
 ```
 
 ## Usage
@@ -186,8 +195,8 @@ orch status <run-id> --watch     # live status for a specific run
 orch logs <run-id>               # view event log
 orch logs <run-id> 3             # view a specific step result
 orch resume <run-id>             # resume a paused or blocked run
-orch review-install              # create repo-local reviewer config and rules
-orch review-analyze              # refresh reviewer config from current repo
+orch sync                        # refresh .ai-review/ config and rules after an update
+orch self-update                 # pull latest source and reinstall the CLI
 orch config                      # show effective configuration
 orch clean                       # remove completed run artifacts
 orch clean --all                 # remove all run artifacts
@@ -203,8 +212,7 @@ ai-orchestrator works from any terminal, including the VS Code integrated termin
 2. Install ai-orchestrator (`pipx install ai-orchestrator`)
 3. Open your project in VS Code
 4. Open the integrated terminal (`Ctrl+`` ` or `Cmd+`` `)
-5. Run `orch init` if this is the first time using the orchestrator in this repo
-6. Run `orch doctor` to verify
+5. Run `orch init && orch doctor` if this is the first time using the orchestrator in this repo
 
 ### Typical workflow in VS Code
 
@@ -296,9 +304,10 @@ makes reviews more targeted. It creates:
 - `.ai-review/config.json` for detected stack, commands, architecture, and risk paths
 - `.ai-review/rules.yaml` for the bundled review categories used in the prompt
 
-Use `orch review-analyze` to refresh the detected fields while preserving manual
-edits such as notes and curated critical paths. Once config exists,
-`orch review-install` requires `--force` to overwrite it.
+Use `orch sync` to refresh the detected fields after updating the CLI. This
+preserves manually curated notes and critical paths. If you only want to update
+the heuristics without pulling new CLI code, run `orch review-analyze` directly.
+Once config exists, `orch review-install` requires `--force` to overwrite it.
 
 ## Runtime layout
 

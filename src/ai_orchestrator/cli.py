@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from rich.console import RenderableType
 
 from . import __version__
 from .artifacts import ArtifactStore
-from .bootstrap import install_shell_integration, scaffold_repository
+from .bootstrap import install_shell_integration, read_install_meta, scaffold_repository
 from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
@@ -76,14 +77,33 @@ def main(ctx: click.Context) -> None:
 
 @main.command("init")
 @click.option("--force", is_flag=True, default=False, help="Overwrite default scaffolding files.")
+@click.option(
+    "--skip-review-setup",
+    is_flag=True,
+    default=False,
+    help="Skip automatic review-install and review-analyze.",
+)
 @click.pass_context
-def cmd_init(ctx: click.Context, force: bool) -> None:
+def cmd_init(ctx: click.Context, force: bool, skip_review_setup: bool) -> None:
     """Scaffold repo config, workflow defaults, and ignore rules."""
     actions = scaffold_repository(ctx.obj["repo_root"], force=force)
     if actions:
         ctx.obj["ui"].print_file_updates(actions)
     else:
         ctx.obj["ui"].info("Repository already has the default orch scaffolding.")
+
+    if skip_review_setup:
+        return
+
+    review_config_path = ctx.obj["repo_root"] / ".ai-review" / "config.json"
+    try:
+        if force or not review_config_path.exists():
+            ctx.invoke(cmd_review_install, force=force)
+        ctx.invoke(cmd_review_analyze)
+    except Exception as exc:  # pragma: no cover - defensive guard around optional setup
+        ctx.obj["ui"].warn(
+            f"Review setup skipped (run `orch sync` or the review subcommands manually): {exc}"
+        )
 
 
 def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping: bool) -> None:
@@ -228,6 +248,54 @@ def cmd_doctor(ctx: click.Context) -> None:
         ctx.obj["config"],
     )
     ctx.obj["ui"].print_doctor_report(report)
+
+
+@main.command("self-update")
+@click.pass_context
+def cmd_self_update(ctx: click.Context) -> None:
+    """Pull the latest source and reinstall."""
+    ui = ctx.obj["ui"]
+    meta = read_install_meta()
+    mode = meta.get("install_mode", "")
+    source = meta.get("source_repo_path", "")
+
+    try:
+        if mode in {"local-pipx", "editable"} and source:
+            ui.info(f"Pulling from {source} ...")
+            subprocess.run(["git", "-C", source, "pull", "--ff-only"], check=True, shell=False)
+            if mode == "local-pipx":
+                ui.info("Reinstalling via pipx ...")
+                subprocess.run(["pipx", "install", "--force", source], check=True, shell=False)
+            else:
+                ui.info("Editable install — source updated, no reinstall needed.")
+        elif mode in {"pypi", "pip-user"} or not source:
+            try:
+                subprocess.run(["pipx", "upgrade", "ai-orchestrator"], check=True, shell=False)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--upgrade", "ai-orchestrator"],
+                    check=True,
+                    shell=False,
+                )
+        else:
+            raise click.ClickException("Cannot determine install source. Re-run the install script.")
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except subprocess.CalledProcessError as exc:
+        command = " ".join(str(part) for part in exc.cmd)
+        raise click.ClickException(f"Command failed: {command}") from exc
+
+    ui.info("Update complete. Run `orch doctor` to verify.")
+
+
+@main.command("sync")
+@click.pass_context
+def cmd_sync(ctx: click.Context) -> None:
+    """Refresh workspace AI configs for the current repository."""
+    ui = ctx.obj["ui"]
+    ui.info("Refreshing reviewer config from repo heuristics and bundled rules ...")
+    ctx.invoke(cmd_review_analyze)
+    ui.info("Workspace sync complete.")
 
 
 @main.command("install-shell")
