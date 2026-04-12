@@ -266,9 +266,9 @@ Notes:
 - `workflows/default.yaml`
 - `.ai-review/config.json`
 - `.ai-review/rules.yaml`
-- `.gitignore` entries for `.ai-orchestrator/`
+- `.gitignore` entries for `.ai-orchestrator/` and `.ai-review/`
 
-Runtime artifacts are written under `.ai-orchestrator/` and should stay gitignored:
+App-owned runtime and review artifacts should stay gitignored:
 
 ```text
 .ai-orchestrator/
@@ -285,6 +285,9 @@ Runtime artifacts are written under `.ai-orchestrator/` and should stay gitignor
   executions/
   prompts/         # only when prompt retention is enabled
   metadata.sqlite3
+.ai-review/
+  config.json
+  rules.yaml
 ```
 
 ## Reviewer Setup

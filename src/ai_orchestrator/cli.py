@@ -13,7 +13,13 @@ from rich.console import RenderableType
 
 from . import __version__
 from .artifacts import ArtifactStore
-from .bootstrap import install_shell_integration, read_install_meta, refresh_workflow, scaffold_repository
+from .bootstrap import (
+    ensure_runtime_gitignore,
+    install_shell_integration,
+    read_install_meta,
+    refresh_workflow,
+    scaffold_repository,
+)
 from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
@@ -25,6 +31,7 @@ from .worktree import WorktreeManager
 
 
 def _build_engine(ctx: click.Context) -> Engine:
+    _ensure_runtime_gitignore(ctx)
     return Engine(
         _require_config(ctx),
         ctx.obj["repo_root"],
@@ -53,11 +60,16 @@ def _resolve_workspace_repos(repo_root: Path, config: Config) -> list[str]:
 
 
 def _resolve_run_id_arg(ctx: click.Context, run_id: str) -> str:
+    _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     try:
         return state_mgr.resolve_run_id(run_id)
     except StateError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _ensure_runtime_gitignore(ctx: click.Context) -> None:
+    ensure_runtime_gitignore(ctx.obj["repo_root"])
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -216,6 +228,7 @@ def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str) -> None:
 @click.pass_context
 def cmd_status(ctx: click.Context, run_id: str | None, watch: bool, refresh_interval: float) -> None:
     """Show run status for the active repository."""
+    _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     ui = ctx.obj["ui"]
 
@@ -366,6 +379,7 @@ def cmd_install_shell(ctx: click.Context, shell: str | None, force: bool) -> Non
 @click.pass_context
 def cmd_review_install(ctx: click.Context, force: bool) -> None:
     """Install repository-local reviewer config and bundled rules."""
+    _ensure_runtime_gitignore(ctx)
     config_path = ctx.obj["repo_root"] / ".ai-review" / "config.json"
     if config_path.exists() and not force:
         raise click.ClickException(
@@ -380,6 +394,7 @@ def cmd_review_install(ctx: click.Context, force: bool) -> None:
 @click.pass_context
 def cmd_review_analyze(ctx: click.Context) -> None:
     """Refresh reviewer config from the current repository structure."""
+    _ensure_runtime_gitignore(ctx)
     result = analyze_repo(ctx.obj["repo_root"])
     _print_review_setup_result(ctx, result)
 
@@ -389,6 +404,7 @@ def cmd_review_analyze(ctx: click.Context) -> None:
 @click.pass_context
 def cmd_clean(ctx: click.Context, clean_all: bool) -> None:
     """Remove completed run artifacts and orphaned worktrees."""
+    _ensure_runtime_gitignore(ctx)
     artifact_root = ctx.obj["artifact_root"]
     state_mgr = StateManager(artifact_root)
     store = ArtifactStore(artifact_root)

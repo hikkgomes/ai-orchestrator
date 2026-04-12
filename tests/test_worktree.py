@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_orchestrator.bootstrap import ensure_runtime_gitignore
 from ai_orchestrator.worktree import WorktreeError, WorktreeManager
 
 
@@ -106,3 +107,36 @@ def test_worktree_manager_reset(tmp_repo, artifact_root):
     assert cached_diff.stdout.strip() == ""
 
     manager.remove(worktree_path, branch_name, force=True)
+
+
+def test_merge_preconditions_allow_generated_gitignore(tmp_repo, artifact_root):
+    manager = WorktreeManager(tmp_repo, artifact_root)
+    base_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    ensure_runtime_gitignore(tmp_repo)
+
+    manager.verify_merge_preconditions("main", base_commit)
+
+
+def test_merge_preconditions_reject_user_gitignore_changes(tmp_repo, artifact_root):
+    manager = WorktreeManager(tmp_repo, artifact_root)
+    (tmp_repo / ".gitignore").write_text("dist/\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=tmp_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Add gitignore"], cwd=tmp_repo, check=True, capture_output=True)
+    base_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (tmp_repo / ".gitignore").write_text("dist/\n.env\n", encoding="utf-8")
+
+    with pytest.raises(WorktreeError, match="dirty"):
+        manager.verify_merge_preconditions("main", base_commit)

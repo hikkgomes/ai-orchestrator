@@ -31,6 +31,9 @@ def test_doctor_reports_expected_checks(monkeypatch, tmp_path):
     report = run_doctor(repo_root, artifact_root, Config())
     checks = {check.name: check for check in report.checks}
 
+    gitignore_text = (repo_root / ".gitignore").read_text(encoding="utf-8")
+    assert ".ai-orchestrator/" in gitignore_text
+    assert ".ai-review/" in gitignore_text
     assert set(checks) == {
         "python",
         "git",

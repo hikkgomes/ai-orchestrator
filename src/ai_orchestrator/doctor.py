@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 
+from .bootstrap import ensure_runtime_gitignore
 from .config import Config, ConfigError, load_config
 
 
@@ -40,6 +41,7 @@ class DoctorReport:
 
 def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = None) -> DoctorReport:
     """Run workflow-scoped environment checks."""
+    ensure_runtime_gitignore(repo_root)
     effective_config = config or Config()
     checks = [
         _check_python(),

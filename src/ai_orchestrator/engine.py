@@ -11,6 +11,7 @@ from .adapters.base import BlockedOnCLI, StepFailure
 from .adapters.claude import ClaudeAdapter
 from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
+from .bootstrap import ensure_runtime_gitignore
 from .config import Config
 from .models import RunState, WorkflowStatus
 from .prompts.templates import (
@@ -132,6 +133,7 @@ class Engine:
         self._config = config
         self._repo_root = repo_root.resolve()
         self._artifact_root = artifact_root
+        ensure_runtime_gitignore(self._repo_root)
         self._state_mgr = StateManager(artifact_root)
         self._artifacts = ArtifactStore(
             artifact_root,

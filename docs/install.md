@@ -74,7 +74,7 @@ orch doctor
 
 - `aio.toml`
 - `workflows/default.yaml`
-- `.gitignore` entries for `.ai-orchestrator/`
+- `.gitignore` entries for `.ai-orchestrator/` and `.ai-review/`
 
 `orch install-shell` installs a small shell integration file and an `aio` alias for `orch`.
 

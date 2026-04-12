@@ -117,18 +117,9 @@ phases:
     # No approval gate — triggered automatically after adjudication passes.
 """
 
-GITIGNORE_BLOCK = """# ai-orchestrator runtime artifacts
-.ai-orchestrator/state/
-.ai-orchestrator/feasibility/
-.ai-orchestrator/worktrees/
-.ai-orchestrator/logs/
-.ai-orchestrator/prompts/
-.ai-orchestrator/results/
-.ai-orchestrator/approvals/
-.ai-orchestrator/feedback/
-.ai-orchestrator/executions/
-.ai-orchestrator/metadata.sqlite3
-"""
+GITIGNORE_MARKER = "# ai-orchestrator runtime artifacts"
+RUNTIME_GITIGNORE_ENTRIES = (".ai-orchestrator/", ".ai-review/")
+GITIGNORE_BLOCK = GITIGNORE_MARKER + "\n" + "\n".join(RUNTIME_GITIGNORE_ENTRIES) + "\n"
 
 
 def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[str, str]]:
@@ -157,16 +148,26 @@ def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[s
         _write_text(workflow_path, DEFAULT_WORKFLOW)
         actions.append(("updated" if workflow_existed else "created", "workflows/default.yaml"))
 
-    gitignore_content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
-    if "# ai-orchestrator runtime artifacts" not in gitignore_content:
-        content = gitignore_content.rstrip()
-        if content:
-            content += "\n\n"
-        content += GITIGNORE_BLOCK.rstrip() + "\n"
-        _write_text(gitignore_path, content)
-        actions.append(("updated" if gitignore_content else "created", ".gitignore"))
+    gitignore_action = ensure_runtime_gitignore(repo_root)
+    if gitignore_action:
+        actions.append((gitignore_action, ".gitignore"))
 
     return actions
+
+
+def ensure_runtime_gitignore(repo_root: Path) -> str | None:
+    """Ensure app-owned runtime artifacts are ignored in *repo_root*.
+
+    Returns ``"created"``, ``"updated"``, or ``None`` when no write was needed.
+    """
+    gitignore_path = repo_root / ".gitignore"
+    existed = gitignore_path.exists()
+    current = gitignore_path.read_text(encoding="utf-8") if existed else ""
+    updated = render_runtime_gitignore(current)
+    if updated == current:
+        return None
+    _write_text(gitignore_path, updated)
+    return "updated" if current else "created"
 
 
 def refresh_workflow(repo_root: Path) -> list[tuple[str, str]]:
@@ -264,6 +265,46 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def render_runtime_gitignore(content: str) -> str:
+    if _has_runtime_ignore(content) and GITIGNORE_MARKER not in content:
+        return content
+
+    block_lines = GITIGNORE_BLOCK.rstrip("\n").splitlines()
+    lines = content.splitlines()
+    marker_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == GITIGNORE_MARKER),
+        None,
+    )
+    if marker_index is not None:
+        end_index = marker_index + 1
+        while end_index < len(lines) and lines[end_index].strip():
+            end_index += 1
+        next_lines = lines[:marker_index] + block_lines + lines[end_index:]
+        return "\n".join(next_lines).rstrip() + "\n"
+
+    trimmed = content.rstrip()
+    if trimmed:
+        trimmed += "\n\n"
+    return trimmed + GITIGNORE_BLOCK
+
+
+def _has_runtime_ignore(content: str) -> bool:
+    ignored_roots: set[str] = set()
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("/"):
+            stripped = stripped[1:]
+        if stripped.endswith("/**"):
+            stripped = stripped[:-3]
+        stripped = stripped.rstrip("/")
+        ignored_roots.add(stripped)
+
+    required_roots = {entry.rstrip("/") for entry in RUNTIME_GITIGNORE_ENTRIES}
+    return required_roots.issubset(ignored_roots)
+
+
 def _detect_workspace_repos(repo_root: Path) -> list[str]:
     if (repo_root / ".git").exists():
         return []
@@ -306,7 +347,9 @@ __all__ = [
     "DEFAULT_WORKFLOW",
     "GITIGNORE_BLOCK",
     "detect_shell",
+    "ensure_runtime_gitignore",
     "install_shell_integration",
+    "render_runtime_gitignore",
     "read_install_meta",
     "refresh_workflow",
     "scaffold_repository",

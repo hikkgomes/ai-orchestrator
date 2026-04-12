@@ -82,8 +82,11 @@ def test_init_scaffolds_repo_files():
         assert "scoping:\n    cli: claude\n    retries: 2" in workflow_text
         assert "reviewing:\n    cli: claude\n    retries: 3" in workflow_text
         assert "max_turns:" not in workflow_text
-        assert ".ai-orchestrator/results/" in Path(".gitignore").read_text(encoding="utf-8")
-        assert ".ai-orchestrator/feasibility/" in Path(".gitignore").read_text(encoding="utf-8")
+        gitignore_text = Path(".gitignore").read_text(encoding="utf-8")
+        assert ".ai-orchestrator/" in gitignore_text
+        assert ".ai-review/" in gitignore_text
+        assert ".ai-orchestrator/results/" not in gitignore_text
+        assert ".ai-orchestrator/feasibility/" not in gitignore_text
 
 
 def test_init_can_skip_review_setup():
@@ -118,6 +121,18 @@ def test_run_help_lists_skip_scoping_option():
 
     assert result.exit_code == 0
     assert "--skip-scoping" in result.output
+
+
+def test_runtime_command_adds_runtime_gitignore_without_init():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(main, ["status"])
+
+        assert result.exit_code == 0
+        gitignore_text = Path(".gitignore").read_text(encoding="utf-8")
+        assert ".ai-orchestrator/" in gitignore_text
+        assert ".ai-review/" in gitignore_text
+        assert Path(".ai-orchestrator/metadata.sqlite3").exists()
 
 
 def test_new_defaults_to_interactive(monkeypatch):
@@ -217,6 +232,7 @@ dependencies = ["fastapi>=0.1"]
         assert install_result.exit_code == 0
         assert Path(".ai-review/config.json").exists()
         assert Path(".ai-review/rules.yaml").exists()
+        assert ".ai-review/" in Path(".gitignore").read_text(encoding="utf-8")
 
         second_install = runner.invoke(main, ["review-install"])
         assert second_install.exit_code != 0
