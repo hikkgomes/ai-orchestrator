@@ -82,8 +82,6 @@ Also: FAILED, PAUSED, BLOCKED_ON_CLI, CONFLICT
 - Read `docs/workflow.md` for phase details and canonical state machine
 - Read `docs/output-contracts.md` for schema contracts
 - Read `docs/design-decisions.md` for rationale behind key choices
-- Read `docs/build-plan.md` for implementation phases
-- Check `docs/unresolved-decisions.md` before making assumptions about undecided areas
 - Validate all schema changes against `docs/output-contracts.md` — they must stay in sync
 
 ## Prompt library

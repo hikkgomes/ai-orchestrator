@@ -1,13 +1,9 @@
 # ai-orchestrator runtime artifacts
-.ai-orchestrator/state/
-.ai-orchestrator/worktrees/
-.ai-orchestrator/logs/
-.ai-orchestrator/prompts/
-.ai-orchestrator/results/
-.ai-orchestrator/approvals/
-.ai-orchestrator/feedback/
-.ai-orchestrator/executions/
-.ai-orchestrator/metadata.sqlite3
+.ai-orchestrator/
+.ai-review/
+
+# Local AI CLI settings
+.claude/settings.local.json
 
 # Python
 __pycache__/

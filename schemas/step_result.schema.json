@@ -42,6 +42,13 @@
         "type": "string"
       },
       "description": "Shell commands to verify this step works correctly."
+    },
+    "workspace_diffs": {
+      "type": "object",
+      "description": "Optional per-repo git diffs captured for workspace-mode runs.",
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "if": {
