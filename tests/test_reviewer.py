@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from ai_orchestrator.reviewer import load_rules, run_review_scan
 from ai_orchestrator.reviewer.detect_architecture import detect_architecture
@@ -96,6 +97,16 @@ dependencies = ["fastapi>=0.1"]
     rules_path = install_result["rules_path"]
     assert config_path.exists()
     assert rules_path.exists()
+    static_paths = install_result["static_paths"]
+    assert static_paths["skill"] == tmp_path / ".ai-review" / "SKILL.md"
+    assert static_paths["report_template"] == (
+        tmp_path / ".ai-review" / "templates" / "review-report.md"
+    )
+    for path in static_paths.values():
+        assert path.exists()
+        assert "local.json" not in path.read_text(encoding="utf-8")
+    for key in ("scan_script", "changed_review_script", "full_review_script"):
+        assert os.access(static_paths[key], os.X_OK)
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["paths"]["critical"].append("manual/critical")
@@ -106,6 +117,7 @@ dependencies = ["fastapi>=0.1"]
     analyzed = analyze_repo(tmp_path)
     updated = analyzed["config"]
 
+    assert analyzed["static_paths"]["skill"].exists()
     assert "manual/critical" in updated["paths"]["critical"]
     assert "manual-auth.py" in updated["risk"]["auth_sensitive"]
     assert "keep me" in updated["notes"]

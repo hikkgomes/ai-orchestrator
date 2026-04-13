@@ -104,6 +104,11 @@ def _bundled_rules_text() -> str:
     return (package / "rules.yaml").read_text(encoding="utf-8")
 
 
+def _bundled_data_text(name: str) -> str:
+    package = importlib.resources.files("ai_orchestrator.reviewer")
+    return (package / "data" / name).read_text(encoding="utf-8")
+
+
 def _detected_config(root: Path) -> dict[str, Any]:
     config = _default_config()
     command_data = detect_commands(root)
@@ -158,6 +163,40 @@ def _write_rules(root: Path) -> Path:
     return path
 
 
+def _write_static_files(root: Path) -> dict[str, Path]:
+    files = {
+        "skill": ("SKILL.md", root / ".ai-review" / "SKILL.md", False),
+        "report_template": (
+            "review-report.md",
+            root / ".ai-review" / "templates" / "review-report.md",
+            False,
+        ),
+        "scan_script": (
+            "scan_ai_gotchas.py",
+            root / ".ai-review" / "scripts" / "scan_ai_gotchas.py",
+            True,
+        ),
+        "changed_review_script": (
+            "review_changed.sh",
+            root / ".ai-review" / "scripts" / "review_changed.sh",
+            True,
+        ),
+        "full_review_script": (
+            "review.sh",
+            root / ".ai-review" / "scripts" / "review.sh",
+            True,
+        ),
+    }
+    written: dict[str, Path] = {}
+    for key, (resource_name, path, executable) in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_bundled_data_text(resource_name), encoding="utf-8")
+        if executable:
+            path.chmod(0o755)
+        written[key] = path
+    return written
+
+
 def _summary(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "stack": config["project"]["stack"],
@@ -179,10 +218,12 @@ def install_reviewer(root: Path) -> dict[str, Any]:
     config = _detected_config(root)
     config_path = _write_config(root, config)
     rules_path = _write_rules(root)
+    static_paths = _write_static_files(root)
     return {
         "action": "installed",
         "config_path": config_path,
         "rules_path": rules_path,
+        "static_paths": static_paths,
         "config": config,
         "summary": _summary(config),
     }
@@ -197,10 +238,12 @@ def analyze_repo(root: Path) -> dict[str, Any]:
     merged = _merge_for_reanalysis(existing, detected)
     config_path = _write_config(root, merged)
     rules_path = _write_rules(root)
+    static_paths = _write_static_files(root)
     return {
         "action": "analyzed",
         "config_path": config_path,
         "rules_path": rules_path,
+        "static_paths": static_paths,
         "config": merged,
         "summary": _summary(merged),
     }
