@@ -163,6 +163,10 @@ class Engine:
         self._adapters = adapters or {}
         self._ui = ui
 
+    @property
+    def feasibility_replan_limit(self) -> int:
+        return self._config.feasibility.max_feasibility_replans
+
     def start(
         self,
         task: str,

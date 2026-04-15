@@ -512,7 +512,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
             continue
         if gate == "feasibility":
-            at_replan_limit = bool(state.error and "replan limit" in state.error.lower())
+            at_replan_limit = state.feasibility_replan_count >= engine.feasibility_replan_limit
             if at_replan_limit:
                 choice = ui.approval_choice(
                     gate,
