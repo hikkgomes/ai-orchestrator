@@ -9,10 +9,10 @@ A local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`code
 ## Key architecture rules
 
 - **No API calls** — all AI interaction is via `claude -p` and `codex exec` subprocesses.
-- **Fresh subprocess per step** — every CLI invocation is a new subprocess. No transcript carry-over. Vendor CLI local state (auth, caches) persists intentionally.
+- **Fresh subprocess per invocation** — every CLI call is a new subprocess. Planning and review may explicitly resume the same Claude session with `--resume` when the workflow requires iterative continuity.
 - **Disk artifacts only** — steps communicate through JSON files in `.ai-orchestrator/`, never through stdout chaining.
 - **Schema + application validation** — every AI output is validated against a JSON schema in `schemas/` and then against application-level invariants before the orchestrator acts on it.
-- **Single worktree per run** — all mutating steps execute sequentially in one ephemeral worktree branch. The main branch is never touched until merge.
+- **Single preserved worktree per run** — all mutating steps execute sequentially in one worktree branch. Fix cycles build on existing changes instead of discarding the worktree.
 - **Resumable state** — orchestrator state is persisted to `.ai-orchestrator/state/run-<uuid>.json` after every phase change.
 - **Fail closed** — unsupported CLI versions, unrecognized output, and unexpected failures cause deterministic errors, not silent degradation.
 
@@ -42,7 +42,7 @@ tests/                  # unit + integration tests
 | `orch run <task>` | Start orchestrated run |
 | `orch resume <run-id>` | Resume paused/crashed run |
 | `orch approve <run-id> <gate>` | Approve a pending gate |
-| `orch reject <run-id> <gate>` | Reject with feedback |
+| `orch reject <run-id> <gate>` | Soft-reject with feedback; use `--full` to terminate where supported |
 | `orch status` | Show run status |
 | `orch log <run-id>` | View logs |
 | `orch review-install` | Install reviewer config and bundled rules |
@@ -57,7 +57,9 @@ tests/                  # unit + integration tests
 
 INIT → SCOPING → PLANNING → APPROVAL_PLAN → FEASIBILITY → EXECUTING → REVIEWING → ADJUDICATING → MERGING → DONE
 
-Also: FAILED, PAUSED, BLOCKED_ON_CLI, CONFLICT
+Also: FAILED, TERMINATED, PAUSED, BLOCKED_ON_CLI, CONFLICT
+
+SCOPING is a Claude/Codex debate that produces `scope.md`. PLANNING and REVIEWING preserve Claude session IDs for refinement and adjudication debate. ADJUDICATING is a debate tree; fixes return to planning as incremental work on top of the existing worktree.
 
 ## Coding standards
 
@@ -96,7 +98,7 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 | `implement.md` | EXECUTING (each step) | `results/step-<n>-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
 | `adjudicate.md` | ADJUDICATING | `adjudications/adj-<uuid>.json` |
-| `fix-plan.md` | PLANNING (replan loop) | `plans/plan-<uuid>.json` (new) |
+| `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<uuid>.json` (new) |
 
 Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired into the current engine:
 
@@ -117,7 +119,7 @@ as a workflow agent:
 |---|---|---|
 | `orchestration-architect/SKILL.md` | Planner / fix-planner | PLANNING |
 | `orchestration-reviewer/SKILL.md` | Reviewer | REVIEWING |
-| `fix-planner/SKILL.md` | Replanner | PLANNING (replan loop) |
+| `fix-planner/SKILL.md` | Replanner | PLANNING (incremental fix loop) |
 
 ## Codex agents
 
@@ -128,4 +130,4 @@ as a workflow agent:
 | `implementer.md` | Step executor | EXECUTING |
 | `adjudicator.md` | Adjudicator | ADJUDICATING |
 | `feasibility.md` | Feasibility checker | FEASIBILITY |
-| `repairer.md` | Rework executor | EXECUTING (rework loop) |
+| `repairer.md` | Fix executor | EXECUTING (incremental fix loop) |

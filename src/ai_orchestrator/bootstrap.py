@@ -9,8 +9,6 @@ from pathlib import Path
 
 DEFAULT_CONFIG = """[orchestrator]
 max_retries = 3
-max_rework_loops = 3
-max_replan_loops = 2
 watchdog_timeout = 3600
 
 [routing]
@@ -33,22 +31,30 @@ reasoning_effort = "medium"
 reasoning_effort = "high"
 
 [routing.phases.planning]
-reasoning_effort = "medium"
-
-[routing.phases.feasibility]
-reasoning_effort = "medium"
+model_simple = "claude-sonnet-4-5-20250514"
+model_moderate = "claude-sonnet-4-5-20250514"
+model_complex = "claude-opus-4-5-20250514"
+model_architectural = "claude-opus-4-5-20250514"
 
 [routing.phases.reviewing]
 reasoning_effort = "high"
 
-[routing.phases.adjudicating]
-reasoning_effort = "medium"
-
 [scoping]
 enabled = true
+max_scoping_rounds = 5
 
 [feasibility]
 enabled = true
+max_feasibility_replans = 2
+
+[debate]
+escalated_claude_model = "claude-opus-4-5-20250514"
+escalated_claude_effort = "max"
+escalated_codex_effort = "xhigh"
+
+[sessions]
+enable_planning_resume = true
+enable_review_resume = true
 
 [approval]
 require_plan_approval = true
@@ -108,9 +114,6 @@ phases:
   adjudicating:
     cli: codex
     retries: 3
-    loop_limits:
-      rework: 3
-      replan: 2
 
   merging:
     # Applies changes as a staged diff via git merge --squash; never commits.

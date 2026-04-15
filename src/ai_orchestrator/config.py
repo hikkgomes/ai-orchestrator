@@ -36,8 +36,6 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for loc
 @dataclass
 class OrchestratorConfig:
     max_retries: int = 3
-    max_rework_loops: int = 3
-    max_replan_loops: int = 2
     watchdog_timeout: int = 3600
 
 
@@ -58,6 +56,10 @@ class PhaseRoutingOverride:
     cli: str = ""
     reasoning_effort: str = ""
     model: str = ""
+    model_simple: str = ""
+    model_moderate: str = ""
+    model_complex: str = ""
+    model_architectural: str = ""
 
 
 @dataclass
@@ -82,11 +84,26 @@ class ApprovalConfig:
 @dataclass
 class ScopingConfig:
     enabled: bool = True
+    max_scoping_rounds: int = 5
 
 
 @dataclass
 class FeasibilityConfig:
     enabled: bool = True
+    max_feasibility_replans: int = 2
+
+
+@dataclass
+class DebateConfig:
+    escalated_claude_model: str = "claude-opus-4-5-20250514"
+    escalated_claude_effort: str = "max"
+    escalated_codex_effort: str = "xhigh"
+
+
+@dataclass
+class SessionConfig:
+    enable_planning_resume: bool = True
+    enable_review_resume: bool = True
 
 
 def _default_complexity_phase_map(
@@ -120,8 +137,8 @@ class ComplexityRoutingConfig:
     moderate: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="high",
-            feasibility="medium",
-            executing="medium",
+            feasibility="high",
+            executing="high",
             reviewing="high",
             adjudicating="medium",
         )
@@ -129,8 +146,8 @@ class ComplexityRoutingConfig:
     complex: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="high",
-            feasibility="high",
-            executing="high",
+            feasibility="xhigh",
+            executing="xhigh",
             reviewing="high",
             adjudicating="high",
         )
@@ -138,10 +155,10 @@ class ComplexityRoutingConfig:
     architectural: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="max",
-            feasibility="max",
+            feasibility="xhigh",
             executing="xhigh",
-            reviewing="max",
-            adjudicating="max",
+            reviewing="high",
+            adjudicating="high",
         )
     )
 
@@ -175,6 +192,8 @@ class Config:
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     scoping: ScopingConfig = field(default_factory=ScopingConfig)
     feasibility: FeasibilityConfig = field(default_factory=FeasibilityConfig)
+    debate: DebateConfig = field(default_factory=DebateConfig)
+    sessions: SessionConfig = field(default_factory=SessionConfig)
     complexity_routing: ComplexityRoutingConfig = field(default_factory=ComplexityRoutingConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
@@ -235,6 +254,8 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
             "execution_timeout_high",
             "review_timeout",
             "adjudication_timeout",
+            "max_rework_loops",
+            "max_replan_loops",
         ):
             if key in orchestrator:
                 deprecated_keys.append(f"orchestrator.{key}")
@@ -258,7 +279,7 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
         warnings.warn(
             "Deprecated config keys are ignored: "
             + ", ".join(deprecated_keys)
-            + ". Use orchestrator.watchdog_timeout for timeout control.",
+            + ". Update the file to the current aio.toml schema.",
             DeprecationWarning,
             stacklevel=3,
         )
@@ -323,8 +344,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     orchestrator = _expect_mapping("orchestrator", data.get("orchestrator"))
     for key in (
         "max_retries",
-        "max_rework_loops",
-        "max_replan_loops",
         "watchdog_timeout",
     ):
         if key in orchestrator:
@@ -349,7 +368,14 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     for phase_name, phase_data in phases.items():
         phase_mapping = _expect_mapping(f"routing.phases.{phase_name}", phase_data)
         for key, value in phase_mapping.items():
-            if key in {"reasoning_effort", "model"}:
+            if key in {
+                "reasoning_effort",
+                "model",
+                "model_simple",
+                "model_moderate",
+                "model_complex",
+                "model_architectural",
+            }:
                 _validate_string(f"routing.phases.{phase_name}.{key}", value)
             elif key == "cli":
                 _validate_string(f"routing.phases.{phase_name}.cli", value)
@@ -363,10 +389,28 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
+    if "max_scoping_rounds" in scoping:
+        _validate_int("scoping.max_scoping_rounds", scoping["max_scoping_rounds"], minimum=1)
 
     feasibility = _expect_mapping("feasibility", data.get("feasibility"))
     if "enabled" in feasibility:
         _validate_bool("feasibility.enabled", feasibility["enabled"])
+    if "max_feasibility_replans" in feasibility:
+        _validate_int(
+            "feasibility.max_feasibility_replans",
+            feasibility["max_feasibility_replans"],
+            minimum=0,
+        )
+
+    debate = _expect_mapping("debate", data.get("debate"))
+    for key in ("escalated_claude_model", "escalated_claude_effort", "escalated_codex_effort"):
+        if key in debate:
+            _validate_string(f"debate.{key}", debate[key])
+
+    sessions = _expect_mapping("sessions", data.get("sessions"))
+    for key in ("enable_planning_resume", "enable_review_resume"):
+        if key in sessions:
+            _validate_bool(f"sessions.{key}", sessions[key])
 
     complexity_routing = _expect_mapping("complexity_routing", data.get("complexity_routing"))
     for tier_name, tier_data in complexity_routing.items():
@@ -445,6 +489,8 @@ def load_config(repo_root: Path | None = None) -> Config:
             "routing",
             "scoping",
             "feasibility",
+            "debate",
+            "sessions",
             "complexity_routing",
             "approval",
             "worktree",
@@ -480,7 +526,15 @@ def load_config(repo_root: Path | None = None) -> Config:
         _warn_unknown_keys(
             f"routing.phases.{phase_name}",
             phase_mapping,
-            {"cli", "reasoning_effort", "model"},
+            {
+                "cli",
+                "reasoning_effort",
+                "model",
+                "model_simple",
+                "model_moderate",
+                "model_complex",
+                "model_architectural",
+            },
         )
         phase_overrides[phase_name] = _apply_section(
             PhaseRoutingOverride,
@@ -540,6 +594,16 @@ def load_config(repo_root: Path | None = None) -> Config:
             FeasibilityConfig,
             _expect_mapping("feasibility", merged.get("feasibility")),
             section_name="feasibility",
+        ),
+        debate=_apply_section(
+            DebateConfig,
+            _expect_mapping("debate", merged.get("debate")),
+            section_name="debate",
+        ),
+        sessions=_apply_section(
+            SessionConfig,
+            _expect_mapping("sessions", merged.get("sessions")),
+            section_name="sessions",
         ),
         complexity_routing=complexity_routing,
         approval=_apply_section(

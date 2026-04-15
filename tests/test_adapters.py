@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_orchestrator.adapters.base import BlockedOnCLI, StepFailure
+from ai_orchestrator.adapters.base import BlockedOnCLI, InvokeResult, StepFailure
 from ai_orchestrator.adapters.claude import ClaudeAdapter
 from ai_orchestrator.adapters.codex import CodexAdapter
 
@@ -110,7 +110,8 @@ class TestClaudeAdapter:
         adapter = ClaudeAdapter(default_config, artifact_root)
         result = adapter.invoke("plan this", tmp_path, 30, schema)
 
-        assert result["task"] == "Example"
+        assert isinstance(result, InvokeResult)
+        assert result.data["task"] == "Example"
         assert calls[0][:5] == ["claude", "--model", "claude-sonnet", "--effort", "high"]
         assert calls[0][-2:] == ["--output-format", "json"]
         conn = sqlite3.connect(artifact_root / "metadata.sqlite3")
@@ -155,7 +156,7 @@ class TestClaudeAdapter:
         adapter = ClaudeAdapter(default_config, artifact_root)
         result = adapter.invoke("review this", tmp_path, 30, schema)
 
-        assert result["verdict"] == "approve"
+        assert result.data["verdict"] == "approve"
         assert any(part == "--effort" for part in commands[0])
         assert all(part != "--effort" for part in commands[1])
 
@@ -194,9 +195,55 @@ class TestClaudeAdapter:
         adapter = ClaudeAdapter(default_config, artifact_root)
         result = adapter.invoke("review this", tmp_path, 30, schema)
 
-        assert result["verdict"] == "approve"
+        assert result.data["verdict"] == "approve"
         assert any(part == "--effort" for part in commands[0])
         assert all(part != "--effort" for part in commands[1])
+
+    def test_invoke_extracts_session_id_and_builds_resume_command(
+        self,
+        tmp_path,
+        artifact_root,
+        default_config,
+        monkeypatch,
+    ):
+        schema = _schema("review.schema.json")
+        commands = []
+        fake_popen, _ = _fake_popen_factory(
+            [
+                {
+                    "stdout": json.dumps(
+                        {
+                            "type": "result",
+                            "session_id": "session-123",
+                            "result": json.dumps(
+                                {
+                                    "review_id": "00000000-0000-0000-0000-000000000000",
+                                    "verdict": "approve",
+                                    "score": 8,
+                                    "findings": [],
+                                    "summary": "ok",
+                                    "blocks_merge": False,
+                                }
+                            ),
+                        }
+                    ),
+                }
+            ],
+            commands,
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        adapter = ClaudeAdapter(default_config, artifact_root)
+        result = adapter.invoke(
+            "review this",
+            tmp_path,
+            30,
+            schema,
+            resume_session_id="prior-session",
+        )
+
+        assert result.session_id == "session-123"
+        assert commands[0][commands[0].index("--resume") + 1] == "prior-session"
 
     def test_invoke_classifies_auth_error_as_blocked(
         self,
@@ -233,9 +280,10 @@ class TestClaudeAdapter:
         }
 
         with pytest.warns(RuntimeWarning, match="envelope result field"):
-            extracted = ClaudeAdapter._extract_payload(envelope)
+            extracted, session_id = ClaudeAdapter._extract_payload(envelope)
 
         assert extracted["normalized_task"] == "Do something"
+        assert session_id is None
         assert "type" not in extracted
 
     def test_extract_payload_handles_fenced_result_with_leading_whitespace(self):
@@ -252,9 +300,10 @@ class TestClaudeAdapter:
         }
 
         with pytest.warns(RuntimeWarning, match="envelope result field"):
-            extracted = ClaudeAdapter._extract_payload(envelope)
+            extracted, session_id = ClaudeAdapter._extract_payload(envelope)
 
         assert extracted["normalized_task"] == "Do something"
+        assert session_id is None
         assert "type" not in extracted
 
     def test_parse_stdout_handles_fenced_result_in_envelope(self):
@@ -276,9 +325,10 @@ class TestClaudeAdapter:
         adapter = ClaudeAdapter.__new__(ClaudeAdapter)
 
         with pytest.warns(RuntimeWarning, match="envelope result field"):
-            parsed = adapter._parse_stdout(json.dumps(envelope))
+            parsed, session_id = adapter._parse_stdout(json.dumps(envelope))
 
         assert parsed["normalized_task"] == "Do something"
+        assert session_id is None
         assert "type" not in parsed
 
     def test_timeout_terminates_process_before_blocking(
@@ -349,8 +399,8 @@ class TestCodexAdapter:
             step_number=1,
         )
 
-        assert result["status"] == "success"
-        assert result["files_changed"] == [
+        assert result.data["status"] == "success"
+        assert result.data["files_changed"] == [
             {"path": "README.md", "action": "modified", "summary": "Modified README.md"}
         ]
         assert commands[0][:7] == [
@@ -408,7 +458,7 @@ class TestCodexAdapter:
             step_number=1,
         )
 
-        assert result["summary"] == "From stdout"
+        assert result.data["summary"] == "From stdout"
         conn = sqlite3.connect(artifact_root / "metadata.sqlite3")
         row = conn.execute(
             "SELECT cli_name, output_source, summary FROM invocations ORDER BY id DESC LIMIT 1"

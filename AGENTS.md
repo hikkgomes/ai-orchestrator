@@ -21,7 +21,10 @@ class BaseAdapter:
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-    ) -> dict
+        resume_session_id: str | None = None,
+    ) -> InvokeResult
+
+    def invoke_text(...) -> str
 ```
 
 **Inputs:**
@@ -32,9 +35,12 @@ class BaseAdapter:
 - `step_number` — optional execution-step context used by worker adapters
 - `reasoning_effort_override` — optional phase-specific override
 - `model_override` — optional phase-specific override
+- `resume_session_id` — optional session ID for CLIs that support resumption
 
 **Outputs:**
-- Returns a validated `dict` matching the schema
+- Returns `InvokeResult(data: dict, session_id: str | None = None)` where `data`
+  is validated against the schema
+- `invoke_text()` returns raw text for markdown-producing phases
 - Raises `AdapterError` subclass on any failure:
   - `StepFailure(exit_code, stdout, stderr, validation_error)` — generic execution failure
   - `BlockedOnCLI(exit_code, stderr)` — CLI requires interactive input or auth refresh
@@ -45,7 +51,7 @@ class BaseAdapter:
 - Logs raw output to `logs/<cli>-<uuid>.log` (when `logging.retain_raw_output = true`)
 - Parses output per adapter-specific strategy (see below)
 - Validates parsed JSON against `schema` (structural) and application-level checks
-- Returns validated dict or raises
+- Returns `InvokeResult` or raises
 
 **Environment filtering:**
 - Inherits only: `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`
@@ -68,6 +74,7 @@ class BaseAdapter:
 
 ```bash
 claude -p "<prompt>" --output-format json
+claude --resume <session-id> -p "<prompt>" --output-format json
 ```
 
 ### Flags
@@ -76,10 +83,11 @@ claude -p "<prompt>" --output-format json
 |---|---|---|
 | `-p "<prompt>"` | Non-interactive prompt mode | Yes |
 | `--output-format json` | Request JSON output | Yes |
+| `--resume <session-id>` | Resume an existing Claude session | Only when supplied |
 
 ### Output parsing strategy
 
-1. **Strict:** `json.loads(stdout)`. If `--output-format json` wraps the response in an envelope (e.g., a `result` field), extract the inner content.
+1. **Strict:** `json.loads(stdout)`. If `--output-format json` wraps the response in an envelope (e.g., a `result` field), extract the inner content and preserve top-level `session_id`.
 2. **Lenient fallback:** Strip markdown fences (```` ```json ... ``` ````), find JSON object/array boundaries, parse. Log a warning on lenient success.
 3. **Failure:** If both fail, raise `StepFailure` with the raw output for retry.
 
@@ -91,14 +99,19 @@ Strip ANSI escape codes from stdout before JSON parsing. The CLI may emit them i
 
 If configured in `aio.toml` (`routing.claude.reasoning_effort`), the adapter attempts to pass the flag. If the CLI does not support the flag (error on that flag specifically), the adapter retries without it. This is graceful degradation, not a hard dependency.
 
+### Text output
+
+`invoke_text()` uses `--output-format text` and returns raw stripped stdout. It is
+used for scoping markdown and other non-JSON debate artifacts.
+
 ### Routing defaults
 
 | Phase | Used by default | Reasoning effort |
 |---|---|---|
-| Scoping | Yes | high |
-| Planning | Yes | high |
+| Scoping | Yes, alongside Codex debate | high |
+| Planning | Yes, session-resumable | complexity-based |
 | Execution | No (Codex default) | medium |
-| Review | Yes | high |
+| Review | Yes, session-resumable | high |
 | Adjudication | No (Codex default) | medium |
 
 ---
@@ -129,6 +142,8 @@ Because `codex exec` mutates files directly and may not produce clean JSON on st
 
 In all cases, `files_changed` is verified against `git diff` in the worktree. The git diff is the ground truth for what files changed; the AI-provided `files_changed` is treated as metadata only.
 
+`invoke_text()` runs the same `codex exec` command and returns stdout as text.
+
 ### Routing defaults
 
 | Phase | Used by default |
@@ -137,6 +152,7 @@ In all cases, `files_changed` is verified against `git diff` in the worktree. Th
 | Planning | No (Claude default) |
 | Execution | Yes |
 | Review | No (Claude default) |
+| Scoping debate | Yes |
 | Adjudication | Yes |
 
 ---
@@ -249,7 +265,7 @@ and hard constraints.
 |---|---|---|
 | `orchestration-architect/` | PLANNING | `docs/prompts/plan.md` |
 | `orchestration-reviewer/` | REVIEWING | `docs/prompts/review.md` |
-| `fix-planner/` | PLANNING (replan loop) | `docs/prompts/fix-plan.md` |
+| `fix-planner/` | PLANNING (incremental fix loop) | `docs/prompts/fix-plan.md` |
 
 ## Codex Agents
 
@@ -262,7 +278,7 @@ a workflow agent. These supplement the prompt with Codex-specific output convent
 | `implementer.md` | EXECUTING | `docs/prompts/implement.md` |
 | `adjudicator.md` | ADJUDICATING | `docs/prompts/adjudicate.md` |
 | `feasibility.md` | FEASIBILITY | `docs/prompts/feasibility.md` |
-| `repairer.md` | EXECUTING (rework loop) | `docs/prompts/implement.md` (rework variant) |
+| `repairer.md` | EXECUTING (incremental fix loop) | `docs/prompts/implement.md` (fix variant) |
 
 ## Prompt Templates
 

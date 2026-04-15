@@ -128,6 +128,82 @@ def build_scoping_prompt(
     )
 
 
+def build_prescope_claude_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
+    """Build Claude round-0 pre-scope prompt."""
+    return _prescope_prompt(
+        actor="Claude",
+        raw_task=raw_task,
+        repo_summary=repo_summary,
+        directory_tree=directory_tree,
+    )
+
+
+def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
+    """Build Codex round-0 pre-scope prompt."""
+    return _prescope_prompt(
+        actor="Codex",
+        raw_task=raw_task,
+        repo_summary=repo_summary,
+        directory_tree=directory_tree,
+    )
+
+
+def build_scope_synthesis_prompt(
+    claude_scope_md: str,
+    codex_scope_md: str,
+    raw_task: str,
+) -> str:
+    """Build Claude prompt to synthesize canonical scope.md."""
+    return (
+        "You are resolving task scope for an automated software orchestrator.\n\n"
+        "Read Claude's and Codex's independent scope notes, then write the canonical\n"
+        "scope.md content. Return ONLY markdown for scope.md.\n\n"
+        "The output MUST start with YAML frontmatter containing these keys:\n"
+        "normalized_task, complexity_tier, actionable, key_files, context.\n"
+        "complexity_tier must be one of simple, moderate, complex, architectural.\n"
+        "actionable must be true or false. key_files must be a YAML list.\n\n"
+        "RAW TASK:\n"
+        f"{raw_task}\n\n"
+        "CLAUDE PRE-SCOPE:\n"
+        f"{claude_scope_md}\n\n"
+        "CODEX PRE-SCOPE:\n"
+        f"{codex_scope_md}\n"
+    )
+
+
+def build_scope_review_codex_prompt(claude_scope_md: str, scope_md: str) -> str:
+    """Build Codex prompt to review canonical scope.md."""
+    return (
+        "You are reviewing the canonical scope for an automated software workflow.\n\n"
+        "Codex has the last word on whether the scope is safe to plan from, but must\n"
+        "not edit scope.md. Return ONLY markdown for codex-scope.md.\n\n"
+        "Start with YAML frontmatter containing:\n"
+        "agreement: true|false\n"
+        "If agreement is false, include concise blocking comments under a Comments\n"
+        "heading. If agreement is true, briefly explain why the scope is acceptable.\n\n"
+        "CLAUDE NOTES:\n"
+        f"{claude_scope_md}\n\n"
+        "CANONICAL SCOPE.MD:\n"
+        f"{scope_md}\n"
+    )
+
+
+def build_scope_rebuttal_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
+    """Build Claude prompt to address Codex scope feedback."""
+    return (
+        "You are updating canonical scope.md after Codex review.\n\n"
+        "Read the current scope and Codex comments. Return ONLY the updated markdown\n"
+        "for scope.md. Preserve YAML frontmatter with normalized_task,\n"
+        "complexity_tier, actionable, key_files, and context. If you disagree with\n"
+        "Codex, encode the chosen scope clearly in scope.md and explain the rationale\n"
+        "in the body.\n\n"
+        "CURRENT SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "CODEX COMMENTS:\n"
+        f"{codex_scope_md}\n"
+    )
+
+
 def build_execution_prompt_codex(
     step_description: str,
     plan_context: str,
@@ -283,6 +359,10 @@ def build_review_prompt(
         f"{heuristic_section}"
         f"{categories_section}"
         f"{repo_context_section}"
+        "Before writing the final JSON, invoke the repository-local AI review workflow\n"
+        "if it exists at `.ai-review/scripts/review_changed.sh`, and consolidate its\n"
+        "signal with your own review. If it does not exist or cannot run, continue\n"
+        "with the provided diff and heuristic scan.\n\n"
         "Produce a JSON review conforming to this schema:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
@@ -326,6 +406,102 @@ def build_retry_prompt(
         "Fix the error and try again. The full original prompt follows.\n\n"
         "---\n\n"
         f"{original_prompt}"
+    )
+
+
+def build_debate_claude_rebuttal_prompt(
+    review: str,
+    adjudication: str,
+    debate_history: str,
+    task: str,
+    diff: str,
+    schema_json: str,
+) -> str:
+    """Build a Claude debate prompt."""
+    return (
+        "You are continuing the SAME review session for adjudication debate.\n\n"
+        "Re-evaluate the disputed implementation issues. Return ONLY JSON matching\n"
+        "the schema. Use position=issues_confirmed if the implementation still needs\n"
+        "fixes, or position=issues_dismissed if the disputed issues should not block.\n\n"
+        "TASK:\n"
+        f"{task}\n\n"
+        "REVIEW:\n"
+        f"{review}\n\n"
+        "CODEX ADJUDICATION OR REBUTTAL:\n"
+        f"{adjudication}\n\n"
+        "DEBATE HISTORY:\n"
+        f"{debate_history}\n\n"
+        "DIFF:\n"
+        f"{diff}\n\n"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+    )
+
+
+def build_debate_codex_rebuttal_prompt(
+    adjudication: str,
+    claude_rebuttal: str,
+    debate_history: str,
+    task: str,
+    step_results: str,
+    schema_json: str,
+) -> str:
+    """Build a Codex debate rebuttal prompt."""
+    return (
+        "You are continuing an adjudication debate for an automated workflow.\n\n"
+        "Respond to Claude's argument. Return ONLY JSON matching the schema. Use\n"
+        "position=issues_confirmed if you still believe fixes are required, or\n"
+        "position=issues_dismissed if Claude convinced you the implementation can pass.\n\n"
+        "TASK:\n"
+        f"{task}\n\n"
+        "INITIAL CODEX ADJUDICATION:\n"
+        f"{adjudication}\n\n"
+        "CLAUDE REBUTTAL:\n"
+        f"{claude_rebuttal}\n\n"
+        "DEBATE HISTORY:\n"
+        f"{debate_history}\n\n"
+        "STEP RESULTS:\n"
+        f"{step_results}\n\n"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+    )
+
+
+def build_fix_planning_prompt(
+    task: str,
+    scope_md: str,
+    original_plan: str,
+    step_results: str,
+    diff: str,
+    issues: str,
+    debate_context: str,
+    schema_json: str,
+) -> str:
+    """Build a planning prompt for incremental fix steps only."""
+    return (
+        "You are a software planning agent creating incremental fix steps.\n\n"
+        "The worktree already contains implementation changes. Do NOT produce a full\n"
+        "replacement plan. Produce only the smallest set of follow-up steps needed to\n"
+        "fix the issues below on top of the existing worktree.\n\n"
+        "TASK:\n"
+        f"{task}\n\n"
+        "SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "ORIGINAL PLAN:\n"
+        f"{original_plan}\n\n"
+        "EXISTING STEP RESULTS:\n"
+        f"{step_results}\n\n"
+        "CURRENT DIFF:\n"
+        f"{diff}\n\n"
+        "ISSUES TO FIX:\n"
+        f"{issues}\n\n"
+        "DEBATE CONTEXT:\n"
+        f"{debate_context}\n\n"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -527,6 +703,25 @@ def _workspace_section(workspace_trees: dict[str, str] | None) -> str:
         return ""
     return "\n\nWorkspace repos:\n" + "\n".join(
         f"## {name}/\n{tree}" for name, tree in workspace_trees.items()
+    )
+
+
+def _prescope_prompt(actor: str, raw_task: str, repo_summary: str, directory_tree: str) -> str:
+    return (
+        f"You are {actor}, independently scoping a user request for an automated\n"
+        "software orchestrator. Do not implement anything. Return ONLY markdown.\n\n"
+        "Your markdown should include:\n"
+        "- normalized task\n"
+        "- actionable: true or false\n"
+        "- complexity tier: simple, moderate, complex, or architectural\n"
+        "- key files or areas likely involved\n"
+        "- assumptions and risks\n\n"
+        "RAW TASK:\n"
+        f"{raw_task}\n\n"
+        "REPOSITORY SUMMARY:\n"
+        f"{repo_summary}\n\n"
+        "REPOSITORY STRUCTURE:\n"
+        f"{directory_tree}\n"
     )
 
 

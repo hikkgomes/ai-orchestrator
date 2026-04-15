@@ -21,6 +21,7 @@ class ArtifactStore:
         self._artifact_root = artifact_root
         self._retain_prompts = retain_prompts
         self._dirs = {
+            "scoping": artifact_root / "scoping",
             "feasibility": artifact_root / "feasibility",
             "plans": artifact_root / "plans",
             "results": artifact_root / "results",
@@ -54,6 +55,39 @@ class ArtifactStore:
     def save_adjudication(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("adjudications", f"adj-{run_id[:8]}", payload)
 
+    def save_scope_md(self, run_id: str, content: str) -> str:
+        relative = Path("scoping") / f"scope-{run_id[:8]}.md"
+        self._write_text(relative, content)
+        return relative.as_posix()
+
+    def save_claude_scope(self, run_id: str, round_num: int, content: str) -> str:
+        return self._write_versioned_text(
+            "scoping",
+            f"claude-scope-r{round_num}-{run_id[:8]}",
+            content,
+        )
+
+    def save_codex_scope(self, run_id: str, round_num: int, content: str) -> str:
+        return self._write_versioned_text(
+            "scoping",
+            f"codex-scope-r{round_num}-{run_id[:8]}",
+            content,
+        )
+
+    def save_debate_round(self, run_id: str, round_number: int, payload: dict[str, Any]) -> str:
+        return self._write_versioned_json(
+            "adjudications",
+            f"debate-round-{round_number}-{run_id[:8]}",
+            payload,
+        )
+
+    def save_execution_history(self, run_id: str, content: str) -> str:
+        return self._write_versioned_text(
+            "executions",
+            f"execution-history-{run_id[:8]}",
+            content,
+        )
+
     def read_json(self, reference: str) -> dict[str, Any]:
         path = self._artifact_root / reference
         if not path.exists():
@@ -62,6 +96,15 @@ class ArtifactStore:
             with path.open("r", encoding="utf-8") as handle:
                 return json.load(handle)
         except (OSError, json.JSONDecodeError) as exc:
+            raise ArtifactError(f"Failed to read artifact: {reference}") from exc
+
+    def read_text(self, reference: str) -> str:
+        path = self._artifact_root / reference
+        if not path.exists():
+            raise ArtifactError(f"Artifact does not exist: {reference}")
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
             raise ArtifactError(f"Failed to read artifact: {reference}") from exc
 
     def save_prompt(self, name: str, prompt: str) -> str | None:
@@ -187,6 +230,18 @@ class ArtifactStore:
     def _write_versioned_json(self, bucket: str, prefix: str, payload: dict[str, Any]) -> str:
         relative = Path(bucket) / f"{prefix}-{uuid4().hex[:8]}.json"
         self._write_json(relative, payload)
+        return relative.as_posix()
+
+    def _write_versioned_text(
+        self,
+        bucket: str,
+        prefix: str,
+        content: str,
+        *,
+        ext: str = ".md",
+    ) -> str:
+        relative = Path(bucket) / f"{prefix}-{uuid4().hex[:8]}{ext}"
+        self._write_text(relative, content)
         return relative.as_posix()
 
     def _write_current_json(self, path: Path, payload: dict[str, Any]) -> None:

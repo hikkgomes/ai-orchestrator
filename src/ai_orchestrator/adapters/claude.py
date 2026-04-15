@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..metadata import InvocationRecord
-from .base import BaseAdapter, BlockedOnCLI, StepFailure
+from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure
 
 
 # Patterns in stderr that suggest auth or interactive prompts.
@@ -61,7 +61,8 @@ class ClaudeAdapter(BaseAdapter):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-    ) -> dict[str, Any]:
+        resume_session_id: str | None = None,
+    ) -> InvokeResult:
         """Invoke ``claude -p`` and return a validated output dict.
 
         Raises
@@ -75,6 +76,8 @@ class ClaudeAdapter(BaseAdapter):
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
+            resume_session_id=resume_session_id,
+            output_format="json",
         )
         return self._invoke_command(
             command,
@@ -86,12 +89,40 @@ class ClaudeAdapter(BaseAdapter):
             allow_effort_retry=bool(reasoning_effort),
         )
 
+    def invoke_text(
+        self,
+        prompt: str,
+        working_dir: Path,
+        timeout: int,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+    ) -> str:
+        command, model, reasoning_effort = self._build_command(
+            prompt,
+            reasoning_effort_override=reasoning_effort_override,
+            model_override=model_override,
+            resume_session_id=resume_session_id,
+            output_format="text",
+        )
+        return self._invoke_text_command(
+            command,
+            working_dir,
+            timeout,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            allow_effort_retry=bool(reasoning_effort),
+        )
+
     def _build_command(
         self,
         prompt: str,
         *,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
+        resume_session_id: str | None = None,
+        output_format: str = "json",
     ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME]
         model = model_override or getattr(self._config.routing.claude, "model", "") or None
@@ -104,7 +135,9 @@ class ClaudeAdapter(BaseAdapter):
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:
             command.extend([self._EFFORT_FLAG, reasoning_effort])
-        command.extend(["-p", prompt, "--output-format", "json"])
+        if resume_session_id:
+            command.extend(["--resume", resume_session_id])
+        command.extend(["-p", prompt, "--output-format", output_format])
         return command, model, reasoning_effort
 
     def _invoke_command(
@@ -117,7 +150,7 @@ class ClaudeAdapter(BaseAdapter):
         model: str | None,
         reasoning_effort: str | None,
         allow_effort_retry: bool,
-    ) -> dict[str, Any]:
+    ) -> InvokeResult:
         completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
         if completed.timed_out:
             if not completed.stdout.strip() and not completed.stderr.strip():
@@ -167,7 +200,7 @@ class ClaudeAdapter(BaseAdapter):
                 stderr=stderr,
             )
 
-        parsed = self._parse_stdout(stdout)
+        parsed, session_id = self._parse_stdout(stdout)
         validated = self._validate_output(parsed, schema, working_dir)
         typed_result = self._typed_step_result(validated)
         self._record_invocation(
@@ -191,9 +224,83 @@ class ClaudeAdapter(BaseAdapter):
                 test_commands=typed_result.test_commands if typed_result else None,
             )
         )
-        return validated
+        return InvokeResult(data=validated, session_id=session_id)
 
-    def _parse_stdout(self, stdout: str) -> dict[str, Any]:
+    def _invoke_text_command(
+        self,
+        command: list[str],
+        working_dir: Path,
+        timeout: int,
+        *,
+        model: str | None,
+        reasoning_effort: str | None,
+        allow_effort_retry: bool,
+    ) -> str:
+        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        if completed.timed_out:
+            if not completed.stdout.strip() and not completed.stderr.strip():
+                raise BlockedOnCLI(
+                    "Claude CLI timed out without producing output",
+                    exit_code=None,
+                    stderr=completed.stderr,
+                )
+            raise StepFailure(
+                "Claude CLI timed out",
+                exit_code=None,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+        stdout = completed.stdout
+        stderr = completed.stderr
+        exit_code = completed.exit_code or 0
+
+        if exit_code != 0:
+            if allow_effort_retry and self._is_unsupported_effort_flag(stderr):
+                retry_command = list(command)
+                flag_index = retry_command.index(self._EFFORT_FLAG)
+                del retry_command[flag_index : flag_index + 2]
+                return self._invoke_text_command(
+                    retry_command,
+                    working_dir,
+                    timeout,
+                    model=model,
+                    reasoning_effort=None,
+                    allow_effort_retry=False,
+                )
+            if self._is_auth_error(stderr):
+                raise BlockedOnCLI(
+                    "Claude CLI requires interactive action",
+                    exit_code=exit_code,
+                    stderr=stderr,
+                )
+            raise StepFailure(
+                "Claude CLI exited with a non-zero status",
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self._record_invocation(
+            InvocationRecord(
+                cli_name=self.CLI_NAME,
+                command=command,
+                working_dir=str(working_dir),
+                timeout_seconds=timeout,
+                exit_code=exit_code,
+                started_at=completed.started_at,
+                finished_at=completed.finished_at,
+                stdout=stdout,
+                stderr=stderr,
+                raw_log_path=str(completed.raw_log_path) if completed.raw_log_path else None,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                output_source="stdout-text",
+            )
+        )
+        return self._strip_ansi(stdout).strip()
+
+    def _parse_stdout(self, stdout: str) -> tuple[dict[str, Any], str | None]:
         clean_stdout = self._strip_ansi(stdout).strip()
         try:
             return self._extract_payload(json.loads(clean_stdout))
@@ -205,14 +312,17 @@ class ClaudeAdapter(BaseAdapter):
                     stdout=stdout,
                 )
             warnings.warn("Claude adapter used lenient JSON parsing", RuntimeWarning)
-            return parsed
+            return parsed, None
 
     @staticmethod
-    def _extract_payload(data: Any) -> dict[str, Any]:
+    def _extract_payload(data: Any) -> tuple[dict[str, Any], str | None]:
+        session_id = data.get("session_id") if isinstance(data, dict) else None
+        if session_id is not None and not isinstance(session_id, str):
+            session_id = None
         if isinstance(data, dict) and "result" in data:
             result = data["result"]
             if isinstance(result, dict):
-                return result
+                return result, session_id
             if isinstance(result, str):
                 try:
                     nested = json.loads(result)
@@ -223,13 +333,13 @@ class ClaudeAdapter(BaseAdapter):
                             "Claude adapter used lenient JSON parsing on envelope result field",
                             RuntimeWarning,
                         )
-                        return lenient
+                        return lenient, session_id
                 else:
                     if isinstance(nested, dict):
-                        return nested
+                        return nested, session_id
         if not isinstance(data, dict):
             raise StepFailure("Claude CLI returned JSON that is not an object")
-        return data
+        return data, session_id
 
     @staticmethod
     def _strip_ansi(text: str) -> str:
@@ -256,7 +366,8 @@ class ClaudeAdapter(BaseAdapter):
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
-                return ClaudeAdapter._extract_payload(parsed)
+                payload, _ = ClaudeAdapter._extract_payload(parsed)
+                return payload
         return None
 
     @staticmethod

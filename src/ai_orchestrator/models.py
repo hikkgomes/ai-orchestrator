@@ -33,6 +33,7 @@ class WorkflowStatus(str, Enum):
     MERGING = "MERGING"
     DONE = "DONE"
     FAILED = "FAILED"
+    TERMINATED = "TERMINATED"
     PAUSED = "PAUSED"
     BLOCKED_ON_CLI = "BLOCKED_ON_CLI"
     CONFLICT = "CONFLICT"
@@ -95,6 +96,18 @@ class AdjudicationVerdict(str, Enum):
     REWORK = "REWORK"
     REPLAN = "REPLAN"
     FAIL = "FAIL"
+
+
+class DebatePhase(str, Enum):
+    """Adjudication debate sub-state."""
+
+    INITIAL_ADJUDICATION = "INITIAL_ADJUDICATION"
+    CASE_A_ESCALATION = "CASE_A_ESCALATION"
+    CASE_B_ROUND1 = "CASE_B_ROUND1"
+    CASE_B_CODEX_REBUTTAL = "CASE_B_CODEX_REBUTTAL"
+    CASE_B_FINAL_CLAUDE = "CASE_B_FINAL_CLAUDE"
+    USER_TIEBREAKER = "USER_TIEBREAKER"
+    RESOLVED = "RESOLVED"
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +204,34 @@ class Adjudication(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Debate state (internal)
+# ---------------------------------------------------------------------------
+
+
+class DebateRound(BaseModel):
+    """A recorded round in the adjudication debate."""
+
+    round_number: int = Field(ge=0)
+    actor: str
+    model_used: str | None = None
+    effort_used: str | None = None
+    position: str
+    reasoning: str
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    artifact_ref: str | None = None
+
+
+class DebateState(BaseModel):
+    """Persisted debate state for resumable adjudication."""
+
+    debate_phase: DebatePhase = DebatePhase.INITIAL_ADJUDICATION
+    disagreement_case: str | None = None
+    rounds: list[DebateRound] = Field(default_factory=list)
+    final_verdict: str | None = None
+    consolidated_issues: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator run state (docs/output-contracts.md — internal, not AI-produced)
 # ---------------------------------------------------------------------------
 
@@ -216,7 +257,16 @@ class RunState(BaseModel):
     feasibility_id: str | None = None
     rework_count: int = 0
     replan_count: int = 0
+    fix_iteration_count: int = 0
+    feasibility_replan_count: int = 0
     retry_counts: dict[str, int] = Field(default_factory=dict)
+    session_ids: dict[str, str] = Field(default_factory=dict)
+    scope_md_ref: str | None = None
+    claude_scope_ref: str | None = None
+    codex_scope_ref: str | None = None
+    scoping_round: int = 0
+    scoping_agreed: bool = False
+    debate_state: DebateState | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     error: str | None = None

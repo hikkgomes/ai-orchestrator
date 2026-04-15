@@ -191,15 +191,27 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 @main.command("approve")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan"]))
+@click.argument("gate", type=click.Choice(["scope", "plan", "feasibility", "debate_tiebreaker"]))
 @click.option("--force", is_flag=True, default=False, help="Reserved for backward compatibility.")
+@click.option(
+    "--decision",
+    type=click.Choice(["fix", "pass", "approve_claude", "approve_codex", "override"]),
+    default=None,
+    help="Gate-specific decision for debate or feasibility gates.",
+)
 @click.pass_context
-def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None:
+def cmd_approve(
+    ctx: click.Context,
+    run_id: str,
+    gate: str,
+    force: bool,
+    decision: str | None,
+) -> None:
     """Approve a pending gate."""
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
     try:
-        state = engine.approve(run_id, gate, force=force)
+        state = engine.approve(run_id, gate, force=force, decision=decision)
     except EngineError as exc:
         raise click.ClickException(str(exc)) from exc
     _render_run_snapshot(ctx, state.run_id, state=state)
@@ -207,15 +219,16 @@ def cmd_approve(ctx: click.Context, run_id: str, gate: str, force: bool) -> None
 
 @main.command("reject")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan"]))
+@click.argument("gate", type=click.Choice(["scope", "plan", "feasibility"]))
 @click.option("--reason", required=True)
+@click.option("--full", "full_reject", is_flag=True, default=False, help="Terminate instead of requesting another plan.")
 @click.pass_context
-def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str) -> None:
+def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str, full_reject: bool) -> None:
     """Reject a pending gate with feedback."""
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
     try:
-        state = engine.reject(run_id, gate, reason)
+        state = engine.reject(run_id, gate, reason, full=full_reject)
     except EngineError as exc:
         raise click.ClickException(str(exc)) from exc
     _render_run_snapshot(ctx, state.run_id, state=state)
@@ -461,6 +474,10 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             gate = "scope"
         elif state.current_phase == "APPROVAL_PLAN":
             gate = "plan"
+        elif state.current_phase == "FEASIBILITY":
+            gate = "feasibility"
+        elif state.current_phase == "ADJUDICATING":
+            gate = "debate_tiebreaker"
         else:
             return engine.resume(run_id)
         if gate == "scope":
@@ -475,6 +492,41 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         elif gate == "plan" and state.plan_id:
             plan = ArtifactStore(ctx.obj["artifact_root"]).read_json(state.plan_id)
             ui.print_plan(plan, run_id=state.run_id, detailed=True)
+        if gate == "plan":
+            choice = ui.approval_choice(
+                gate,
+                f"Run {run_id} is paused at plan approval.",
+                choices=["approve", "soft-reject", "full-reject"],
+                default="approve",
+            )
+            if choice == "approve":
+                state = engine.approve(run_id, gate)
+            else:
+                reason = ui.rejection_reason("Rejected in interactive mode")
+                state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
+            continue
+        if gate == "feasibility":
+            choice = ui.approval_choice(
+                gate,
+                f"Run {run_id} is paused at feasibility review.",
+                choices=["approve-override", "soft-reject", "full-reject"],
+                default="approve-override",
+            )
+            if choice == "approve-override":
+                state = engine.approve(run_id, gate, decision="override")
+            else:
+                reason = ui.rejection_reason("Feasibility decision")
+                state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
+            continue
+        if gate == "debate_tiebreaker":
+            choice = ui.approval_choice(
+                gate,
+                f"Run {run_id} is paused for a debate tiebreaker.",
+                choices=["fix", "pass"],
+                default="fix",
+            )
+            state = engine.approve(run_id, gate, decision=choice)
+            continue
         if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
             state = engine.approve(run_id, gate)
         else:

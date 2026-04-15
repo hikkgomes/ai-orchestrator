@@ -39,7 +39,7 @@ findings with `critical` or `major` severity.
 | `{review_categories_section}` | bundled `reviewer/rules.yaml` | Ordered AI-failure checklist |
 | `{repository_context_section}` | `.ai-review/config.json` | Optional repo-aware review hints |
 | `{review_schema}` | `schemas/review.schema.json` | Full JSON Schema for the review artifact |
-| `{rework_count}` | run state | Number of prior rework loops (informs severity calibration) |
+| `{fix_iteration_count}` | run state | Number of prior incremental fix cycles (informs severity calibration) |
 
 ---
 

@@ -2,34 +2,35 @@
 
 > **Design status: UPDATED** as of 2026-04-09.
 
-Every artifact exchanged between workflow phases is a JSON file validated against a schema in `schemas/`. This document defines the contracts, their fields, and how they flow between phases.
+Workflow phases exchange JSON artifacts validated against schemas in `schemas/` plus a small set of markdown artifacts with machine-readable frontmatter. This document defines the contracts, their fields, and how they flow between phases.
 
 ---
 
 ## Artifact Flow
 
 ```
-Phase 1 (Scoping)      → transient result                    [scoping.schema.json]
+Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter]
 Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
 Phase 4 (Feasibility)  → feasibility/feasibility-<uuid>.json [feasibility.schema.json]
 Phase 5 (Execution)    → results/step-<n>-<uuid>.json       [step_result.schema.json]
 Phase 6 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
 Phase 7 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
+Phase 7 debate rounds  → adjudications/debate-round-*.json   [debate_response.schema.json]
 ```
 
 ---
 
-## Scoping Contract (`scoping.schema.json`)
+## Scoping Contract (`scope.md`)
 
-Produced by the scoper. Consumed by the planner and engine.
+Produced by the Claude/Codex scoping debate. Consumed by the planner and engine.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `actionable` | boolean | yes | Whether the task can proceed |
 | `normalized_task` | string | yes | Normalized task text |
-| `assumptions` | array of string | yes | Assumptions used during normalization |
 | `complexity_tier` | enum: simple/moderate/complex/architectural | yes | Task-level routing tier |
-| `blocking_reason` | string | conditional | Required when `actionable = false` |
+| `key_files` | array of string | yes | Likely relevant files/areas |
+| `context` | string | yes | Assumptions, constraints, or blocking context |
 
 ---
 
@@ -137,7 +138,7 @@ Produced by the adjudicator. Consumed by the orchestrator engine.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `adjudication_id` | string (uuid) | yes | Unique identifier |
-| `verdict` | enum: PASS/REWORK/REPLAN/FAIL | yes | Decision |
+| `verdict` | enum: PASS/REWORK/REPLAN/FAIL | yes | Initial Codex decision; non-PASS enters fix/debate handling |
 | `reasoning` | string | yes | Why this verdict was chosen |
 | `rework_steps` | array of integer | no | Which steps need rework (if REWORK) |
 | `rework_feedback` | string | no | Guidance for rework (if REWORK) |
@@ -149,6 +150,18 @@ Produced by the adjudicator. Consumed by the orchestrator engine.
 - If `verdict` is `REPLAN`, `replan_feedback` must be present
 - If `verdict` is `FAIL`, `failure_reason` must be present
 - `rework_steps` values must reference valid step numbers from the plan
+
+---
+
+## Debate Response Contract (`debate_response.schema.json`)
+
+Produced by Claude/Codex rebuttal rounds. Consumed by the adjudication debate state machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `position` | enum: issues_confirmed/issues_dismissed/issues_accepted | yes | Whether the actor believes fixes are required |
+| `reasoning` | string | yes | Argument for the position |
+| `issues` | array of objects | yes | Issues accepted or confirmed by this round |
 
 ---
 
@@ -169,8 +182,11 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `feasibility_id` | string or null | Reference to current feasibility result |
 | `review_id` | string or null | Reference to current review |
 | `adjudication_id` | string or null | Reference to current adjudication |
-| `rework_count` | integer | How many rework loops so far |
-| `replan_count` | integer | How many replan loops so far |
+| `fix_iteration_count` | integer | How many incremental fix-planning cycles so far |
+| `feasibility_replan_count` | integer | How many feasibility-driven replans so far |
+| `session_ids` | object | Vendor session IDs keyed by phase |
+| `scope_md_ref` | string or null | Canonical scope markdown reference |
+| `debate_state` | object or null | Adjudication debate progress |
 | `retry_counts` | object | Per-step retry counts |
 | `created_at` | string (ISO 8601) | When the run started |
 | `updated_at` | string (ISO 8601) | Last state change |
@@ -219,4 +235,4 @@ Where:
 
 Example: `step-3-a1b2c3d4.json`
 
-This ensures uniqueness across retries and rework loops. Old artifacts from failed attempts are preserved for debugging (not overwritten).
+This ensures uniqueness across retries and incremental fix cycles. Old artifacts from failed attempts are preserved for debugging (not overwritten).

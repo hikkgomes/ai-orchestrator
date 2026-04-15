@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from ai_orchestrator.adapters.base import BlockedOnCLI, StepFailure
+from ai_orchestrator.adapters.base import BlockedOnCLI, InvokeResult, StepFailure
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import PhaseRoutingOverride
 from ai_orchestrator.engine import Engine, EngineError
@@ -32,6 +32,7 @@ class FakeClaudeAdapter:
         self.review_calls = 0
         self.adjudication_calls = 0
         self.invocations: list[dict[str, object]] = []
+        self._last_scope = None
 
     def invoke(
         self,
@@ -43,6 +44,7 @@ class FakeClaudeAdapter:
         step_number=None,
         reasoning_effort_override=None,
         model_override=None,
+        resume_session_id=None,
     ):
         self.invocations.append(
             {
@@ -50,6 +52,7 @@ class FakeClaudeAdapter:
                 "prompt": prompt,
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
+                "resume_session_id": resume_session_id,
             }
         )
         title = schema["title"]
@@ -65,23 +68,56 @@ class FakeClaudeAdapter:
             }
         if title == "Plan":
             self.planning_calls += 1
-            return self._plans.pop(0)
+            return InvokeResult(self._plans.pop(0), session_id="planning-session")
         if title == "FeasibilityResult":
             self.feasibility_calls += 1
             if self._feasibilities:
-                return self._feasibilities.pop(0)
-            return {
+                return InvokeResult(self._feasibilities.pop(0))
+            return InvokeResult({
                 "verdict": "go",
                 "blocking_issues": [],
                 "summary": "The plan is feasible.",
-            }
+            })
         if title == "Review":
             self.review_calls += 1
-            return self._reviews.pop(0)
+            return InvokeResult(self._reviews.pop(0), session_id="review-session")
         if title == "Adjudication":
             self.adjudication_calls += 1
-            return self._adjudications.pop(0)
+            return InvokeResult(self._adjudications.pop(0))
+        if title == "DebateResponse":
+            return InvokeResult({"position": "issues_dismissed", "reasoning": "Convinced.", "issues": []})
         raise AssertionError(f"Unexpected schema title: {title}")
+
+    def invoke_text(
+        self,
+        prompt,
+        working_dir,
+        timeout,
+        *,
+        reasoning_effort_override=None,
+        model_override=None,
+        resume_session_id=None,
+    ):
+        if "independently scoping" in prompt:
+            self.scoping_calls += 1
+            if self._scopings:
+                self._last_scope = self._scopings.pop(0)
+            else:
+                self._last_scope = {
+                    "actionable": True,
+                    "normalized_task": "Implement feature",
+                    "assumptions": [],
+                    "complexity_tier": "moderate",
+                }
+            return _scope_md(self._last_scope)
+        if "resolving task scope" in prompt or "updating canonical scope.md" in prompt:
+            return _scope_md(self._last_scope or {
+                "actionable": True,
+                "normalized_task": "Implement feature",
+                "assumptions": [],
+                "complexity_tier": "moderate",
+            })
+        raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
 
 
 class FakeCodexAdapter:
@@ -102,6 +138,7 @@ class FakeCodexAdapter:
         step_number=None,
         reasoning_effort_override=None,
         model_override=None,
+        resume_session_id=None,
     ):
         self.invocations.append(
             {
@@ -109,27 +146,30 @@ class FakeCodexAdapter:
                 "prompt": prompt,
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
+                "resume_session_id": resume_session_id,
             }
         )
         if schema["title"] == "FeasibilityResult":
             self.feasibility_calls += 1
-            return {
+            return InvokeResult({
                 "verdict": "go",
                 "blocking_issues": [],
                 "summary": "Environment checks passed.",
-            }
+            })
         if schema["title"] == "Adjudication":
             self.adjudication_calls += 1
             if self._adjudications:
-                return self._adjudications.pop(0)
-            return _pass_adjudication()
+                return InvokeResult(self._adjudications.pop(0))
+            return InvokeResult(_pass_adjudication())
+        if schema["title"] == "DebateResponse":
+            return InvokeResult({"position": "issues_dismissed", "reasoning": "Convinced.", "issues": []})
         if step_number is None:
             match = re.search(r"pending-step-(\d+)\.json", prompt)
             step_number = int(match.group(1)) if match else 0
         self.executed_steps.append(step_number)
         target = working_dir / f"step-{step_number}.txt"
         target.write_text(f"step {step_number}\n", encoding="utf-8")
-        return {
+        return InvokeResult({
             "step_number": step_number,
             "status": "success",
             "files_changed": [
@@ -142,11 +182,38 @@ class FakeCodexAdapter:
             "summary": f"Implemented step {step_number}",
             "issues": [],
             "test_commands": [],
-        }
+        })
+
+    def invoke_text(
+        self,
+        prompt,
+        working_dir,
+        timeout,
+        *,
+        reasoning_effort_override=None,
+        model_override=None,
+        resume_session_id=None,
+    ):
+        return "---\nagreement: true\n---\n\nScope is acceptable.\n"
 
 
 def _workflow():
     return load_workflow_definition(PROJECT_ROOT)
+
+
+def _scope_md(payload: dict) -> str:
+    actionable = str(payload.get("actionable", True)).lower()
+    return (
+        "---\n"
+        f"normalized_task: {payload.get('normalized_task', 'Implement feature')}\n"
+        f"complexity_tier: {payload.get('complexity_tier', 'moderate')}\n"
+        f"actionable: {actionable}\n"
+        "key_files:\n"
+        "  - README.md\n"
+        f"context: {payload.get('blocking_reason') or 'Test scope.'}\n"
+        "---\n\n"
+        f"{payload.get('normalized_task', 'Implement feature')}\n"
+    )
 
 
 def _plan(*, plan_id: str = "11111111-1111-1111-1111-111111111111"):
@@ -183,6 +250,25 @@ def _review():
         "findings": [],
         "summary": "Looks good.",
         "blocks_merge": False,
+    }
+
+
+def _review_with_issue():
+    return {
+        "review_id": "22222222-2222-2222-2222-222222222222",
+        "verdict": "request_changes",
+        "score": 5,
+        "findings": [
+            {
+                "severity": "major",
+                "file": "step-1.txt",
+                "line": 1,
+                "description": "Fix the generated content.",
+                "suggestion": "Update step 1.",
+            }
+        ],
+        "summary": "Needs a fix.",
+        "blocks_merge": True,
     }
 
 
@@ -394,6 +480,9 @@ def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     assert state.status == "PAUSED"
     assert state.current_phase == "APPROVAL_PLAN"
     assert claude.planning_calls == 2
+    planning_calls = [item for item in claude.invocations if item["title"] == "Plan"]
+    assert planning_calls[0]["resume_session_id"] is None
+    assert planning_calls[1]["resume_session_id"] == "planning-session"
 
     state = engine.approve(state.run_id, "plan")
     assert state.status == "DONE"
@@ -456,10 +545,9 @@ def test_workspace_resume_revalidates_cleanliness(tmp_path, artifact_root, defau
         engine.resume(state.run_id)
 
 
-def test_engine_rework_loop_limit_fails(tmp_repo, artifact_root, default_config):
+def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    default_config.orchestrator.max_rework_loops = 1
     claude = FakeClaudeAdapter(
         [_plan()],
         [_review(), _review()],
@@ -507,8 +595,57 @@ def test_engine_rework_loop_limit_fails(tmp_repo, artifact_root, default_config)
     )
 
     state = engine.start("Implement feature", "cccccccc-cccc-cccc-cccc-cccccccccccc")
-    assert state.status == "FAILED"
-    assert "Rework loop limit exceeded" in (state.error or "")
+    assert state.status == "DONE"
+    assert state.debate_state is not None
+    assert state.debate_state.final_verdict == "pass"
+
+
+def test_adjudication_fix_planning_preserves_existing_step_results(
+    tmp_repo,
+    artifact_root,
+    default_config,
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [_plan(plan_id="11111111-1111-1111-1111-111111111111"), _plan(plan_id="22222222-1111-1111-1111-111111111111")],
+        [_review_with_issue(), _review()],
+        [_pass_adjudication()],
+    )
+    codex = FakeCodexAdapter(
+        adjudications=[
+            {
+                "adjudication_id": "44444444-4444-4444-4444-444444444444",
+                "verdict": "REWORK",
+                "reasoning": "The review issue is real.",
+                "rework_steps": [1],
+                "rework_feedback": "Fix step 1.",
+            },
+            _pass_adjudication(),
+        ]
+    )
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+    discard_phases = []
+    original_discard = engine._discard_worktree
+
+    def tracked_discard(state, *, force):
+        discard_phases.append(state.current_phase)
+        return original_discard(state, force=force)
+
+    engine._discard_worktree = tracked_discard  # type: ignore[method-assign]
+
+    state = engine.start("Implement feature", "cfcfcfcf-cfcf-cfcf-cfcf-cfcfcfcfcfcf")
+
+    assert state.status == "DONE"
+    assert state.fix_iteration_count == 1
+    assert len(state.step_results) == 4
+    assert discard_phases == ["MERGING"]
 
 
 def test_resume_from_executing_uses_manifest(tmp_repo, artifact_root, default_config):
@@ -1126,18 +1263,22 @@ def test_feasibility_blocked_replans_with_feedback(tmp_repo, artifact_root, defa
         workflow=_workflow(),
     )
 
-    state = engine.start("Implement feature", "15151515-1515-1515-1515-151515151515")
+    paused = engine.start("Implement feature", "15151515-1515-1515-1515-151515151515")
+    assert paused.status == "PAUSED"
+    assert paused.current_phase == "FEASIBILITY"
+
+    state = engine.reject(paused.run_id, "feasibility", "Revise the plan")
 
     assert state.status == "DONE"
-    assert state.replan_count == 1
+    assert state.feasibility_replan_count == 1
     assert claude.planning_calls == 2
     assert codex.feasibility_calls == 2
 
 
-def test_feasibility_blocked_at_replan_limit_fails(tmp_repo, artifact_root, default_config):
+def test_feasibility_blocked_at_replan_limit_pauses_for_final_decision(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    default_config.orchestrator.max_replan_loops = 0
+    default_config.feasibility.max_feasibility_replans = 0
     claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
 
     class AlwaysBlockedCodex(FakeCodexAdapter):
@@ -1182,8 +1323,12 @@ def test_feasibility_blocked_at_replan_limit_fails(tmp_repo, artifact_root, defa
 
     state = engine.start("Implement feature", "16161616-1616-1616-1616-161616161616")
 
-    assert state.status == "FAILED"
-    assert "Replan loop limit exceeded" in (state.error or "")
+    assert state.status == "PAUSED"
+    assert state.current_phase == "FEASIBILITY"
+    assert "Feasibility check is blocked" in (state.error or "")
+
+    terminated = engine.reject(state.run_id, "feasibility", "Trust Codex", full=True)
+    assert terminated.status == "TERMINATED"
 
 
 def test_feasibility_disabled_skips_to_execution(tmp_repo, artifact_root, default_config):
@@ -1240,7 +1385,7 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     feasibility_call = next(call for call in codex.invocations if call["title"] == "FeasibilityResult")
     execute_call = next(call for call in codex.invocations if call["title"] == "StepResult")
     assert planning_call["reasoning_effort_override"] == "max"
-    assert feasibility_call["reasoning_effort_override"] == "max"
+    assert feasibility_call["reasoning_effort_override"] == "xhigh"
     assert execute_call["reasoning_effort_override"] == "xhigh"
     assert review_call["reasoning_effort_override"] == "max"
 
@@ -1250,6 +1395,22 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
     default_config.approval.require_merge_approval = False
 
     class FailingClaudeAdapter(FakeClaudeAdapter):
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+        ):
+            raise StepFailure(
+                "Claude CLI exited with a non-zero status",
+                exit_code=2,
+                stderr="error: unknown option '--effort'",
+            )
+
         def invoke(
             self,
             prompt,
@@ -1304,6 +1465,29 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
     default_config.approval.require_merge_approval = False
 
     class FailingClaudeAdapter(FakeClaudeAdapter):
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+        ):
+            raise StepFailure(
+                "Claude CLI exited with a non-zero status",
+                exit_code=1,
+                stdout=json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "error_max_turns",
+                        "is_error": True,
+                        "result": "Reached maximum number of turns (1)",
+                    }
+                ),
+            )
+
         def invoke(
             self,
             prompt,

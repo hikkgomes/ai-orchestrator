@@ -3,25 +3,34 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from .adapters.base import BlockedOnCLI, StepFailure
+from .adapters.base import BlockedOnCLI, InvokeResult, StepFailure
 from .adapters.claude import ClaudeAdapter
 from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
 from .bootstrap import ensure_runtime_gitignore
 from .config import Config
-from .models import RunState, WorkflowStatus
+from .models import DebatePhase, DebateRound, DebateState, RunState, WorkflowStatus
+from .parallel import invoke_parallel
 from .prompts.templates import (
     build_adjudication_prompt,
+    build_debate_claude_rebuttal_prompt,
+    build_debate_codex_rebuttal_prompt,
     build_execution_prompt_claude,
     build_execution_prompt_codex,
     build_feasibility_prompt_claude,
     build_feasibility_prompt_codex,
+    build_fix_planning_prompt,
     build_planning_prompt,
-    build_scoping_prompt,
+    build_prescope_claude_prompt,
+    build_prescope_codex_prompt,
+    build_scope_rebuttal_claude_prompt,
+    build_scope_review_codex_prompt,
+    build_scope_synthesis_prompt,
     build_retry_prompt,
     build_review_prompt,
     collect_file_context,
@@ -45,6 +54,7 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.FAILED,
+        WorkflowStatus.TERMINATED,
     },
     WorkflowStatus.SCOPING: {
         WorkflowStatus.PLANNING,
@@ -64,10 +74,13 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.PAUSED,
+        WorkflowStatus.TERMINATED,
     },
     WorkflowStatus.FEASIBILITY: {
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
+        WorkflowStatus.PAUSED,
+        WorkflowStatus.TERMINATED,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
@@ -86,7 +99,10 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.MERGING,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
+        WorkflowStatus.REVIEWING,
+        WorkflowStatus.PAUSED,
         WorkflowStatus.FAILED,
+        WorkflowStatus.TERMINATED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.MERGING: {
@@ -97,9 +113,12 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     },
     WorkflowStatus.DONE: set(),
     WorkflowStatus.FAILED: set(),
+    WorkflowStatus.TERMINATED: set(),
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
+        WorkflowStatus.FEASIBILITY,
+        WorkflowStatus.ADJUDICATING,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
         WorkflowStatus.SCOPING,
@@ -168,7 +187,7 @@ class Engine:
     def resume(self, run_id: str) -> RunState:
         state = self._state_mgr.load(run_id)
         status = WorkflowStatus(state.status)
-        if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED}:
+        if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED, WorkflowStatus.TERMINATED}:
             raise EngineError(f"Run {run_id} is not resumable from {status.value}")
         if state.is_workspace and state.current_phase in {
             WorkflowStatus.EXECUTING.value,
@@ -195,7 +214,14 @@ class Engine:
             state = self._transition(state, WorkflowStatus.MERGING)
         return self._run(state)
 
-    def approve(self, run_id: str, gate: str, *, force: bool = False) -> RunState:
+    def approve(
+        self,
+        run_id: str,
+        gate: str,
+        *,
+        force: bool = False,
+        decision: str | None = None,
+    ) -> RunState:
         state = self._state_mgr.load(run_id)
         gate_phase = self._gate_phase(gate)
         if WorkflowStatus(state.status) != WorkflowStatus.PAUSED or state.current_phase != gate_phase:
@@ -210,7 +236,12 @@ class Engine:
                 error=None,
             )
             return self._run(state)
-        self._artifacts.save_approval_decision(run_id, gate, "approve", force=force)
+        self._artifacts.save_approval_decision(
+            run_id,
+            gate,
+            decision or "approve",
+            force=force,
+        )
         state = self._transition(
             state,
             WorkflowStatus(gate_phase),
@@ -219,7 +250,7 @@ class Engine:
         )
         return self._run(state)
 
-    def reject(self, run_id: str, gate: str, reason: str) -> RunState:
+    def reject(self, run_id: str, gate: str, reason: str, *, full: bool = False) -> RunState:
         state = self._state_mgr.load(run_id)
         gate_phase = self._gate_phase(gate)
         if WorkflowStatus(state.status) != WorkflowStatus.PAUSED or state.current_phase != gate_phase:
@@ -228,6 +259,11 @@ class Engine:
             state.task = reason
             state.normalized_task = None
             state.complexity_tier = None
+            state.scope_md_ref = None
+            state.claude_scope_ref = None
+            state.codex_scope_ref = None
+            state.scoping_round = 0
+            state.scoping_agreed = False
             state.error = None
             self._state_mgr.save(state)
             state = self._transition(
@@ -237,7 +273,12 @@ class Engine:
                 error=None,
             )
             return self._run(state)
-        self._artifacts.save_approval_decision(run_id, gate, "reject", reason=reason)
+        self._artifacts.save_approval_decision(
+            run_id,
+            gate,
+            "full_reject" if full else "reject",
+            reason=reason,
+        )
         state = self._transition(
             state,
             WorkflowStatus(gate_phase),
@@ -252,6 +293,7 @@ class Engine:
             if status in {
                 WorkflowStatus.DONE,
                 WorkflowStatus.FAILED,
+                WorkflowStatus.TERMINATED,
                 WorkflowStatus.PAUSED,
                 WorkflowStatus.BLOCKED_ON_CLI,
                 WorkflowStatus.CONFLICT,
@@ -286,38 +328,121 @@ class Engine:
             raise EngineError(f"Unhandled engine status: {status.value}")
 
     def _run_scoping(self, state: RunState) -> RunState:
-        schema = load_bundled_schema("scoping.schema.json")
-        prompt = build_scoping_prompt(
-            raw_task=state.task,
-            repo_summary=repo_summary(self._repo_root),
-            directory_tree=render_directory_tree(self._repo_root, max_depth=2),
-            workspace_trees=self._workspace_trees(state, max_depth=2),
-            schema_json=json_block(schema),
-        )
-        self._artifacts.save_prompt(f"scoping-{state.run_id[:8]}.md", prompt)
+        directory_tree = render_directory_tree(self._repo_root, max_depth=2)
+        summary = repo_summary(self._repo_root)
+        claude = self._adapter("claude")
+        codex = self._adapter("codex")
+        claude_effort = self._resolve_effort_for_phase(state, "scoping", "claude")
+        codex_effort = "high"
+        claude_model = self._resolve_model_for_phase("scoping", "claude", state)
+        codex_model = self._resolve_model_for_phase("scoping", "codex", state)
 
-        adapter = self._adapter_for_phase("scoping")
-        cli_name = self._phase_cli("scoping", config_name="scoper")
         try:
-            result = self._invoke_with_retries(
-                state,
-                retry_key="scoping",
-                retries=self._retry_limit("scoping"),
-                spinner_label="Scoping",
-                invoke=lambda current_prompt: adapter.invoke(
-                    current_prompt,
+            if not state.claude_scope_ref or not state.codex_scope_ref:
+                claude_prompt = build_prescope_claude_prompt(state.task, summary, directory_tree)
+                codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
+                self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
+                self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
+                claude_scope, codex_scope = invoke_parallel(
+                    [
+                        lambda: self._invoke_adapter_text(
+                            claude,
+                            claude_prompt,
+                            self._repo_root,
+                            "Scoping with Claude",
+                            reasoning_effort_override=claude_effort,
+                            model_override=claude_model,
+                        ),
+                        lambda: self._invoke_adapter_text(
+                            codex,
+                            codex_prompt,
+                            self._repo_root,
+                            "Scoping with Codex",
+                            reasoning_effort_override=codex_effort,
+                            model_override=codex_model,
+                            legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
+                        ),
+                    ]
+                )
+                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 0, claude_scope)
+                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 0, codex_scope)
+                state.scoping_round = 0
+                self._state_mgr.save(state)
+
+            if not state.scope_md_ref:
+                claude_scope = self._artifacts.read_text(state.claude_scope_ref)
+                codex_scope = self._artifacts.read_text(state.codex_scope_ref)
+                prompt = build_scope_synthesis_prompt(claude_scope, codex_scope, state.task)
+                self._artifacts.save_prompt(f"scope-synthesis-{state.run_id[:8]}.md", prompt)
+                scope_md = self._invoke_adapter_text(
+                    claude,
+                    prompt,
                     self._repo_root,
-                    self._config.orchestrator.watchdog_timeout,
-                    schema,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "scoping",
-                        cli_name,
-                    ),
-                    model_override=self._resolve_model_for_phase("scoping", cli_name),
-                ),
-                initial_prompt=prompt,
-            )
+                    "Synthesizing scope",
+                    reasoning_effort_override=claude_effort,
+                    model_override=claude_model,
+                )
+                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
+                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, scope_md)
+                state.scoping_round = 1
+                self._state_mgr.save(state)
+
+            codex_reviews = 0
+            round_number = max(state.scoping_round + 1, 2)
+            while not state.scoping_agreed and codex_reviews < self._config.scoping.max_scoping_rounds:
+                scope_md = self._artifacts.read_text(state.scope_md_ref)
+                claude_scope = self._artifacts.read_text(state.claude_scope_ref)
+                prompt = build_scope_review_codex_prompt(claude_scope, scope_md)
+                self._artifacts.save_prompt(
+                    f"scope-review-codex-r{round_number}-{state.run_id[:8]}.md",
+                    prompt,
+                )
+                codex_scope = self._invoke_adapter_text(
+                    codex,
+                    prompt,
+                    self._repo_root,
+                    f"Codex scope review round {round_number}",
+                    reasoning_effort_override=codex_effort,
+                    model_override=codex_model,
+                    legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
+                )
+                state.codex_scope_ref = self._artifacts.save_codex_scope(
+                    state.run_id,
+                    round_number,
+                    codex_scope,
+                )
+                state.scoping_round = round_number
+                state.scoping_agreed = self._scope_review_agreed(codex_scope)
+                self._state_mgr.save(state)
+                codex_reviews += 1
+                if state.scoping_agreed:
+                    break
+                if codex_reviews >= self._config.scoping.max_scoping_rounds:
+                    break
+
+                rebuttal_round = round_number + 1
+                prompt = build_scope_rebuttal_claude_prompt(scope_md, codex_scope)
+                self._artifacts.save_prompt(
+                    f"scope-rebuttal-claude-r{rebuttal_round}-{state.run_id[:8]}.md",
+                    prompt,
+                )
+                scope_md = self._invoke_adapter_text(
+                    claude,
+                    prompt,
+                    self._repo_root,
+                    f"Claude scope rebuttal round {rebuttal_round}",
+                    reasoning_effort_override=claude_effort,
+                    model_override=claude_model,
+                )
+                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
+                state.claude_scope_ref = self._artifacts.save_claude_scope(
+                    state.run_id,
+                    rebuttal_round,
+                    scope_md,
+                )
+                state.scoping_round = rebuttal_round
+                self._state_mgr.save(state)
+                round_number = rebuttal_round + 1
         except BlockedOnCLI as exc:
             return self._transition(
                 state,
@@ -328,18 +453,21 @@ class Engine:
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
 
-        state.normalized_task = result["normalized_task"]
-        state.complexity_tier = result["complexity_tier"]
+        scope_md = self._artifacts.read_text(state.scope_md_ref)
+        frontmatter = self._parse_scope_frontmatter(scope_md)
+        state.normalized_task = str(frontmatter.get("normalized_task") or state.task)
+        state.complexity_tier = str(frontmatter.get("complexity_tier") or "moderate")
+        actionable = self._coerce_bool(frontmatter.get("actionable"), default=True)
         state.error = None
         self._state_mgr.save(state)
 
-        if result["actionable"]:
+        if actionable:
             return self._transition(state, WorkflowStatus.PLANNING)
         return self._transition(
             state,
             WorkflowStatus.PAUSED,
             current_phase=WorkflowStatus.SCOPING.value,
-            error=str(result.get("blocking_reason") or "Task requires scoping review"),
+            error=str(frontmatter.get("context") or "Task requires scoping review"),
         )
 
     def _run_planning(self, state: RunState) -> RunState:
@@ -364,41 +492,79 @@ class Engine:
                 + "\n\n".join(feedback_parts)
             )
 
-        prompt = build_planning_prompt(
-            task_description=task_description,
-            directory_tree=render_directory_tree(self._repo_root),
-            workspace_trees=self._workspace_trees(state, max_depth=2),
-            key_file_contents=collect_file_context(
-                self._repo_root,
-                default_planning_files(self._repo_root),
-            )[0],
-            schema_json=json_block(schema),
-        )
+        scope_md = self._artifacts.read_text(state.scope_md_ref) if state.scope_md_ref else ""
+        is_fix_planning = state.fix_iteration_count > 0 and bool(planning_feedback)
+        if is_fix_planning:
+            prompt = build_fix_planning_prompt(
+                task=state.task,
+                scope_md=scope_md,
+                original_plan=json_block(self._artifacts.read_json(state.plan_id)) if state.plan_id else "{}",
+                step_results=json_block(self._load_step_results(state)),
+                diff=redact_secret_text(self._implementation_diff(state)),
+                issues=planning_feedback or "",
+                debate_context=self._debate_history_text(state),
+                schema_json=json_block(schema),
+            )
+        else:
+            scoped_task = task_description
+            if scope_md:
+                scoped_task = (
+                    f"{task_description}\n\nSCOPE.MD:\n{scope_md}\n\n"
+                    f"ORIGINAL USER PROMPT:\n{state.task}"
+                )
+            prompt = build_planning_prompt(
+                task_description=scoped_task,
+                directory_tree=render_directory_tree(self._repo_root),
+                workspace_trees=self._workspace_trees(state, max_depth=2),
+                key_file_contents=collect_file_context(
+                    self._repo_root,
+                    default_planning_files(self._repo_root),
+                )[0],
+                schema_json=json_block(schema),
+            )
         self._artifacts.save_prompt(f"planning-{state.run_id[:8]}.md", prompt)
 
         adapter = self._adapter_for_phase("planning")
+        cli_name = self._phase_cli("planning", config_name="planner")
+        is_iteration = bool(feedback_parts)
+        if not is_iteration:
+            state.session_ids.pop("planning", None)
+            self._state_mgr.save(state)
+        resume_session_id = (
+            state.session_ids.get("planning")
+            if is_iteration and self._config.sessions.enable_planning_resume
+            else None
+        )
+
+        def clear_resume_on_retry() -> None:
+            nonlocal resume_session_id
+            resume_session_id = None
+
         try:
-            result = self._invoke_with_retries(
+            invoke_result = self._invoke_with_retries(
                 state,
                 retry_key="planning",
                 retries=self._retry_limit("planning"),
                 spinner_label="Planning",
-                invoke=lambda current_prompt: adapter.invoke(
+                invoke=lambda current_prompt: self._invoke_adapter_json(
+                    adapter,
                     current_prompt,
                     self._repo_root,
-                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
                         "planning",
-                        self._phase_cli("planning", config_name="planner"),
+                        cli_name,
                     ),
                     model_override=self._resolve_model_for_phase(
                         "planning",
-                        self._phase_cli("planning", config_name="planner"),
+                        cli_name,
+                        state,
                     ),
+                    resume_session_id=resume_session_id,
                 ),
                 initial_prompt=prompt,
+                on_retry=clear_resume_on_retry,
             )
         except BlockedOnCLI as exc:
             return self._transition(
@@ -410,10 +576,14 @@ class Engine:
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
 
+        result = invoke_result.data
+        if invoke_result.session_id:
+            state.session_ids["planning"] = invoke_result.session_id
         state.plan_id = self._artifacts.save_plan(state.run_id, result)
         state.feasibility_id = None
         state.review_id = None
         state.adjudication_id = None
+        state.debate_state = None
         self._artifacts.clear_feedback(state.run_id, "planning")
         self._artifacts.clear_execution_manifest(state.run_id)
         state.error = None
@@ -439,6 +609,11 @@ class Engine:
                 current_phase=WorkflowStatus.APPROVAL_PLAN.value,
             )
         self._artifacts.clear_processed_approval(state.run_id, "plan")
+        if decision.get("decision") == "full_reject":
+            return self._terminate_run(
+                state,
+                str(decision.get("reason") or "Plan rejected by user"),
+            )
         if decision.get("decision") == "reject":
             self._artifacts.save_feedback(
                 state.run_id,
@@ -453,6 +628,11 @@ class Engine:
     def _run_feasibility(self, state: RunState) -> RunState:
         if not self._config.feasibility.enabled:
             return self._transition(state, WorkflowStatus.EXECUTING)
+
+        if state.feasibility_id:
+            existing = self._artifacts.read_json(state.feasibility_id)
+            if existing.get("verdict") == "blocked":
+                return self._handle_feasibility_blocked(state, existing)
 
         schema = load_bundled_schema("feasibility.schema.json")
         plan = self._require_artifact(state.plan_id)
@@ -487,22 +667,22 @@ class Engine:
         self._artifacts.save_prompt(f"feasibility-{state.run_id[:8]}.md", prompt)
 
         try:
-            result = self._invoke_with_retries(
+            invoke_result = self._invoke_with_retries(
                 state,
                 retry_key="feasibility",
                 retries=self._retry_limit("feasibility"),
                 spinner_label="Checking feasibility",
-                invoke=lambda current_prompt: adapter.invoke(
+                invoke=lambda current_prompt: self._invoke_adapter_json(
+                    adapter,
                     current_prompt,
                     worktree_dir,
-                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
                         "feasibility",
                         cli_name,
                     ),
-                    model_override=self._resolve_model_for_phase("feasibility", cli_name),
+                    model_override=self._resolve_model_for_phase("feasibility", cli_name, state),
                 ),
                 initial_prompt=prompt,
             )
@@ -519,6 +699,7 @@ class Engine:
             if result_path.exists():
                 result_path.unlink()
 
+        result = invoke_result.data
         state.feasibility_id = self._artifacts.save_feasibility(state.run_id, result)
         state.error = None
         self._state_mgr.save(state)
@@ -526,9 +707,52 @@ class Engine:
         if result["verdict"] in {"go", "go_with_warnings"}:
             return self._transition(state, WorkflowStatus.EXECUTING)
 
-        if state.replan_count >= self._replan_limit():
-            return self._fail_run(state, "Replan loop limit exceeded")
+        return self._handle_feasibility_blocked(state, result)
 
+    def _handle_feasibility_blocked(
+        self,
+        state: RunState,
+        result: dict[str, Any],
+    ) -> RunState:
+        decision = self._artifacts.consume_approval_decision(state.run_id, "feasibility")
+        if decision is None:
+            return self._transition(
+                state,
+                WorkflowStatus.PAUSED,
+                current_phase=WorkflowStatus.FEASIBILITY.value,
+                error="Feasibility check is blocked. Awaiting operator decision.",
+            )
+        self._artifacts.clear_processed_approval(state.run_id, "feasibility")
+        decision_value = str(decision.get("decision") or "")
+        if decision_value in {"approve", "approve_claude", "override"}:
+            state.error = None
+            self._state_mgr.save(state)
+            return self._transition(state, WorkflowStatus.EXECUTING)
+        if decision_value in {"full_reject", "approve_codex"}:
+            return self._terminate_run(
+                state,
+                str(decision.get("reason") or "Feasibility rejected by user"),
+            )
+        if decision_value != "reject":
+            return self._transition(
+                state,
+                WorkflowStatus.PAUSED,
+                current_phase=WorkflowStatus.FEASIBILITY.value,
+                error=f"Unsupported feasibility decision: {decision_value}",
+            )
+
+        if state.feasibility_replan_count >= self._config.feasibility.max_feasibility_replans:
+            return self._transition(
+                state,
+                WorkflowStatus.PAUSED,
+                current_phase=WorkflowStatus.FEASIBILITY.value,
+                error=(
+                    "Feasibility replan limit reached. Approve with Claude's plan, "
+                    "approve with Codex's assessment, or full-reject."
+                ),
+            )
+
+        state.feasibility_replan_count += 1
         state.replan_count += 1
         self._state_mgr.save(state)
         issues = [
@@ -539,11 +763,9 @@ class Engine:
         if issues:
             feedback = (feedback + "\n\nBlocking issues:\n" + "\n".join(issues)).strip()
         self._artifacts.save_feedback(state.run_id, "planning", feedback)
-        if state.is_workspace:
-            self._reset_workspace_repos(state)
-        else:
-            self._discard_worktree(state, force=True)
         self._artifacts.clear_execution_manifest(state.run_id)
+        state.feasibility_id = None
+        self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.PLANNING)
 
     def _run_execution(self, state: RunState) -> RunState:
@@ -589,10 +811,10 @@ class Engine:
                     schema_json=json_block(schema),
                     workspace_trees=self._workspace_trees(state, max_depth=2),
                 )
-                invoke = lambda current_prompt, step_number=step_number: worker.invoke(
+                invoke = lambda current_prompt, step_number=step_number: self._invoke_adapter_json(
+                    worker,
                     current_prompt,
                     worktree_dir,
-                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     step_number=step_number,
                     reasoning_effort_override=self._resolve_effort_for_phase(
@@ -600,7 +822,7 @@ class Engine:
                         "executing",
                         worker_name,
                     ),
-                    model_override=self._resolve_model_for_phase("executing", worker_name),
+                    model_override=self._resolve_model_for_phase("executing", worker_name, state),
                 )
             else:
                 prompt = build_execution_prompt_claude(
@@ -610,22 +832,22 @@ class Engine:
                     schema_json=json_block(schema),
                     workspace_trees=self._workspace_trees(state, max_depth=2),
                 )
-                invoke = lambda current_prompt: worker.invoke(
+                invoke = lambda current_prompt: self._invoke_adapter_json(
+                    worker,
                     current_prompt,
                     worktree_dir,
-                    self._config.orchestrator.watchdog_timeout,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
                         "executing",
                         worker_name,
                     ),
-                    model_override=self._resolve_model_for_phase("executing", worker_name),
+                    model_override=self._resolve_model_for_phase("executing", worker_name, state),
                 )
 
             attempt_number = 0
 
-            def invoke_and_enforce_status(current_prompt: str) -> dict[str, Any]:
+            def invoke_and_enforce_status(current_prompt: str) -> InvokeResult:
                 nonlocal attempt_number
                 if attempt_number > 0:
                     self._artifacts.clear_pending_step_result(step_number)
@@ -634,7 +856,8 @@ class Engine:
                     else:
                         self._reset_worktree(worktree_dir)
                 attempt_number += 1
-                result = invoke(current_prompt)
+                invoke_result = self._coerce_invoke_result(invoke(current_prompt))
+                result = invoke_result.data
                 if result.get("status") == "failed":
                     detail = str(result.get("summary") or "Execution step reported failure")
                     issues = result.get("issues") or []
@@ -646,12 +869,12 @@ class Engine:
                     )
                 if state.is_workspace:
                     result["workspace_diffs"] = self._collect_workspace_diffs(state)
-                return result
+                return InvokeResult(data=result, session_id=invoke_result.session_id)
 
             self._artifacts.save_prompt(f"step-{step_number}.md", prompt)
 
             try:
-                result = self._invoke_with_retries(
+                invoke_result = self._invoke_with_retries(
                     state,
                     retry_key=f"step-{step_number}",
                     retries=self._retry_limit("executing"),
@@ -669,6 +892,7 @@ class Engine:
             except StepFailure as exc:
                 return self._fail_run(state, self._format_step_failure(exc))
 
+            result = invoke_result.data
             self._commit_worktree_step(state, worktree_dir, step_number, step["description"])
             reference = self._artifacts.save_step_result(state.run_id, step_number, result)
             self._update_step_result_reference(state, step_number, reference)
@@ -709,24 +933,26 @@ class Engine:
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter_for_phase("reviewing")
         cli_name = self._phase_cli("reviewing", config_name="reviewer")
+        state.session_ids.pop("reviewing", None)
+        self._state_mgr.save(state)
 
         try:
-            result = self._invoke_with_retries(
+            invoke_result = self._invoke_with_retries(
                 state,
                 retry_key="reviewing",
                 retries=self._retry_limit("reviewing"),
                 spinner_label="Reviewing changes",
-                invoke=lambda current_prompt: adapter.invoke(
+                invoke=lambda current_prompt: self._invoke_adapter_json(
+                    adapter,
                     current_prompt,
-                    self._repo_root,
-                    self._config.orchestrator.watchdog_timeout,
+                    review_root,
                     schema,
                     reasoning_effort_override=self._resolve_effort_for_phase(
                         state,
                         "reviewing",
                         cli_name,
                     ),
-                    model_override=self._resolve_model_for_phase("reviewing", cli_name),
+                    model_override=self._resolve_model_for_phase("reviewing", cli_name, state),
                 ),
                 initial_prompt=review_prompt,
             )
@@ -740,6 +966,9 @@ class Engine:
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
 
+        result = invoke_result.data
+        if invoke_result.session_id:
+            state.session_ids["reviewing"] = invoke_result.session_id
         state.review_id = self._artifacts.save_review(state.run_id, result)
         state.error = None
         self._state_mgr.save(state)
@@ -809,21 +1038,46 @@ class Engine:
         return list(dict.fromkeys(path.strip() for path in result.stdout.splitlines() if path.strip()))
 
     def _run_adjudication(self, state: RunState) -> RunState:
+        if state.debate_state and state.debate_state.debate_phase == DebatePhase.USER_TIEBREAKER:
+            return self._debate_user_tiebreaker(state)
+        if state.debate_state is None:
+            state.debate_state = DebateState()
+            self._state_mgr.save(state)
+
+        try:
+            phase = DebatePhase(state.debate_state.debate_phase)
+            if phase == DebatePhase.INITIAL_ADJUDICATION:
+                return self._debate_initial_adjudication(state)
+            if phase == DebatePhase.CASE_A_ESCALATION:
+                return self._debate_case_a_escalation(state)
+            if phase == DebatePhase.CASE_B_ROUND1:
+                return self._debate_case_b_round1(state)
+            if phase == DebatePhase.CASE_B_CODEX_REBUTTAL:
+                return self._debate_case_b_codex_rebuttal(state)
+            if phase == DebatePhase.CASE_B_FINAL_CLAUDE:
+                return self._debate_case_b_final_claude(state)
+            if phase == DebatePhase.USER_TIEBREAKER:
+                return self._debate_user_tiebreaker(state)
+            if state.debate_state.final_verdict == "fix":
+                return self._debate_resolve_fix(state)
+            return self._debate_resolve_pass(state)
+        except BlockedOnCLI as exc:
+            return self._transition(
+                state,
+                WorkflowStatus.BLOCKED_ON_CLI,
+                current_phase=WorkflowStatus.ADJUDICATING.value,
+                error=str(exc),
+            )
+        except StepFailure as exc:
+            return self._fail_run(state, self._format_step_failure(exc))
+
+    def _debate_initial_adjudication(self, state: RunState) -> RunState:
         schema = load_bundled_schema("adjudication.schema.json")
         plan = self._require_artifact(state.plan_id)
         plan_step_numbers = {int(step["step_number"]) for step in plan["steps"]}
         validator = Validator(self._repo_root)
         review = self._require_artifact(state.review_id)
         task_description = state.normalized_task or state.task
-        adjudication_feedback = self._artifacts.load_feedback(state.run_id, "adjudication")
-        if adjudication_feedback:
-            task_description = (
-                task_description
-                + self._workspace_feedback_prefix(state)
-                + "\n\nMERGE REJECTION FEEDBACK:\n"
-                + adjudication_feedback
-            )
-
         prompt = build_adjudication_prompt(
             task_description=task_description,
             review_json=json_block(review),
@@ -835,26 +1089,34 @@ class Engine:
         cli_name = self._phase_cli("adjudicating", config_name="adjudicator")
 
         try:
-            result = self._invoke_with_retries(
+            invoke_result = self._invoke_with_retries(
                 state,
                 retry_key="adjudicating",
                 retries=self._retry_limit("adjudicating"),
                 spinner_label="Adjudicating result",
-                invoke=lambda current_prompt: self._validate_adjudication_result(
-                    adapter.invoke(
-                        current_prompt,
-                        self._repo_root,
-                        self._config.orchestrator.watchdog_timeout,
-                        schema,
-                        reasoning_effort_override=self._resolve_effort_for_phase(
-                            state,
-                            "adjudicating",
-                            cli_name,
-                        ),
-                        model_override=self._resolve_model_for_phase("adjudicating", cli_name),
-                    ),
-                    validator,
-                    plan_step_numbers,
+                invoke=lambda current_prompt: InvokeResult(
+                    data=self._validate_adjudication_result(
+                        self._coerce_invoke_result(
+                            self._invoke_adapter_json(
+                                adapter,
+                                current_prompt,
+                                self._repo_root,
+                                schema,
+                                reasoning_effort_override=self._resolve_effort_for_phase(
+                                    state,
+                                    "adjudicating",
+                                    cli_name,
+                                ),
+                                model_override=self._resolve_model_for_phase(
+                                    "adjudicating",
+                                    cli_name,
+                                    state,
+                                ),
+                            )
+                        ).data,
+                        validator,
+                        plan_step_numbers,
+                    )
                 ),
                 initial_prompt=prompt,
             )
@@ -868,36 +1130,355 @@ class Engine:
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
 
+        result = invoke_result.data
         state.adjudication_id = self._artifacts.save_adjudication(state.run_id, result)
         self._artifacts.clear_feedback(state.run_id, "adjudication")
+        review_has_issues = self._review_has_issues(review)
+        codex_has_issues = result.get("verdict") != "PASS"
+        self._record_debate_round(
+            state,
+            actor="codex",
+            model_used=self._resolve_model_for_phase("adjudicating", cli_name, state),
+            effort_used=self._resolve_effort_for_phase(state, "adjudicating", cli_name),
+            position="issues_confirmed" if codex_has_issues else "issues_dismissed",
+            reasoning=str(result.get("reasoning") or ""),
+            issues=self._issues_from_adjudication(result),
+        )
+
+        if review_has_issues and codex_has_issues:
+            state.debate_state.final_verdict = "fix"
+            state.debate_state.consolidated_issues = self._issues_from_review(review) + self._issues_from_adjudication(result)
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_fix(state)
+        if not review_has_issues and not codex_has_issues:
+            state.debate_state.final_verdict = "pass"
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_pass(state)
+        if review_has_issues:
+            state.debate_state.disagreement_case = "A"
+            state.debate_state.debate_phase = DebatePhase.CASE_A_ESCALATION
+        else:
+            state.debate_state.disagreement_case = "B"
+            state.debate_state.debate_phase = DebatePhase.CASE_B_ROUND1
+            state.debate_state.consolidated_issues = self._issues_from_adjudication(result)
+        self._state_mgr.save(state)
+        return self._run_adjudication(state)
+
+    def _debate_case_a_escalation(self, state: RunState) -> RunState:
+        review = self._require_artifact(state.review_id)
+        adjudication = self._require_artifact(state.adjudication_id)
+        response = self._invoke_claude_debate(
+            state,
+            adjudication_text=json_block(adjudication),
+            prompt_label="debate-case-a-claude",
+            model=self._config.debate.escalated_claude_model,
+            effort=self._config.debate.escalated_claude_effort,
+        )
+        issues_confirmed = response["position"] == "issues_confirmed"
+        self._record_debate_round(
+            state,
+            actor="claude",
+            model_used=self._config.debate.escalated_claude_model,
+            effort_used=self._config.debate.escalated_claude_effort,
+            position=response["position"],
+            reasoning=response["reasoning"],
+            issues=response.get("issues", []),
+        )
+        state.debate_state.final_verdict = "fix" if issues_confirmed else "pass"
+        state.debate_state.consolidated_issues = response.get("issues", []) or self._issues_from_review(review)
+        state.debate_state.debate_phase = DebatePhase.RESOLVED
+        self._state_mgr.save(state)
+        return self._debate_resolve_fix(state) if issues_confirmed else self._debate_resolve_pass(state)
+
+    def _debate_case_b_round1(self, state: RunState) -> RunState:
+        adjudication = self._require_artifact(state.adjudication_id)
+        response = self._invoke_claude_debate(
+            state,
+            adjudication_text=json_block(adjudication),
+            prompt_label="debate-case-b-claude",
+            model=self._resolve_model_for_phase("reviewing", "claude", state),
+            effort=self._resolve_effort_for_phase(state, "reviewing", "claude"),
+        )
+        self._record_debate_round(
+            state,
+            actor="claude",
+            model_used=self._resolve_model_for_phase("reviewing", "claude", state),
+            effort_used=self._resolve_effort_for_phase(state, "reviewing", "claude"),
+            position=response["position"],
+            reasoning=response["reasoning"],
+            issues=response.get("issues", []),
+        )
+        if response["position"] in {"issues_confirmed", "issues_accepted"}:
+            state.debate_state.final_verdict = "fix"
+            state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_fix(state)
+        state.debate_state.debate_phase = DebatePhase.CASE_B_CODEX_REBUTTAL
+        self._state_mgr.save(state)
+        return self._run_adjudication(state)
+
+    def _debate_case_b_codex_rebuttal(self, state: RunState) -> RunState:
+        adjudication = self._require_artifact(state.adjudication_id)
+        claude_round = state.debate_state.rounds[-1] if state.debate_state and state.debate_state.rounds else None
+        response = self._invoke_codex_debate(
+            state,
+            adjudication_text=json_block(adjudication),
+            claude_rebuttal=json_block(claude_round.model_dump(mode="json") if claude_round else {}),
+            effort=self._config.debate.escalated_codex_effort,
+        )
+        self._record_debate_round(
+            state,
+            actor="codex",
+            model_used=self._resolve_model_for_phase("adjudicating", "codex", state),
+            effort_used=self._config.debate.escalated_codex_effort,
+            position=response["position"],
+            reasoning=response["reasoning"],
+            issues=response.get("issues", []),
+        )
+        if response["position"] == "issues_dismissed":
+            state.debate_state.final_verdict = "pass"
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_pass(state)
+        state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
+        state.debate_state.debate_phase = DebatePhase.CASE_B_FINAL_CLAUDE
+        self._state_mgr.save(state)
+        return self._run_adjudication(state)
+
+    def _debate_case_b_final_claude(self, state: RunState) -> RunState:
+        adjudication = self._require_artifact(state.adjudication_id)
+        response = self._invoke_claude_debate(
+            state,
+            adjudication_text=json_block(adjudication),
+            prompt_label="debate-case-b-final-claude",
+            model=self._config.debate.escalated_claude_model,
+            effort=self._config.debate.escalated_claude_effort,
+        )
+        self._record_debate_round(
+            state,
+            actor="claude",
+            model_used=self._config.debate.escalated_claude_model,
+            effort_used=self._config.debate.escalated_claude_effort,
+            position=response["position"],
+            reasoning=response["reasoning"],
+            issues=response.get("issues", []),
+        )
+        if response["position"] in {"issues_confirmed", "issues_accepted"}:
+            state.debate_state.final_verdict = "fix"
+            state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_fix(state)
+        state.debate_state.debate_phase = DebatePhase.USER_TIEBREAKER
+        self._state_mgr.save(state)
+        return self._transition(
+            state,
+            WorkflowStatus.PAUSED,
+            current_phase=WorkflowStatus.ADJUDICATING.value,
+            error="Claude and Codex disagree. Awaiting debate tiebreaker decision.",
+        )
+
+    def _debate_user_tiebreaker(self, state: RunState) -> RunState:
+        decision = self._artifacts.consume_approval_decision(state.run_id, "debate_tiebreaker")
+        if decision is None:
+            return self._transition(
+                state,
+                WorkflowStatus.PAUSED,
+                current_phase=WorkflowStatus.ADJUDICATING.value,
+                error="Awaiting debate tiebreaker decision.",
+            )
+        self._artifacts.clear_processed_approval(state.run_id, "debate_tiebreaker")
+        value = str(decision.get("decision") or "")
+        if value == "fix":
+            state.debate_state.final_verdict = "fix"
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_fix(state)
+        if value == "pass":
+            state.debate_state.final_verdict = "pass"
+            state.debate_state.debate_phase = DebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_pass(state)
+        return self._transition(
+            state,
+            WorkflowStatus.PAUSED,
+            current_phase=WorkflowStatus.ADJUDICATING.value,
+            error="Tiebreaker decision must be 'fix' or 'pass'.",
+        )
+
+    def _debate_resolve_fix(self, state: RunState) -> RunState:
+        issues = state.debate_state.consolidated_issues if state.debate_state else []
+        feedback = "Issues to fix:\n" + json_block(issues)
+        feedback += "\n\nDebate transcript:\n" + self._debate_history_text(state)
+        self._artifacts.save_feedback(state.run_id, "planning", feedback)
+        state.fix_iteration_count += 1
+        state.session_ids.pop("planning", None)
+        state.error = None
+        self._artifacts.clear_execution_manifest(state.run_id)
+        self._state_mgr.save(state)
+        return self._transition(state, WorkflowStatus.PLANNING)
+
+    def _debate_resolve_pass(self, state: RunState) -> RunState:
         state.error = None
         self._state_mgr.save(state)
+        return self._transition(state, WorkflowStatus.MERGING)
 
-        verdict = result["verdict"]
-        if verdict == "PASS":
-            return self._transition(state, WorkflowStatus.MERGING)
-        if verdict == "REWORK":
-            state.rework_count += 1
+    def _invoke_claude_debate(
+        self,
+        state: RunState,
+        *,
+        adjudication_text: str,
+        prompt_label: str,
+        model: str | None,
+        effort: str | None,
+    ) -> dict[str, Any]:
+        schema = load_bundled_schema("debate_response.schema.json")
+        review = self._require_artifact(state.review_id)
+        prompt = build_debate_claude_rebuttal_prompt(
+            review=json_block(review),
+            adjudication=adjudication_text,
+            debate_history=self._debate_history_text(state),
+            task=state.normalized_task or state.task,
+            diff=redact_secret_text(self._implementation_diff(state)),
+            schema_json=json_block(schema),
+        )
+        self._artifacts.save_prompt(f"{prompt_label}-{state.run_id[:8]}.md", prompt)
+        adapter = self._adapter("claude")
+        invoke_result = self._invoke_with_retries(
+            state,
+            retry_key=prompt_label,
+            retries=self._retry_limit("adjudicating"),
+            spinner_label="Claude debate",
+            invoke=lambda current_prompt: self._invoke_adapter_json(
+                adapter,
+                current_prompt,
+                self._repo_root,
+                schema,
+                reasoning_effort_override=effort,
+                model_override=model,
+                resume_session_id=(
+                    state.session_ids.get("reviewing")
+                    if self._config.sessions.enable_review_resume
+                    else None
+                ),
+            ),
+            initial_prompt=prompt,
+        )
+        if invoke_result.session_id:
+            state.session_ids["reviewing"] = invoke_result.session_id
             self._state_mgr.save(state)
-            if state.rework_count > self._rework_limit():
-                return self._fail_run(state, "Rework loop limit exceeded")
-            self._artifacts.clear_execution_manifest(state.run_id)
-            return self._transition(state, WorkflowStatus.EXECUTING)
-        if verdict == "REPLAN":
-            state.replan_count += 1
-            self._state_mgr.save(state)
-            if state.replan_count > self._replan_limit():
-                return self._fail_run(state, "Replan loop limit exceeded")
-            if state.is_workspace:
-                self._reset_workspace_repos(state)
-            else:
-                self._discard_worktree(state, force=True)
-            state.step_results = []
-            state.review_id = None
-            self._state_mgr.save(state)
-            self._artifacts.clear_execution_manifest(state.run_id)
-            return self._transition(state, WorkflowStatus.PLANNING)
-        return self._fail_run(state, str(result.get("failure_reason") or "Adjudication failed"))
+        return invoke_result.data
+
+    def _invoke_codex_debate(
+        self,
+        state: RunState,
+        *,
+        adjudication_text: str,
+        claude_rebuttal: str,
+        effort: str | None,
+    ) -> dict[str, Any]:
+        schema = load_bundled_schema("debate_response.schema.json")
+        prompt = build_debate_codex_rebuttal_prompt(
+            adjudication=adjudication_text,
+            claude_rebuttal=claude_rebuttal,
+            debate_history=self._debate_history_text(state),
+            task=state.normalized_task or state.task,
+            step_results=json_block(self._load_step_results(state)),
+            schema_json=json_block(schema),
+        )
+        self._artifacts.save_prompt(f"debate-codex-{state.run_id[:8]}.md", prompt)
+        adapter = self._adapter("codex")
+        invoke_result = self._invoke_with_retries(
+            state,
+            retry_key="debate-codex",
+            retries=self._retry_limit("adjudicating"),
+            spinner_label="Codex debate",
+            invoke=lambda current_prompt: self._invoke_adapter_json(
+                adapter,
+                current_prompt,
+                self._repo_root,
+                schema,
+                reasoning_effort_override=effort,
+                model_override=self._resolve_model_for_phase("adjudicating", "codex", state),
+            ),
+            initial_prompt=prompt,
+        )
+        return invoke_result.data
+
+    def _record_debate_round(
+        self,
+        state: RunState,
+        *,
+        actor: str,
+        model_used: str | None,
+        effort_used: str | None,
+        position: str,
+        reasoning: str,
+        issues: list[dict[str, Any]],
+    ) -> None:
+        if state.debate_state is None:
+            state.debate_state = DebateState()
+        round_number = len(state.debate_state.rounds)
+        payload = {
+            "round_number": round_number,
+            "actor": actor,
+            "model_used": model_used,
+            "effort_used": effort_used,
+            "position": position,
+            "reasoning": reasoning,
+            "issues": issues,
+        }
+        ref = self._artifacts.save_debate_round(state.run_id, round_number, payload)
+        state.debate_state.rounds.append(
+            DebateRound(
+                **payload,
+                artifact_ref=ref,
+            )
+        )
+        self._state_mgr.save(state)
+
+    @staticmethod
+    def _review_has_issues(review: dict[str, Any]) -> bool:
+        if review.get("blocks_merge"):
+            return True
+        if review.get("verdict") != "approve":
+            return True
+        return any(
+            finding.get("severity") in {"critical", "major"}
+            for finding in review.get("findings", [])
+            if isinstance(finding, dict)
+        )
+
+    @staticmethod
+    def _issues_from_review(review: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            dict(finding)
+            for finding in review.get("findings", [])
+            if isinstance(finding, dict)
+        ]
+
+    @staticmethod
+    def _issues_from_adjudication(adjudication: dict[str, Any]) -> list[dict[str, Any]]:
+        if adjudication.get("verdict") == "PASS":
+            return []
+        description = (
+            adjudication.get("rework_feedback")
+            or adjudication.get("replan_feedback")
+            or adjudication.get("failure_reason")
+            or adjudication.get("reasoning")
+            or "Adjudicator requested fixes."
+        )
+        return [{"severity": "major", "description": str(description)}]
+
+    def _debate_history_text(self, state: RunState) -> str:
+        if not state.debate_state or not state.debate_state.rounds:
+            return ""
+        return json_block(
+            [round_item.model_dump(mode="json") for round_item in state.debate_state.rounds]
+        )
 
     def _run_merge(self, state: RunState) -> RunState:
         base_branch = self._config.worktree.base_branch
@@ -988,16 +1569,17 @@ class Engine:
         spinner_label: str,
         invoke: Any,
         initial_prompt: str,
-    ) -> dict[str, Any]:
+        on_retry: Any | None = None,
+    ) -> InvokeResult:
         prompt = initial_prompt
         attempt = 0
         while True:
             try:
                 if self._ui is None:
-                    result = invoke(prompt)
+                    result = self._coerce_invoke_result(invoke(prompt))
                 else:
                     with self._ui.phase_spinner(f"{spinner_label} (attempt {attempt + 1}/{retries})"):
-                        result = invoke(prompt)
+                        result = self._coerce_invoke_result(invoke(prompt))
             except BlockedOnCLI:
                 raise
             except StepFailure as exc:
@@ -1006,6 +1588,8 @@ class Engine:
                 self._state_mgr.save(state)
                 if attempt >= retries:
                     raise
+                if on_retry is not None:
+                    on_retry()
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
                     error_message=self._format_step_failure(exc),
@@ -1015,6 +1599,185 @@ class Engine:
             state.retry_counts[retry_key] = 0
             self._state_mgr.save(state)
             return result
+
+    @staticmethod
+    def _coerce_invoke_result(result: Any) -> InvokeResult:
+        if isinstance(result, InvokeResult):
+            return result
+        if isinstance(result, dict):
+            return InvokeResult(data=result)
+        raise StepFailure("Adapter returned an unsupported result type")
+
+    def _invoke_adapter_text(
+        self,
+        adapter: Any,
+        prompt: str,
+        working_dir: Path,
+        spinner_label: str,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+        legacy_fallback_text: str | None = None,
+    ) -> str:
+        def invoke() -> str:
+            if hasattr(adapter, "invoke_text"):
+                kwargs = {
+                    "reasoning_effort_override": reasoning_effort_override,
+                    "model_override": model_override,
+                    "resume_session_id": resume_session_id,
+                }
+                try:
+                    return adapter.invoke_text(
+                        prompt,
+                        working_dir,
+                        self._config.orchestrator.watchdog_timeout,
+                        **kwargs,
+                    )
+                except TypeError as exc:
+                    if "resume_session_id" not in str(exc):
+                        raise
+                    kwargs.pop("resume_session_id", None)
+                    return adapter.invoke_text(
+                        prompt,
+                        working_dir,
+                        self._config.orchestrator.watchdog_timeout,
+                        **kwargs,
+                    )
+            if legacy_fallback_text is not None:
+                return legacy_fallback_text
+            schema = load_bundled_schema("scoping.schema.json")
+            result = self._coerce_invoke_result(
+                self._invoke_adapter_json(
+                    adapter,
+                    prompt,
+                    working_dir,
+                    schema,
+                    reasoning_effort_override=reasoning_effort_override,
+                    model_override=model_override,
+                    resume_session_id=resume_session_id,
+                )
+            )
+            return self._scope_md_from_scoping_result(result.data)
+
+        if self._ui is None:
+            return invoke()
+        with self._ui.phase_spinner(spinner_label):
+            return invoke()
+
+    def _invoke_adapter_json(
+        self,
+        adapter: Any,
+        prompt: str,
+        working_dir: Path,
+        schema: dict[str, Any],
+        *,
+        step_number: int | None = None,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+    ) -> Any:
+        kwargs = {
+            "step_number": step_number,
+            "reasoning_effort_override": reasoning_effort_override,
+            "model_override": model_override,
+            "resume_session_id": resume_session_id,
+        }
+        try:
+            return adapter.invoke(
+                prompt,
+                working_dir,
+                self._config.orchestrator.watchdog_timeout,
+                schema,
+                **kwargs,
+            )
+        except TypeError as exc:
+            if "resume_session_id" not in str(exc):
+                raise
+            kwargs.pop("resume_session_id", None)
+            return adapter.invoke(
+                prompt,
+                working_dir,
+                self._config.orchestrator.watchdog_timeout,
+                schema,
+                **kwargs,
+            )
+
+    @staticmethod
+    def _scope_md_from_scoping_result(result: dict[str, Any]) -> str:
+        key_files = result.get("key_files") or []
+        key_file_lines = "\n".join(f"  - {path}" for path in key_files) or "  - README.md"
+        return (
+            "---\n"
+            f"normalized_task: {result.get('normalized_task', '')}\n"
+            f"complexity_tier: {result.get('complexity_tier', 'moderate')}\n"
+            f"actionable: {str(result.get('actionable', True)).lower()}\n"
+            "key_files:\n"
+            f"{key_file_lines}\n"
+            f"context: {result.get('blocking_reason') or 'Scoped from legacy JSON result.'}\n"
+            "---\n\n"
+            f"{result.get('normalized_task', '')}\n"
+        )
+
+    @staticmethod
+    def _scope_review_agreed(markdown: str) -> bool:
+        frontmatter = Engine._parse_scope_frontmatter(markdown)
+        if "agreement" in frontmatter:
+            return Engine._coerce_bool(frontmatter["agreement"], default=False)
+        lowered = markdown.lower()
+        if re.search(r"\bagreement\s*:\s*true\b", lowered):
+            return True
+        if re.search(r"\bagree[s]?\b", lowered) and "disagree" not in lowered:
+            return True
+        return False
+
+    @staticmethod
+    def _parse_scope_frontmatter(markdown: str) -> dict[str, Any]:
+        text = markdown.strip()
+        if not text.startswith("---"):
+            return {}
+        end = text.find("\n---", 3)
+        if end == -1:
+            return {}
+        block = text[3:end].strip()
+        parsed: dict[str, Any] = {}
+        current_key: str | None = None
+        for raw_line in block.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("-") and current_key:
+                parsed.setdefault(current_key, []).append(stripped[1:].strip().strip("'\""))
+                continue
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            current_key = key
+            if not value:
+                parsed[key] = []
+            elif value.startswith("[") and value.endswith("]"):
+                try:
+                    parsed[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    parsed[key] = value
+            else:
+                parsed[key] = value.strip("'\"")
+        return parsed
+
+    @staticmethod
+    def _coerce_bool(value: Any, *, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "1"}:
+                return True
+            if lowered in {"false", "no", "0"}:
+                return False
+        return default
 
     def _adapter_for_phase(self, phase_name: str) -> Any:
         cli_name = self._phase_cli(
@@ -1068,22 +1831,26 @@ class Engine:
 
         return getattr(getattr(self._config.routing, cli_name), "reasoning_effort", "") or None
 
-    def _resolve_model_for_phase(self, phase_name: str, cli_name: str) -> str | None:
+    def _resolve_model_for_phase(
+        self,
+        phase_name: str,
+        cli_name: str,
+        state: RunState | None = None,
+    ) -> str | None:
         override = self._config.routing.phases.get(phase_name)
         if override and override.model:
             return override.model
+        complexity_tier = state.complexity_tier if state else None
+        if override and complexity_tier:
+            tier_model = getattr(override, f"model_{complexity_tier}", "")
+            if tier_model:
+                return tier_model
         return getattr(getattr(self._config.routing, cli_name), "model", "") or None
 
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries
         phase_limit = self._workflow.phase(workflow_phase).retries
         return config_limit or phase_limit
-
-    def _rework_limit(self) -> int:
-        return self._config.orchestrator.max_rework_loops
-
-    def _replan_limit(self) -> int:
-        return self._config.orchestrator.max_replan_loops
 
     def _ensure_worktree(self, state: RunState) -> Path:
         if state.is_workspace:
@@ -1128,7 +1895,12 @@ class Engine:
             return manifest
 
         adjudication = self._artifacts.read_json(state.adjudication_id) if state.adjudication_id else None
-        if adjudication and adjudication.get("verdict") == "REWORK":
+        if state.fix_iteration_count > 0 and self._artifacts.load_feedback(state.run_id, "planning") is None:
+            target_steps = [step["step_number"] for step in plan["steps"]]
+            completed_steps = []
+            feedback = None
+            mode = "fix"
+        elif adjudication and adjudication.get("verdict") == "REWORK":
             target_steps = list(adjudication.get("rework_steps") or [])
             feedback = adjudication.get("rework_feedback")
             completed_steps: list[int] = []
@@ -1360,6 +2132,9 @@ class Engine:
         return self._artifacts.read_json(reference)
 
     def _update_step_result_reference(self, state: RunState, step_number: int, reference: str) -> None:
+        if state.fix_iteration_count > 0:
+            state.step_results.append(reference)
+            return
         existing: dict[int, str] = {}
         for ref in state.step_results:
             payload = self._artifacts.read_json(ref)
@@ -1371,6 +2146,8 @@ class Engine:
         return {
             "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
+            "feasibility": WorkflowStatus.FEASIBILITY.value,
+            "debate_tiebreaker": WorkflowStatus.ADJUDICATING.value,
         }[gate]
 
     def _workspace_feedback_prefix(self, state: RunState) -> str:
@@ -1442,6 +2219,7 @@ class Engine:
             self._discard_worktree(state, force=True)
         except Exception:
             pass
+        self._create_execution_history(state, terminal_reason=message)
         self._artifacts.clear_execution_manifest(state.run_id)
         return self._transition(
             state,
@@ -1449,6 +2227,48 @@ class Engine:
             current_phase=state.current_phase,
             error=message,
         )
+
+    def _terminate_run(self, state: RunState, message: str) -> RunState:
+        self._create_execution_history(state, terminal_reason=message)
+        self._artifacts.clear_execution_manifest(state.run_id)
+        return self._transition(
+            state,
+            WorkflowStatus.TERMINATED,
+            current_phase=state.current_phase,
+            error=message,
+        )
+
+    def _create_execution_history(self, state: RunState, *, terminal_reason: str) -> str:
+        lines = [
+            f"# Execution History: {state.run_id}",
+            "",
+            f"Task: {state.task}",
+            f"Status: {state.status}",
+            f"Current phase: {state.current_phase}",
+            f"Terminal reason: {terminal_reason}",
+            "",
+            "## Scoping",
+            f"- Scope: {state.scope_md_ref or '<none>'}",
+            f"- Claude scope: {state.claude_scope_ref or '<none>'}",
+            f"- Codex scope: {state.codex_scope_ref or '<none>'}",
+            f"- Normalized task: {state.normalized_task or '<none>'}",
+            f"- Complexity: {state.complexity_tier or '<none>'}",
+            "",
+            "## Artifacts",
+            f"- Plan: {state.plan_id or '<none>'}",
+            f"- Feasibility: {state.feasibility_id or '<none>'}",
+            f"- Review: {state.review_id or '<none>'}",
+            f"- Adjudication: {state.adjudication_id or '<none>'}",
+            "",
+            "## Step Results",
+        ]
+        lines.extend(f"- {reference}" for reference in state.step_results)
+        if not state.step_results:
+            lines.append("- <none>")
+        if state.debate_state:
+            lines.extend(["", "## Debate", self._debate_history_text(state) or "<none>"])
+        ref = self._artifacts.save_execution_history(state.run_id, "\n".join(lines) + "\n")
+        return ref
 
     @staticmethod
     def _validate_adjudication_result(

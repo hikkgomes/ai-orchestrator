@@ -150,7 +150,12 @@ orch logs <run-id> 3
 orch show latest plan
 orch approve latest plan
 orch approve <run-prefix> plan
+orch approve <run-id> feasibility --decision override
+orch approve <run-id> debate_tiebreaker --decision fix
+orch approve <run-id> debate_tiebreaker --decision pass
 orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
+orch reject <run-id> plan --full --reason "Do not continue"
+orch reject <run-id> feasibility --reason "Revise around the missing dependency"
 orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
 orch resume <run-id>
 orch sync
@@ -167,24 +172,25 @@ orch clean --all
 `orch` drives work through this pipeline:
 
 ```
-SCOPING -> PLANNING -> APPROVAL -> FEASIBILITY -> EXECUTING -> REVIEWING
-             ^                                                  |
-             |                                                  |
-             +--------------- replan <- ADJUDICATING <----------+
-                                         |
-                                         v
-                                       MERGING -> DONE
+SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING
+                         ^                    |              |
+                         |                    |              +-- blocked gate
+                         |                    +-- soft reject |
+                         +---- incremental fixes <---- ADJUDICATION(debate) <- REVIEWING(session)
+                                                          |
+                                                          v
+                                                       MERGING -> DONE
 ```
 
 Phase summary:
 
-1. Scoping: Claude normalizes the task and assigns a complexity tier.
-2. Planning: Claude generates a step-by-step plan.
-3. Plan approval: you approve or reject the plan.
-4. Feasibility: Codex or Claude checks that the plan is executable in your repo.
+1. Scoping: Claude and Codex debate the task and produce a canonical `scope.md`.
+2. Planning: Claude generates a step-by-step plan and resumes the same session on soft-reject feedback.
+3. Plan approval: you approve, soft-reject with comments, or full-reject and terminate.
+4. Feasibility: Codex checks that the plan is executable in your repo and pauses for an override/replan/termination decision when blocked.
 5. Execution: Codex or Claude implements each step.
-6. Review: Claude reviews the resulting diff.
-7. Adjudication: Codex or Claude decides whether to pass, rework, or replan.
+6. Review: Claude reviews the resulting diff and preserves the review session for debate.
+7. Adjudication: Codex and Claude debate disagreements. Fix cycles create incremental follow-up plans on top of the existing worktree.
 8. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
 
 The review phase can also use non-model evidence:
@@ -237,18 +243,30 @@ feasibility_checker = "codex"
 scoper = "claude"
 
 [routing.phases.planning]
-reasoning_effort = "medium"
+model_simple = "claude-sonnet-4-5-20250514"
+model_moderate = "claude-sonnet-4-5-20250514"
+model_complex = "claude-opus-4-5-20250514"
+model_architectural = "claude-opus-4-5-20250514"
 
 [scoping]
 enabled = true
+max_scoping_rounds = 5
 
 [feasibility]
 enabled = true
+max_feasibility_replans = 2
+
+[sessions]
+enable_planning_resume = true
+enable_review_resume = true
+
+[debate]
+escalated_claude_model = "claude-opus-4-5-20250514"
+escalated_claude_effort = "max"
+escalated_codex_effort = "xhigh"
 
 [orchestrator]
 max_retries = 3
-max_rework_loops = 3
-max_replan_loops = 2
 watchdog_timeout = 3600
 ```
 
@@ -256,6 +274,7 @@ Notes:
 
 - Complexity-based effort selection is built in.
 - Per-phase overrides in `[routing.phases.*]` win over complexity defaults.
+- Global rework/replan loop limits have been removed. Feasibility replans are capped by `feasibility.max_feasibility_replans`; plan soft-reject loops are operator-driven.
 - `watchdog_timeout` is a global hung-process safety net, not a per-phase runtime budget.
 
 ## Repo Files and Runtime Artifacts

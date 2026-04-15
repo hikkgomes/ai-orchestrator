@@ -50,9 +50,9 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-4: Fresh subprocess, not fresh session
+## DD-4: Fresh subprocess with explicit session resumption
 
-**Decision:** The "fresh context" guarantee means a fresh subprocess invocation per step. It does not mean the vendor CLI operates in a sandboxed environment.
+**Decision:** The orchestrator still launches a fresh subprocess for every vendor CLI call, but planning and review may explicitly resume the same Claude session when the workflow needs iterative refinement or debate continuity.
 
 **Context:** Feasibility Finding 3 correctly noted that vendor CLIs read persistent state from `HOME` (auth, caches, project metadata). A "fresh subprocess" is not the same as a "fresh model session."
 
@@ -60,8 +60,9 @@ This document records decisions made during design, including responses to the f
 1. Launch each CLI with a per-run HOME sandbox — would break auth, impractical
 2. Overstate isolation claims — misleading
 3. Downgrade the claim to "fresh subprocess invocation" and document what persists — honest
+4. Fresh subprocess plus explicit `--resume` only for phases that benefit from continuity — preserves process isolation while giving planning/review useful memory
 
-**Decision rationale:** Option 3. The orchestrator guarantees no transcript carry-over between its invocations. Vendor CLI local state (auth, caches) persists intentionally.
+**Decision rationale:** Option 4. Process isolation and environment filtering remain intact. Session continuity is now intentional state, captured in `RunState.session_ids`, and scoped to planning/review refinement loops.
 
 ---
 
@@ -135,13 +136,13 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-10: Keep review/adjudication loop in v1
+## DD-10: Remove global rework/replan loop limits
 
-**Decision:** The review → adjudication → rework/replan loop is retained in v1, contrary to Feasibility Finding 12's suggestion to cut it.
+**Decision:** The review/adjudication quality loop remains, but global `max_rework_loops` and `max_replan_loops` are removed. Fix cycles are worktree-preserving incremental plans, and human soft-reject loops are intentionally unbounded.
 
 **Context:** Finding 12 suggested cutting to "one planner, one executor, one optional review gate." This would remove the automated quality feedback loop, which is the core differentiator of this tool over a simple script.
 
-**Pushback:** The review/adjudication loop is not accidental complexity — it is the product. Without it, this is just a prompt runner. The loop is bounded by configurable limits (max 3 rework, max 2 replan), so it cannot cycle indefinitely. The complexity it adds is manageable within the single-worktree sequential model.
+**Decision rationale:** The old limits were attached to a discard-and-replan model. The new model preserves the worktree and asks for human input at feasibility and debate tiebreaker points. `orchestrator.max_retries` still bounds individual failed CLI invocations, and `feasibility.max_feasibility_replans` bounds feasibility-specific disagreement.
 
 ---
 
@@ -255,3 +256,19 @@ This document records decisions made during design, including responses to the f
 3. Use one long watchdog timeout for every phase — preserves a hang safety net without constraining healthy work
 
 **Decision rationale:** Option 3. A single watchdog is the correct boundary for the orchestrator: it protects against stuck processes while letting the underlying CLI decide when a normal task is complete.
+
+---
+
+## DD-23: Cross-model debate for scope and adjudication
+
+**Decision:** Scoping and adjudication are no longer single-shot outputs. Scoping starts with parallel Claude/Codex pre-scope notes and converges on a canonical `scope.md`. Adjudication compares Claude's review with Codex's judgment and escalates disagreement through a bounded debate tree.
+
+**Decision rationale:** The product relies on disagreement being useful rather than hidden. Claude owns canonical scope and review continuity; Codex has the final scoping review and first adjudication pass. When they disagree after escalation, the operator breaks the tie.
+
+---
+
+## DD-24: Preserve worktrees through fix cycles
+
+**Decision:** The engine no longer discards worktrees when feasibility or adjudication sends the run back to planning. Fix planning produces incremental steps that execute on top of existing changes.
+
+**Decision rationale:** Discarding the worktree erased useful implementation progress and made review fixes expensive. Preserving the worktree matches the actual developer workflow: keep the diff, plan the smallest correction, apply it, and review again.

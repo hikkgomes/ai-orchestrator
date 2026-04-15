@@ -43,6 +43,7 @@ ACTIVE_STATES = {
 TERMINAL_STATES = {
     WorkflowStatus.DONE.value,
     WorkflowStatus.FAILED.value,
+    WorkflowStatus.TERMINATED.value,
 }
 
 _ACTIVE_STATES = ACTIVE_STATES
@@ -60,6 +61,7 @@ _STATUS_STYLES = {
     WorkflowStatus.MERGING.value: "green",
     WorkflowStatus.DONE.value: "bold green",
     WorkflowStatus.FAILED.value: "bold red",
+    WorkflowStatus.TERMINATED.value: "bold yellow",
     WorkflowStatus.PAUSED.value: "yellow",
     WorkflowStatus.BLOCKED_ON_CLI.value: "bold yellow",
     WorkflowStatus.CONFLICT.value: "bold red",
@@ -316,6 +318,28 @@ class OrchestratorUI:
         )
         self.console.print(panel)
         return Confirm.ask(f"Approve {gate}?", console=self.console, default=True)
+
+    def approval_choice(
+        self,
+        gate: str,
+        context: str,
+        *,
+        choices: list[str],
+        default: str,
+    ) -> str:
+        """Prompt the user for a named gate decision."""
+        panel = Panel(
+            context + "\n\nOptions: " + ", ".join(choices),
+            title=f"{gate.title()} Decision",
+            border_style="yellow",
+        )
+        self.console.print(panel)
+        return Prompt.ask(
+            f"Decision for {gate}",
+            choices=choices,
+            default=default,
+            console=self.console,
+        )
 
     def rejection_reason(self, default: str) -> str:
         """Prompt for a rejection reason."""

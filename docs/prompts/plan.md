@@ -20,25 +20,19 @@ human input. The plan is the single source of truth for what the executor does.
 
 | Variable | Source | Description |
 |---|---|---|
-| `{task_description}` | run state (`normalized_task`) | Validated task from the define phase |
+| `{task_description}` | run state + `scope.md` | Validated task and canonical scope |
 | `{directory_tree}` | file system | Depth-3 tree of repo root, truncated to 50 000 chars |
 | `{key_file_contents}` | file system | Full contents of README, config, entry points; each file prefixed with its path |
 | `{plan_schema}` | `schemas/plan.schema.json` | Full JSON Schema for the plan artifact |
-| `{replan_feedback}` | prior adjudication (optional) | Populated only on replan loops; empty string on first attempt |
-| `{rework_count}` | run state | Number of prior rework loops (0 on first attempt) |
-| `{replan_count}` | run state | Number of prior replan loops (0 on first attempt) |
+| `{planning_feedback}` | human, feasibility, or debate feedback (optional) | Feedback for iterative refinement |
+| `{scope_md}` | scoping artifact | Canonical scope with YAML frontmatter |
 
 ---
 
 ## Escalation Policy
 
-**Increase reasoning effort** (set `--reasoning-effort high` if not already default) when:
-- `replan_count >= 1` (this is a replan loop; prior plan was rejected)
-- The repository has more than 50 files or multiple packages
-
-**Stop and set state = FAILED** (do not retry planning) when:
-- `replan_count >= max_replan_loops` — loop limit exceeded
-- The same `replan_feedback` appears twice with no change in the plan
+**Increase reasoning effort** according to `complexity_routing`; complex and
+architectural scopes may also route to a stronger model via phase model settings.
 
 **Stop and set state = PAUSED** (request human approval) when:
 - `approval.require_plan_approval = true` (always, after a valid plan is produced)
@@ -69,7 +63,8 @@ human input. The plan is the single source of truth for what the executor does.
 You are a software planning agent for an automated orchestrator. Your output
 will be executed without human review of individual steps. Plan conservatively.
 
-This is a single-pass invocation. You will receive no follow-up messages.
+This may be an iterative session. On soft-reject or feasibility feedback, the
+engine resumes the same Claude session with additional instructions.
 Do not ask questions. Do not explain your reasoning in prose outside the JSON.
 Do not produce markdown. Do not produce code.
 
@@ -82,7 +77,7 @@ REPOSITORY STRUCTURE:
 KEY FILE CONTENTS:
 {key_file_contents}
 
-{replan_section}
+{feedback_section}
 
 OUTPUT SCHEMA:
 {plan_schema}
@@ -104,17 +99,16 @@ RULES:
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
 
-### Replan section (injected only when `replan_count >= 1`)
+### Feedback section (injected only when feedback exists)
 
 ```
-PRIOR PLAN REJECTION:
-This is replan attempt {replan_count} of {max_replan_loops}.
-The previous plan was rejected for the following reason:
+ADDITIONAL FEEDBACK:
+The previous plan needs refinement for the following reason:
 
-{replan_feedback}
+{planning_feedback}
 
-You must produce a new plan that addresses this feedback. Do not repeat the
-same structure or approach that was rejected.
+Revise the plan to address this feedback. For adjudication fix cycles, produce
+only incremental follow-up steps on top of the existing worktree.
 ```
 
 ---

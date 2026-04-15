@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-orchestrator.dev/schemas/debate_response.schema.json",
+  "title": "DebateResponse",
+  "type": "object",
+  "required": ["position", "reasoning", "issues"],
+  "additionalProperties": false,
+  "properties": {
+    "position": {
+      "type": "string",
+      "enum": ["issues_confirmed", "issues_dismissed", "issues_accepted"]
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "description"],
+        "additionalProperties": true,
+        "properties": {
+          "severity": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

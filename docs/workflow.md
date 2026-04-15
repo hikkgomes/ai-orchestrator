@@ -4,20 +4,22 @@
 
 ## Workflow Phases
 
-Every orchestrated run moves through these phases in order. Each phase is a distinct CLI invocation (fresh subprocess). All mutating phases operate within a single worktree branch per run.
+Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Planning and review may resume the same vendor model session across refinement/debate turns. All mutating phases operate within a single preserved worktree branch per run.
 
-`workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides the supported routing, retry, timeout, and loop-limit values.
+`workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 ```
-INIT -> SCOPING -> PLANNING -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING -> REVIEWING
-         ^           ^                                          |
-         |           +------------------ REPLAN ----------------+
-         |
-         +---- reject/update task while paused at SCOPING
+INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING
+          ^                    ^                    |              |
+          |                    |                    |              +-- blocked gate
+          |                    |                    +-- soft reject |
+          |                    +---- incremental fixes <---- ADJUDICATING(debate) <- REVIEWING(session)
+          |
+          +---- reject/update task while paused at SCOPING
 
+ADJUDICATING -> PAUSED(debate_tiebreaker)
 ADJUDICATING -> MERGING -> DONE
-      |
-      +---- REWORK -> EXECUTING
+APPROVAL_PLAN/FEASIBILITY -> TERMINATED on full reject
 ```
 
 ---
@@ -28,14 +30,16 @@ ADJUDICATING -> MERGING -> DONE
 
 | Property | Value |
 |---|---|
-| Default CLI | `claude -p` |
-| Config key | `routing.scoper` |
+| Default CLI | `claude -p` and `codex exec` |
+| Config key | `routing.scoper` plus built-in cross-model debate |
 | Input | Raw task + repo summary + shallow directory tree |
-| Output | transient result validated against `scoping.schema.json` |
+| Output | `scoping/scope-<run>.md` with YAML frontmatter |
 | Worktree | No |
-| Retries | Up to `max_retries` on schema/validation failure |
+| Rounds | Codex review rounds capped by `scoping.max_scoping_rounds` |
 
-If the task is not actionable, the run pauses at the `SCOPING` gate. The operator can approve to continue anyway or reject with a replacement task, which re-runs scoping.
+Round 0 invokes Claude and Codex in parallel to produce independent pre-scope markdown. Claude then synthesizes canonical `scope.md`. Codex reviews it and either agrees or writes comments. Claude may update `scope.md`, but Codex always reviews again and never edits the canonical file.
+
+If the final scope is not actionable, the run pauses at the `SCOPING` gate. The operator can approve to continue anyway or reject with a replacement task, which re-runs scoping.
 
 ---
 
@@ -47,10 +51,11 @@ If the task is not actionable, the run pauses at the `SCOPING` gate. The operato
 |---|---|
 | Default CLI | `claude -p` |
 | Config key | `routing.planner` |
-| Input | User task description + repo file listing + any prior adjudication feedback |
+| Input | User task description + `scope.md` + repo file listing + any operator/feasibility/adjudication feedback |
 | Output | `plans/plan-<uuid>.json` validated against `plan.schema.json` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
+| Session | Fresh on first entry; `claude --resume <session-id>` for soft-reject and feasibility-blocked refinements |
 
 **Prompt construction:**
 
@@ -88,7 +93,11 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 | Behavior | Engine writes `PAUSED` state, prints plan summary to terminal, waits |
 | Resume | `aio approve <run-id> plan` or interactive prompt |
 
-When rejected (`aio reject <run-id> plan --reason "..."`), the rejection reason is fed back into Phase 1 as additional context and planning re-runs.
+Plan approval has three outcomes:
+
+- `orch approve <run-id> plan` proceeds.
+- `orch reject <run-id> plan --reason "..."` soft-rejects and resumes the same planning session with the feedback.
+- `orch reject <run-id> plan --full --reason "..."` writes execution history and transitions to `TERMINATED`.
 
 **Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to FEASIBILITY when enabled, otherwise EXECUTING.
 
@@ -107,7 +116,7 @@ When rejected (`aio reject <run-id> plan --reason "..."`), the rejection reason 
 | Worktree | Yes (read-only probe) |
 | Retries | Up to `max_retries` on schema failure |
 
-Blocked feasibility results feed back into replanning and consume the replan loop budget.
+Blocked feasibility results pause at the `feasibility` gate. The operator can approve an override, full-reject, or soft-reject back into the same planning session. Feasibility replans are capped by `feasibility.max_feasibility_replans`; after that, the operator must choose whether to proceed with Claude's plan, trust Codex's blocker, or terminate.
 
 ---
 
@@ -200,8 +209,9 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 | Config key | `routing.reviewer` |
 | Input | Original task + plan + step results + git diff from worktree |
 | Output | `reviews/review-<uuid>.json` validated against `review.schema.json` |
-| Worktree | No (reads diffs, does not mutate) |
+| Worktree | Uses the implementation worktree as working directory for review context |
 | Retries | Up to `max_retries` on schema failure |
+| Session | Fresh review session; session ID is preserved for adjudication debate |
 
 **Prompt construction:**
 
@@ -232,31 +242,20 @@ The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 
 ## Phase 7: ADJUDICATING
 
-**Purpose:** Decide whether the implementation passes review or needs rework.
+**Purpose:** Decide whether the implementation passes review or needs incremental fixes, using a Codex/Claude debate when they disagree.
 
 | Property | Value |
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.adjudicator` |
 | Input | Review JSON + step results + original task |
-| Output | `adjudications/adj-<uuid>.json` validated against `adjudication.schema.json` |
+| Output | `adjudications/adj-<uuid>.json` plus `adjudications/debate-round-*.json` |
 | Worktree | No |
 | Retries | Up to `max_retries` on schema failure |
 
-**Possible verdicts:**
+Agreement cases are direct: Claude issues + Codex agrees creates an incremental fix-planning pass; Claude clean + Codex agrees proceeds to merge. Disagreements resume the Claude review session, escalate to Opus/max when needed, and may ask the user for a `debate_tiebreaker` decision.
 
-- `PASS` — proceed to MERGING
-- `REWORK` — re-execute specific steps with feedback (loops back to Phase 3). Reworked steps execute in the same worktree, seeing all prior changes.
-- `REPLAN` — the plan itself is flawed; loop back to Phase 1 with feedback. The existing worktree is discarded and a new one is created.
-- `FAIL` — unrecoverable; stop the run
-
-**Loop limits:**
-
-| Loop | Max iterations | Config key |
-|---|---|---|
-| Step retry (same step, schema/timeout failure) | 3 | `orchestrator.max_retries` |
-| Rework loop (adjudication → re-execute) | 3 | `orchestrator.max_rework_loops` |
-| Replan loop (adjudication → re-plan) | 2 | `orchestrator.max_replan_loops` |
+Fix cycles never discard the worktree. A return to planning means a new incremental plan that sees the original task, `scope.md`, existing step results, current diff, review issues, and debate transcript.
 
 When any loop limit is hit, the run transitions to `FAILED` with a summary of all attempts.
 

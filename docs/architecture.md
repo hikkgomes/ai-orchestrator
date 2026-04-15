@@ -203,8 +203,6 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 ```toml
 [orchestrator]
 max_retries = 3
-max_rework_loops = 3
-max_replan_loops = 2
 watchdog_timeout = 3600
 
 [routing]
@@ -216,6 +214,23 @@ adjudicator = "codex"
 
 [routing.claude]
 reasoning_effort = "high"
+
+[scoping]
+enabled = true
+max_scoping_rounds = 5
+
+[feasibility]
+enabled = true
+max_feasibility_replans = 2
+
+[sessions]
+enable_planning_resume = true
+enable_review_resume = true
+
+[debate]
+escalated_claude_model = "claude-opus-4-5-20250514"
+escalated_claude_effort = "max"
+escalated_codex_effort = "xhigh"
 
 [approval]
 require_plan_approval = true

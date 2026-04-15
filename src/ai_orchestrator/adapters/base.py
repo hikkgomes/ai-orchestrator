@@ -104,6 +104,14 @@ class CommandResult:
     timed_out: bool = False
 
 
+@dataclass
+class InvokeResult:
+    """Validated adapter output plus optional vendor session metadata."""
+
+    data: dict[str, Any]
+    session_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Base adapter interface
 # ---------------------------------------------------------------------------
@@ -137,8 +145,9 @@ class BaseAdapter(ABC):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-    ) -> dict[str, Any]:
-        """Invoke the CLI with *prompt* and return a validated result dict.
+        resume_session_id: str | None = None,
+    ) -> InvokeResult:
+        """Invoke the CLI with *prompt* and return a validated result wrapper.
 
         Parameters
         ----------
@@ -156,11 +165,13 @@ class BaseAdapter(ABC):
             Optional phase-specific reasoning effort override.
         model_override:
             Optional phase-specific model override.
+        resume_session_id:
+            Optional vendor session ID to resume when the CLI supports it.
 
         Returns
         -------
-        dict
-            Validated JSON output from the CLI.
+        InvokeResult
+            Validated JSON output from the CLI and optional session ID.
 
         Raises
         ------
@@ -169,6 +180,19 @@ class BaseAdapter(ABC):
         BlockedOnCLI
             CLI needs interactive input or auth.  Do not retry.
         """
+
+    @abstractmethod
+    def invoke_text(
+        self,
+        prompt: str,
+        working_dir: Path,
+        timeout: int,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+    ) -> str:
+        """Invoke the CLI with *prompt* and return raw text output."""
 
     # ------------------------------------------------------------------
     # Shared helpers

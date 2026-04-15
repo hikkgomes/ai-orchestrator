@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..metadata import InvocationRecord
-from .base import BaseAdapter, BlockedOnCLI, StepFailure
+from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure
 
 
 _AUTH_PATTERNS = (
@@ -62,7 +62,8 @@ class CodexAdapter(BaseAdapter):
         step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
-    ) -> dict[str, Any]:
+        resume_session_id: str | None = None,
+    ) -> InvokeResult:
         """Invoke ``codex exec`` and return a validated output dict.
 
         Raises
@@ -219,7 +220,90 @@ class CodexAdapter(BaseAdapter):
                 test_commands=typed_result.test_commands if typed_result else None,
             )
         )
-        return validated
+        return InvokeResult(data=validated, session_id=None)
+
+    def invoke_text(
+        self,
+        prompt: str,
+        working_dir: Path,
+        timeout: int,
+        *,
+        reasoning_effort_override: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+    ) -> str:
+        command, model, reasoning_effort = self._build_command(
+            prompt,
+            reasoning_effort_override=reasoning_effort_override,
+            model_override=model_override,
+        )
+        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        stdout = completed.stdout
+        stderr = completed.stderr
+
+        if completed.timed_out:
+            self._record_invocation(
+                InvocationRecord(
+                    cli_name=self.CLI_NAME,
+                    command=command,
+                    working_dir=str(working_dir),
+                    timeout_seconds=timeout,
+                    exit_code=None,
+                    started_at=completed.started_at,
+                    finished_at=completed.finished_at,
+                    stdout=stdout,
+                    stderr=stderr,
+                    raw_log_path=str(completed.raw_log_path) if completed.raw_log_path else None,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    output_source="stdout-text",
+                )
+            )
+            if not stdout.strip() and not stderr.strip():
+                raise BlockedOnCLI(
+                    "Codex CLI timed out without producing output",
+                    exit_code=None,
+                    stderr=stderr,
+                )
+            raise StepFailure(
+                "Codex CLI timed out",
+                exit_code=None,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        exit_code = completed.exit_code or 0
+        self._record_invocation(
+            InvocationRecord(
+                cli_name=self.CLI_NAME,
+                command=command,
+                working_dir=str(working_dir),
+                timeout_seconds=timeout,
+                exit_code=exit_code,
+                started_at=completed.started_at,
+                finished_at=completed.finished_at,
+                stdout=stdout,
+                stderr=stderr,
+                raw_log_path=str(completed.raw_log_path) if completed.raw_log_path else None,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                output_source="stdout-text",
+            )
+        )
+        if exit_code != 0:
+            if self._is_auth_error(stderr):
+                raise BlockedOnCLI(
+                    "Codex CLI requires interactive action",
+                    exit_code=exit_code,
+                    stderr=stderr,
+                )
+            raise StepFailure(
+                "Codex CLI exited with a non-zero status",
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        return stdout.strip()
 
     def _build_command(
         self,

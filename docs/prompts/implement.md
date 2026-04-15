@@ -31,8 +31,8 @@ sequentially. Step N sees all file changes made by steps 1 through N-1.
 | `{files_to_modify}` | plan step | Newline-separated list of target file paths |
 | `{result_file_path}` | engine | Absolute path: `.ai-orchestrator/results/pending-step-{step_number}.json` |
 | `{step_result_schema}` | `schemas/step_result.schema.json` | Full JSON Schema for the result artifact |
-| `{rework_feedback}` | adjudication (optional) | Populated only on rework loops; empty string on first attempt |
-| `{rework_attempt}` | run state | 0 on first attempt; increments on each rework |
+| `{fix_feedback}` | planning/adjudication (optional) | Populated for incremental fix cycles; empty string on first attempt |
+| `{fix_iteration_count}` | run state | 0 on first attempt; increments on each fix-planning cycle |
 | `{max_retries}` | config | Maximum retry attempts per step |
 
 ---
