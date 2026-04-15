@@ -658,26 +658,43 @@ def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_
     assert "## backend/" in execution_prompts[0]
 
 
-def test_workspace_resume_revalidates_cleanliness(tmp_path, artifact_root, default_config):
+def test_workspace_resume_allows_uncommitted_changes(tmp_path, artifact_root, default_config):
+    default_config.approval.require_merge_approval = False
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     _init_repo(workspace_root / "frontend")
     _init_repo(workspace_root / "backend")
     (workspace_root / "frontend" / "dirty.txt").write_text("dirty\n", encoding="utf-8")
 
-    engine = Engine(default_config, workspace_root, artifact_root, workflow=_workflow())
+    run_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    store = ArtifactStore(artifact_root)
+    plan_ref = store.save_plan(run_id, _plan())
     state = RunState(
-        run_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        run_id=run_id,
         task="Implement feature",
         status=WorkflowStatus.BLOCKED_ON_CLI,
         current_phase=WorkflowStatus.EXECUTING.value,
         is_workspace=True,
         workspace_repos=["frontend", "backend"],
     )
+    state.plan_id = plan_ref
     StateManager(artifact_root).save(state)
 
-    with pytest.raises(EngineError, match="Repo 'frontend' has uncommitted changes"):
-        engine.resume(state.run_id)
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        workspace_root,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    resumed = engine.resume(state.run_id)
+
+    assert resumed.status == "DONE"
+    assert codex.executed_steps == [1, 2]
+    assert (workspace_root / "frontend" / "dirty.txt").read_text(encoding="utf-8") == "dirty\n"
 
 
 def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, default_config):

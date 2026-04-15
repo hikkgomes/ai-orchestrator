@@ -193,12 +193,6 @@ class Engine:
         status = WorkflowStatus(state.status)
         if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED, WorkflowStatus.TERMINATED}:
             raise EngineError(f"Run {run_id} is not resumable from {status.value}")
-        if state.is_workspace and state.current_phase in {
-            WorkflowStatus.EXECUTING.value,
-            WorkflowStatus.REVIEWING.value,
-            WorkflowStatus.ADJUDICATING.value,
-        }:
-            self._check_workspace_clean(state)
         if status == WorkflowStatus.PAUSED:
             state = self._transition(
                 state,
@@ -781,8 +775,6 @@ class Engine:
         steps_by_number = {step["step_number"]: step for step in plan["steps"]}
 
         worktree_dir = self._ensure_worktree(state)
-        if state.is_workspace and not state.step_results and not manifest.get("completed_steps"):
-            self._check_workspace_clean(state)
         worker_name = self._phase_cli("executing", config_name="worker")
         worker = self._adapter_for_phase("executing")
         schema = load_bundled_schema("step_result.schema.json")
@@ -2011,28 +2003,6 @@ class Engine:
             repo: render_directory_tree(self._repo_root / repo, max_depth=max_depth)
             for repo in state.workspace_repos
         }
-
-    def _check_workspace_clean(self, state: RunState) -> None:
-        for repo in state.workspace_repos:
-            repo_path = self._repo_root / repo
-            if not repo_path.exists() or not (repo_path / ".git").exists():
-                raise EngineError(f"Workspace repo '{repo}' is missing or is not a git repository.")
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                shell=False,
-                check=False,
-            )
-            if result.returncode != 0:
-                raise EngineError(
-                    f"Failed to inspect workspace repo '{repo}': {result.stderr.strip() or result.stdout.strip()}"
-                )
-            if result.stdout.strip():
-                raise EngineError(
-                    f"Repo '{repo}' has uncommitted changes. Commit or stash all changes before starting a workspace run."
-                )
 
     def _reset_workspace_repos(self, state: RunState) -> None:
         for repo in state.workspace_repos:
