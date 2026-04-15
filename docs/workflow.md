@@ -91,7 +91,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 | Gate type | Manual approval |
 | Configurable | `approval.require_plan_approval` (default: `true`) |
 | Behavior | Engine writes `PAUSED` state, prints plan summary to terminal, waits |
-| Resume | `aio approve <run-id> plan` or interactive prompt |
+| Resume | `orch approve <run-id> plan` or interactive prompt |
 
 Plan approval has three outcomes:
 
@@ -257,8 +257,6 @@ Agreement cases are direct: Claude issues + Codex agrees creates an incremental 
 
 Fix cycles never discard the worktree. A return to planning means a new incremental plan that sees the original task, `scope.md`, existing step results, current diff, review issues, and debate transcript.
 
-When any loop limit is hit, the run transitions to `FAILED` with a summary of all attempts.
-
 ---
 
 ## Phase 8: MERGING
@@ -288,30 +286,37 @@ The engine does not create worktrees. It inspects each configured repo in place,
 ## Canonical State Machine
 
 ```
-INIT ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXECUTING ──▶ REVIEWING ──▶ ADJUDICATING
-                         │                                              │
-                         │ (reject)                    ┌────────────────┤
-                         ▼                             ▼                ▼
-                      PLANNING                     EXECUTING         PLANNING
-                      (with feedback)              (rework)          (replan)
+INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ FEASIBILITY ──▶ EXECUTING
+              (debate)     │   ▲          │                              │
+                           │   │          │ (full-reject)                │
+                           │   │          ▼                              ▼
+                           │   │       TERMINATED                    REVIEWING
+                           │   │                                        │
+                           │   └── (soft-reject, same session) ─────┐   │
+                           │                                        │   ▼
+                           │   ◀── (feasibility blocked) ───────────┘ ADJUDICATING
+                           │                                         (debate tree)
+                           │                                            │
+                           └── (fix needed, worktree preserved) ◀───────┤
                                                                         │
-ADJUDICATING(PASS) ──▶ MERGING ──▶ DONE                              │
-                              │                                       │
-                              │ (conflict, legacy resume path)        │
-                              ▼                                       │
-                           CONFLICT ──(resolved)──▶ MERGING
+                                                              ADJUDICATING(PASS)
+                                                                        │
+                                                                        ▼
+                                                                     MERGING ──▶ DONE
 
-Any state ──▶ FAILED        (unrecoverable error or loop limit exceeded)
-Any state ──▶ PAUSED        (approval gate reached)
+Any state ──▶ FAILED         (unrecoverable error)
+Any state ──▶ TERMINATED     (user full-reject)
+Any state ──▶ PAUSED         (approval gate / debate tiebreaker)
 Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth refresh)
 ```
 
 **Resume semantics by state:**
 
-| State | `aio resume` behavior |
+| State | `orch resume` behavior |
 |---|---|
 | `PAUSED` | Re-enter at the approval gate |
-| `FAILED` | Not resumable. User must `aio clean` and re-run. |
+| `FAILED` | Not resumable. User must `orch clean` and re-run. |
+| `TERMINATED` | Not resumable. User chose to end the run. |
 | `BLOCKED_ON_CLI` | Re-attempt the CLI invocation that was blocked |
 | `CONFLICT` | Verify conflict is resolved, then continue merge |
 | `EXECUTING` (crashed mid-step) | Re-run the current step from the beginning in the same worktree |
@@ -326,20 +331,23 @@ A workspace root is a directory without its own `.git/` that contains one or mor
 - Detection: use `[workspace] repos = [...]` from `aio.toml`, or auto-detect git subdirectories when the current directory is not a repo.
 - Working directory: all AI phases run from the workspace root.
 - Execution: no worktrees and no per-step commits.
-- Retry/reset: on execution retry or replan, each configured repo is reset with `git checkout -- .` and `git clean -fd`.
+- Retry/reset: execution retries reset the current step baseline. Replan and fix cycles preserve existing worktree changes.
 - Review input: step results may include `workspace_diffs`, and the review prompt aggregates those per-repo diffs.
 - Completion: `MERGING` prints per-repo handoff commands instead of changing git history.
 
 ---
 
-## Session Isolation
+## Session Continuity
 
-Every CLI invocation is a fresh subprocess:
+CLI invocations are still isolated subprocesses, but Claude planning and review
+sessions intentionally preserve transcript continuity:
 
-1. **No transcript reuse** — each `claude -p` or `codex exec` call receives only the prompt constructed for that specific phase.
-2. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
-3. **No temp file reuse** — prompts are written to `prompts/step-<n>.md` for auditability (when enabled) but are not reused across steps.
-4. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations. This is intentional: it lets auth and config work normally.
+1. **Planning resume** — initial planning starts a fresh `claude -p` session. Soft-rejects and feasibility replans resume that same session with `claude --resume <session-id>`.
+2. **Review resume** — review starts a fresh Claude session. Adjudication debate rounds that need Claude resume that review session, with model and effort escalation when required.
+3. **Codex freshness** — Codex feasibility, execution, and adjudication calls are fresh subprocesses. Session IDs are not reused for Codex.
+4. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
+5. **Prompt auditability** — prompts are written under `prompts/` for auditability when enabled. They are artifacts, not hidden mutable state.
+6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations. This is intentional: it lets auth and config work normally.
 
 ---
 
@@ -351,4 +359,4 @@ Every CLI invocation is a fresh subprocess:
 | CLI stdout/stderr | `logs/claude-<uuid>.log` / `logs/codex-<uuid>.log` | Opt-in (`logging.retain_raw_output`) |
 | Prompts | `prompts/step-<n>.md` | Opt-in (`logging.retain_prompts`) |
 
-Logs are never deleted automatically. `aio clean` removes them for completed runs only.
+Logs are never deleted automatically. `orch clean` removes them for completed runs only.

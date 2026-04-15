@@ -389,6 +389,7 @@ class Engine:
 
             codex_reviews = 0
             round_number = max(state.scoping_round + 1, 2)
+            # Each debate round is one Codex review plus one Claude rebuttal.
             while not state.scoping_agreed and codex_reviews < self._config.scoping.max_scoping_rounds:
                 scope_md = self._artifacts.read_text(state.scope_md_ref)
                 claude_scope = self._artifacts.read_text(state.claude_scope_ref)
@@ -933,8 +934,11 @@ class Engine:
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter_for_phase("reviewing")
         cli_name = self._phase_cli("reviewing", config_name="reviewer")
-        state.session_ids.pop("reviewing", None)
-        self._state_mgr.save(state)
+        resume_session_id = (
+            state.session_ids.get("reviewing")
+            if self._config.sessions.enable_review_resume
+            else None
+        )
 
         try:
             invoke_result = self._invoke_with_retries(
@@ -953,6 +957,7 @@ class Engine:
                         cli_name,
                     ),
                     model_override=self._resolve_model_for_phase("reviewing", cli_name, state),
+                    resume_session_id=resume_session_id,
                 ),
                 initial_prompt=review_prompt,
             )
@@ -1435,7 +1440,7 @@ class Engine:
         state.debate_state.rounds.append(
             DebateRound(
                 **payload,
-                artifact_ref=ref,
+                artifact_id=ref,
             )
         )
         self._state_mgr.save(state)

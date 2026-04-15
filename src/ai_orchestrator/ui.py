@@ -218,6 +218,33 @@ class OrchestratorUI:
             Panel(details, title="Recent Step Results"),
             Panel(event_table, title="Recent Events"),
         ]
+        if state.debate_state and self._enum_value(
+            state.debate_state.debate_phase
+        ) != "INITIAL_ADJUDICATION":
+            debate = state.debate_state
+            debate_table = Table.grid(expand=True)
+            debate_table.add_column(justify="left", ratio=1)
+            debate_table.add_column(justify="left", ratio=2)
+            debate_table.add_row("Sub-phase", self._enum_value(debate.debate_phase))
+            debate_table.add_row("Disagreement", debate.disagreement_case or "-")
+            debate_table.add_row("Rounds", str(len(debate.rounds)))
+            if debate.rounds:
+                latest = debate.rounds[-1]
+                debate_table.add_row(
+                    "Latest",
+                    (
+                        f"{latest.actor}: {latest.position} - "
+                        f"{self._truncate(latest.reasoning, 60)}"
+                    ),
+                )
+            panels.insert(
+                2,
+                Panel(
+                    debate_table,
+                    title="Adjudication Debate",
+                    border_style="yellow",
+                ),
+            )
         if state.status == WorkflowStatus.FAILED.value and state.error:
             panels.insert(
                 1,
@@ -534,6 +561,10 @@ class OrchestratorUI:
             "warn": "yellow",
             "fail": "bold red",
         }.get(status, "white")
+
+    @staticmethod
+    def _enum_value(value: Any) -> str:
+        return str(getattr(value, "value", value))
 
 
 __all__ = [

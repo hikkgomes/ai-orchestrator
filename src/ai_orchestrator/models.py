@@ -218,7 +218,7 @@ class DebateRound(BaseModel):
     position: str
     reasoning: str
     issues: list[dict[str, Any]] = Field(default_factory=list)
-    artifact_ref: str | None = None
+    artifact_id: str | None = None
 
 
 class DebateState(BaseModel):

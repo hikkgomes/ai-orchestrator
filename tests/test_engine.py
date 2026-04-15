@@ -20,12 +20,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeClaudeAdapter:
-    def __init__(self, plans, reviews, adjudications, scopings=None, feasibilities=None):
+    def __init__(
+        self,
+        plans,
+        reviews,
+        adjudications,
+        scopings=None,
+        feasibilities=None,
+        debate_responses=None,
+    ):
         self._scopings = list(scopings or [])
         self._plans = list(plans)
         self._feasibilities = list(feasibilities or [])
         self._reviews = list(reviews)
         self._adjudications = list(adjudications)
+        self._debate_responses = list(debate_responses or [])
         self.scoping_calls = 0
         self.planning_calls = 0
         self.feasibility_calls = 0
@@ -85,6 +94,8 @@ class FakeClaudeAdapter:
             self.adjudication_calls += 1
             return InvokeResult(self._adjudications.pop(0))
         if title == "DebateResponse":
+            if self._debate_responses:
+                return InvokeResult(self._debate_responses.pop(0))
             return InvokeResult({"position": "issues_dismissed", "reasoning": "Convinced.", "issues": []})
         raise AssertionError(f"Unexpected schema title: {title}")
 
@@ -121,11 +132,13 @@ class FakeClaudeAdapter:
 
 
 class FakeCodexAdapter:
-    def __init__(self, adjudications=None):
+    def __init__(self, adjudications=None, debate_responses=None):
         self.executed_steps: list[int] = []
+        self.scoping_calls = 0
         self.feasibility_calls = 0
         self.adjudication_calls = 0
         self._adjudications = list(adjudications or [])
+        self._debate_responses = list(debate_responses or [])
         self.invocations: list[dict[str, object]] = []
 
     def invoke(
@@ -162,6 +175,8 @@ class FakeCodexAdapter:
                 return InvokeResult(self._adjudications.pop(0))
             return InvokeResult(_pass_adjudication())
         if schema["title"] == "DebateResponse":
+            if self._debate_responses:
+                return InvokeResult(self._debate_responses.pop(0))
             return InvokeResult({"position": "issues_dismissed", "reasoning": "Convinced.", "issues": []})
         if step_number is None:
             match = re.search(r"pending-step-(\d+)\.json", prompt)
@@ -194,6 +209,7 @@ class FakeCodexAdapter:
         model_override=None,
         resume_session_id=None,
     ):
+        self.scoping_calls += 1
         return "---\nagreement: true\n---\n\nScope is acceptable.\n"
 
 
@@ -280,6 +296,16 @@ def _pass_adjudication():
     }
 
 
+def _rework_adjudication(*, feedback: str = "Fix step 1."):
+    return {
+        "adjudication_id": "44444444-4444-4444-4444-444444444444",
+        "verdict": "REWORK",
+        "reasoning": feedback,
+        "rework_steps": [1],
+        "rework_feedback": feedback,
+    }
+
+
 def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
@@ -289,6 +315,50 @@ def _init_repo(path: Path) -> None:
     (path / "README.md").write_text(f"# {path.name}\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, check=True, capture_output=True)
+
+
+def _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [
+            _plan(plan_id="11111111-1111-1111-1111-111111111111"),
+            _plan(plan_id="22222222-1111-1111-1111-111111111111"),
+        ],
+        [_review()],
+        [],
+        debate_responses=[
+            {
+                "position": "issues_dismissed",
+                "reasoning": "Claude still sees no issue.",
+                "issues": [],
+            },
+            {
+                "position": "issues_dismissed",
+                "reasoning": "Claude still disagrees after escalation.",
+                "issues": [],
+            },
+        ],
+    )
+    codex = FakeCodexAdapter(
+        adjudications=[_rework_adjudication(feedback="Codex found a real issue.")],
+        debate_responses=[
+            {
+                "position": "issues_confirmed",
+                "reasoning": "Codex insists the issue blocks merge.",
+                "issues": [{"severity": "major", "description": "Codex issue."}],
+            }
+        ],
+    )
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+    state = engine.start("Implement feature", "cbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    return engine, state
 
 
 def test_engine_happy_path(tmp_repo, artifact_root, default_config):
@@ -454,6 +524,71 @@ def test_adjudication_prompt_uses_normalized_task(tmp_repo, artifact_root, defau
     assert "ORIGINAL TASK:\nraw user wording" not in adjudication_prompts[0]
 
 
+def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1")
+
+    assert state.status == "DONE"
+    assert claude.scoping_calls == 1
+    assert codex.scoping_calls == 2
+    assert state.scoping_agreed is True
+    assert state.scope_md_ref is not None
+
+
+def test_scoping_debate_max_rounds_proceeds_without_agreement(
+    tmp_repo,
+    artifact_root,
+    default_config,
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    default_config.scoping.max_scoping_rounds = 2
+
+    class DisagreeingCodex(FakeCodexAdapter):
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+        ):
+            self.scoping_calls += 1
+            if "independently scoping" in prompt:
+                return "## Codex pre-scope\n\nThe task is implementable."
+            return "---\nagreement: false\n---\n\nStill disagreeing.\n"
+
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    codex = DisagreeingCodex()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "a2a2a2a2-a2a2-a2a2-a2a2-a2a2a2a2a2a2")
+
+    assert state.status == "DONE"
+    assert codex.scoping_calls == 3
+    assert state.scoping_agreed is False
+    assert state.scope_md_ref is not None
+
+
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = True
     default_config.approval.require_merge_approval = True
@@ -600,6 +735,113 @@ def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, 
     assert state.debate_state.final_verdict == "pass"
 
 
+def test_debate_case_a_claude_insists_triggers_fix(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = True
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [_plan(plan_id="11111111-1111-1111-1111-111111111111"), _plan(plan_id="22222222-1111-1111-1111-111111111111")],
+        [_review_with_issue()],
+        [],
+        debate_responses=[
+            {
+                "position": "issues_confirmed",
+                "reasoning": "The review finding still blocks merge.",
+                "issues": [{"severity": "major", "description": "Fix step 1."}],
+            }
+        ],
+    )
+    codex = FakeCodexAdapter(adjudications=[_pass_adjudication()])
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+    discard_phases = []
+    original_discard = engine._discard_worktree
+
+    def tracked_discard(state, *, force):
+        discard_phases.append(state.current_phase)
+        return original_discard(state, force=force)
+
+    engine._discard_worktree = tracked_discard  # type: ignore[method-assign]
+
+    paused = engine.start("Implement feature", "c1c1c1c1-c1c1-c1c1-c1c1-c1c1c1c1c1c1")
+    assert paused.status == "PAUSED"
+
+    state = engine.approve(paused.run_id, "plan")
+
+    assert state.status == "PAUSED"
+    assert state.current_phase == "APPROVAL_PLAN"
+    assert state.fix_iteration_count == 1
+    assert discard_phases == []
+
+
+def test_debate_case_a_claude_convinced_passes(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = True
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [_plan()],
+        [_review_with_issue()],
+        [],
+        debate_responses=[
+            {
+                "position": "issues_dismissed",
+                "reasoning": "Codex is right; the issue does not block.",
+                "issues": [],
+            }
+        ],
+    )
+    codex = FakeCodexAdapter(adjudications=[_pass_adjudication()])
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    paused = engine.start("Implement feature", "c2c2c2c2-c2c2-c2c2-c2c2-c2c2c2c2c2c2")
+    state = engine.approve(paused.run_id, "plan")
+
+    assert state.status == "DONE"
+    assert state.debate_state.final_verdict == "pass"
+
+
+def test_debate_case_b_full_path_to_tiebreaker(tmp_repo, artifact_root, default_config):
+    engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
+
+    assert state.status == "PAUSED"
+    assert state.current_phase == "ADJUDICATING"
+    assert state.debate_state is not None
+    assert state.debate_state.debate_phase == "USER_TIEBREAKER"
+    assert state.debate_state.disagreement_case == "B"
+    assert len(state.debate_state.rounds) == 4
+    assert engine is not None
+
+
+def test_debate_tiebreaker_fix_triggers_planning(tmp_repo, artifact_root, default_config):
+    engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
+    default_config.approval.require_plan_approval = True
+
+    resolved = engine.approve(state.run_id, "debate_tiebreaker", decision="fix")
+
+    assert resolved.status == "PAUSED"
+    assert resolved.current_phase == "APPROVAL_PLAN"
+    assert resolved.fix_iteration_count == 1
+    assert resolved.worktree_path is not None
+
+
+def test_debate_tiebreaker_pass_merges(tmp_repo, artifact_root, default_config):
+    engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
+
+    resolved = engine.approve(state.run_id, "debate_tiebreaker", decision="pass")
+
+    assert resolved.status == "DONE"
+    assert resolved.commit_commands
+
+
 def test_adjudication_fix_planning_preserves_existing_step_results(
     tmp_repo,
     artifact_root,
@@ -646,6 +888,33 @@ def test_adjudication_fix_planning_preserves_existing_step_results(
     assert state.fix_iteration_count == 1
     assert len(state.step_results) == 4
     assert discard_phases == ["MERGING"]
+
+
+def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter(
+        [_plan(plan_id="11111111-1111-1111-1111-111111111111"), _plan(plan_id="22222222-1111-1111-1111-111111111111")],
+        [_review_with_issue(), _review()],
+        [],
+    )
+    codex = FakeCodexAdapter(adjudications=[_rework_adjudication(), _pass_adjudication()])
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "c8c8c8c8-c8c8-c8c8-c8c8-c8c8c8c8c8c8")
+
+    review_invocations = [item for item in claude.invocations if item["title"] == "Review"]
+    assert state.status == "DONE"
+    assert state.session_ids["reviewing"] == "review-session"
+    assert len(review_invocations) == 2
+    assert review_invocations[0]["resume_session_id"] is None
+    assert review_invocations[1]["resume_session_id"] == "review-session"
 
 
 def test_resume_from_executing_uses_manifest(tmp_repo, artifact_root, default_config):

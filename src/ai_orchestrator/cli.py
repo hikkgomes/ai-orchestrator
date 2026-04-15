@@ -210,6 +210,12 @@ def cmd_approve(
     """Approve a pending gate."""
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
+    if gate == "debate_tiebreaker" and decision not in {"fix", "pass"}:
+        raise click.UsageError(
+            "Gate 'debate_tiebreaker' requires --decision fix or --decision pass."
+        )
+    if gate == "feasibility" and decision is None:
+        decision = "override"
     try:
         state = engine.approve(run_id, gate, force=force, decision=decision)
     except EngineError as exc:
@@ -506,17 +512,37 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
             continue
         if gate == "feasibility":
-            choice = ui.approval_choice(
-                gate,
-                f"Run {run_id} is paused at feasibility review.",
-                choices=["approve-override", "soft-reject", "full-reject"],
-                default="approve-override",
-            )
-            if choice == "approve-override":
-                state = engine.approve(run_id, gate, decision="override")
+            at_replan_limit = bool(state.error and "replan limit" in state.error.lower())
+            if at_replan_limit:
+                choice = ui.approval_choice(
+                    gate,
+                    f"Run {run_id}: feasibility replan limit reached.",
+                    choices=["approve-claude", "approve-codex", "full-reject"],
+                    default="approve-claude",
+                )
+                if choice == "approve-claude":
+                    state = engine.approve(run_id, gate, decision="approve_claude")
+                elif choice == "approve-codex":
+                    state = engine.approve(run_id, gate, decision="approve_codex")
+                else:
+                    state = engine.reject(
+                        run_id,
+                        gate,
+                        "Full rejection after feasibility limit",
+                        full=True,
+                    )
             else:
-                reason = ui.rejection_reason("Feasibility decision")
-                state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
+                choice = ui.approval_choice(
+                    gate,
+                    f"Run {run_id} is paused at feasibility review.",
+                    choices=["approve-override", "soft-reject", "full-reject"],
+                    default="approve-override",
+                )
+                if choice == "approve-override":
+                    state = engine.approve(run_id, gate, decision="override")
+                else:
+                    reason = ui.rejection_reason("Feasibility decision")
+                    state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
             continue
         if gate == "debate_tiebreaker":
             choice = ui.approval_choice(
