@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from ai_orchestrator.adapters.base import BlockedOnCLI, InvokeResult, StepFailure
+from ai_orchestrator.adapters.base import BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import PhaseRoutingOverride
 from ai_orchestrator.engine import Engine, EngineError
@@ -41,6 +41,7 @@ class FakeClaudeAdapter:
         self.review_calls = 0
         self.adjudication_calls = 0
         self.invocations: list[dict[str, object]] = []
+        self.text_invocations: list[dict[str, object]] = []
         self._last_scope = None
 
     def invoke(
@@ -109,6 +110,14 @@ class FakeClaudeAdapter:
         model_override=None,
         resume_session_id=None,
     ):
+        self.text_invocations.append(
+            {
+                "prompt": prompt,
+                "reasoning_effort_override": reasoning_effort_override,
+                "model_override": model_override,
+                "resume_session_id": resume_session_id,
+            }
+        )
         if "independently scoping" in prompt:
             self.scoping_calls += 1
             if self._scopings:
@@ -120,18 +129,21 @@ class FakeClaudeAdapter:
                     "assumptions": [],
                     "complexity_tier": "moderate",
                 }
-            return _scope_md(self._last_scope)
+            return TextInvokeResult(_scope_md(self._last_scope), session_id="scoping-claude-session")
         if (
             "resolving task scope" in prompt
             or "updating canonical scope.md" in prompt
             or "FINAL Claude scope decision" in prompt
         ):
-            return _scope_md(self._last_scope or {
-                "actionable": True,
-                "normalized_task": "Implement feature",
-                "assumptions": [],
-                "complexity_tier": "moderate",
-            })
+            return TextInvokeResult(
+                _scope_md(self._last_scope or {
+                    "actionable": True,
+                    "normalized_task": "Implement feature",
+                    "assumptions": [],
+                    "complexity_tier": "moderate",
+                }),
+                session_id="scoping-claude-session",
+            )
         raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
 
 
@@ -145,6 +157,7 @@ class FakeCodexAdapter:
         self._adjudications = list(adjudications or [])
         self._debate_responses = list(debate_responses or [])
         self.invocations: list[dict[str, object]] = []
+        self.text_invocations: list[dict[str, object]] = []
 
     def invoke(
         self,
@@ -235,8 +248,16 @@ class FakeCodexAdapter:
         model_override=None,
         resume_session_id=None,
     ):
+        self.text_invocations.append(
+            {
+                "prompt": prompt,
+                "reasoning_effort_override": reasoning_effort_override,
+                "model_override": model_override,
+                "resume_session_id": resume_session_id,
+            }
+        )
         self.scoping_calls += 1
-        return "---\nagreement: true\n---\n\nScope is acceptable.\n"
+        return TextInvokeResult("---\nagreement: true\n---\n\nScope is acceptable.\n")
 
 
 def _workflow():
@@ -314,7 +335,6 @@ def _rework_adjudication(*, feedback: str = "Fix step 1."):
         "adjudication_id": "44444444-4444-4444-4444-444444444444",
         "verdict": "REWORK",
         "reasoning": feedback,
-        "rework_steps": [1],
         "rework_feedback": feedback,
     }
 
@@ -560,6 +580,71 @@ def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, defaul
     assert state.scope_md_ref is not None
 
 
+def test_scoping_reuses_claude_session_and_passes_prescope_notes(
+    tmp_repo,
+    artifact_root,
+    default_config,
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+
+    class DistinctScopeClaude(FakeClaudeAdapter):
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+        ):
+            self.text_invocations.append(
+                {
+                    "prompt": prompt,
+                    "reasoning_effort_override": reasoning_effort_override,
+                    "model_override": model_override,
+                    "resume_session_id": resume_session_id,
+                }
+            )
+            if "independently scoping" in prompt:
+                self.scoping_calls += 1
+                return TextInvokeResult("## Claude pre-scope\n\nUse the router notes.", "scope-session-1")
+            if "resolving task scope" in prompt:
+                return TextInvokeResult(
+                    "---\n"
+                    "normalized_task: Implement feature\n"
+                    "complexity_tier: moderate\n"
+                    "actionable: true\n"
+                    "key_files:\n"
+                    "  - router.py\n"
+                    "context: Canonical synthesized scope.\n"
+                    "---\n\n"
+                    "Canonical synthesized scope.",
+                    "scope-session-2",
+                )
+            raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
+
+    claude = DistinctScopeClaude([_plan()], [_review()], [_pass_adjudication()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "a3a3a3a3-a3a3-a3a3-a3a3-a3a3a3a3a3a3")
+
+    assert state.status == "DONE"
+    assert state.session_ids["scoping_claude"] == "scope-session-2"
+    assert claude.text_invocations[1]["resume_session_id"] == "scope-session-1"
+    codex_review_prompt = str(codex.text_invocations[1]["prompt"])
+    assert "CLAUDE NOTES:\n## Claude pre-scope" in codex_review_prompt
+    assert "CANONICAL SCOPE.MD:\n---\nnormalized_task: Implement feature" in codex_review_prompt
+
+
 def test_scoping_debate_max_rounds_proceeds_without_agreement(
     tmp_repo,
     artifact_root,
@@ -567,8 +652,6 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
 ):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    default_config.scoping.max_scoping_rounds = 2
-
     class DisagreeingCodex(FakeCodexAdapter):
         def invoke_text(
             self,
@@ -722,14 +805,12 @@ def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, 
                 "adjudication_id": "44444444-4444-4444-4444-444444444444",
                 "verdict": "REWORK",
                 "reasoning": "Try again.",
-                "rework_steps": [1],
                 "rework_feedback": "Adjust step 1.",
             },
             {
                 "adjudication_id": "55555555-5555-5555-5555-555555555555",
                 "verdict": "REWORK",
                 "reasoning": "Still not enough.",
-                "rework_steps": [1],
                 "rework_feedback": "Adjust step 1 again.",
             },
         ],
@@ -740,14 +821,12 @@ def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, 
                 "adjudication_id": "44444444-4444-4444-4444-444444444444",
                 "verdict": "REWORK",
                 "reasoning": "Try again.",
-                "rework_steps": [1],
                 "rework_feedback": "Adjust step 1.",
             },
             {
                 "adjudication_id": "55555555-5555-5555-5555-555555555555",
                 "verdict": "REWORK",
                 "reasoning": "Still not enough.",
-                "rework_steps": [1],
                 "rework_feedback": "Adjust step 1 again.",
             },
         ]
@@ -891,7 +970,6 @@ def test_adjudication_fix_planning_preserves_existing_step_results(
                 "adjudication_id": "44444444-4444-4444-4444-444444444444",
                 "verdict": "REWORK",
                 "reasoning": "The review issue is real.",
-                "rework_steps": [1],
                 "rework_feedback": "Fix step 1.",
             },
             _pass_adjudication(),

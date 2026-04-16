@@ -256,7 +256,6 @@ model_architectural = "claude-opus-4-5-20250514"
 
 [scoping]
 enabled = true
-max_scoping_rounds = 3
 
 [feasibility]
 enabled = true

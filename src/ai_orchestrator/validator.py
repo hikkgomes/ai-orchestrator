@@ -299,18 +299,6 @@ class Validator:
                     "Invalid adjudication",
                     "REWORK requires rework_feedback",
                 )
-            if plan_step_numbers is not None and data.get("rework_steps"):
-                invalid_steps = sorted(
-                    step_number
-                    for step_number in data.get("rework_steps", [])
-                    if step_number not in plan_step_numbers
-                )
-                if invalid_steps:
-                    valid_steps = sorted(plan_step_numbers)
-                    raise ValidationError(
-                        "Invalid adjudication",
-                        f"REWORK steps {invalid_steps} are not in the current plan step numbers {valid_steps}",
-                    )
         if verdict == "REPLAN" and not data.get("replan_feedback"):
             raise ValidationError(
                 "Invalid adjudication",

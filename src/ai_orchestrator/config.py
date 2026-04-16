@@ -84,8 +84,6 @@ class ApprovalConfig:
 @dataclass
 class ScopingConfig:
     enabled: bool = True
-    # Fixed debate structure uses up to three visible debate rounds.
-    max_scoping_rounds: int = 3
 
 
 @dataclass
@@ -267,6 +265,11 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
         deprecated_keys.append("feasibility.timeout")
         feasibility.pop("timeout", None)
 
+    scoping = data.get("scoping")
+    if isinstance(scoping, dict) and "max_scoping_rounds" in scoping:
+        deprecated_keys.append("scoping.max_scoping_rounds")
+        scoping.pop("max_scoping_rounds", None)
+
     routing = data.get("routing")
     if isinstance(routing, dict):
         phases = routing.get("phases")
@@ -390,8 +393,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
-    if "max_scoping_rounds" in scoping:
-        _validate_int("scoping.max_scoping_rounds", scoping["max_scoping_rounds"], minimum=1)
 
     feasibility = _expect_mapping("feasibility", data.get("feasibility"))
     if "enabled" in feasibility:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import subprocess
 import sys
@@ -28,6 +29,14 @@ from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
 from .worktree import WorktreeManager
+
+try:  # pragma: no cover - platform dependent
+    import readline
+except ImportError:  # pragma: no cover
+    readline = None
+
+
+_HISTORY_FILE = Path.home() / ".config" / "ai-orchestrator" / "shell_history"
 
 
 def _build_engine(ctx: click.Context) -> Engine:
@@ -335,7 +344,20 @@ def _read_multiline_task() -> str:
             return "\n".join(lines).strip()
 
 
+def _setup_readline() -> None:
+    if readline is None:
+        return
+    _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        readline.read_history_file(_HISTORY_FILE)
+    except FileNotFoundError:
+        pass
+    readline.set_history_length(500)
+    atexit.register(readline.write_history_file, _HISTORY_FILE)
+
+
 def _run_shell(ctx: click.Context) -> None:
+    _setup_readline()
     ui = ctx.obj["ui"]
     repo_name = ctx.obj["repo_root"].name
     ui.info(f"ai-orchestrator {__version__} | repo: {repo_name}")

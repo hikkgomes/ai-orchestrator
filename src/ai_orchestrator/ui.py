@@ -105,7 +105,14 @@ class OrchestratorUI:
 
     def phase_transition(self, phase: str) -> None:
         """Emit a persistent phase transition status line."""
-        self.stderr_console.print(Text(f"→ {phase}", style="bold cyan"))
+        self.phase_banner(phase)
+
+    def phase_banner(self, phase: str, detail: str = "") -> None:
+        """Print a visible phase separator."""
+        label = f"--- {phase} ---"
+        if detail:
+            label += f"  ({detail})"
+        self.stderr_console.print(f"\n[bold cyan]{label}[/bold cyan]")
 
     def print_plan(
         self,

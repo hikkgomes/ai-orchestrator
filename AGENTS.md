@@ -24,7 +24,7 @@ class BaseAdapter:
         resume_session_id: str | None = None,
     ) -> InvokeResult
 
-    def invoke_text(...) -> str
+    def invoke_text(...) -> TextInvokeResult
 ```
 
 **Inputs:**
@@ -40,7 +40,8 @@ class BaseAdapter:
 **Outputs:**
 - Returns `InvokeResult(data: dict, session_id: str | None = None)` where `data`
   is validated against the schema
-- `invoke_text()` returns raw text for markdown-producing phases
+- `invoke_text()` returns `TextInvokeResult(text: str, session_id: str | None = None)`
+  for markdown-producing phases
 - Raises `AdapterError` subclass on any failure:
   - `StepFailure(exit_code, stdout, stderr, validation_error)` — generic execution failure
   - `BlockedOnCLI(exit_code, stderr)` — CLI requires interactive input or auth refresh
@@ -101,8 +102,9 @@ If configured in `aio.toml` (`routing.claude.reasoning_effort`), the adapter att
 
 ### Text output
 
-`invoke_text()` uses `--output-format text` and returns raw stripped stdout. It is
-used for scoping markdown and other non-JSON debate artifacts.
+`invoke_text()` uses Claude's JSON envelope so it can preserve `session_id`,
+then returns the envelope's raw `result` text. It is used for scoping markdown
+and other non-JSON debate artifacts.
 
 ### Routing defaults
 
@@ -142,7 +144,8 @@ Because `codex exec` mutates files directly and may not produce clean JSON on st
 
 In all cases, `files_changed` is verified against `git diff` in the worktree. The git diff is the ground truth for what files changed; the AI-provided `files_changed` is treated as metadata only.
 
-`invoke_text()` runs the same `codex exec` command and returns stdout as text.
+`invoke_text()` runs the same `codex exec` command and returns stdout text with
+no session ID.
 
 ### Routing defaults
 

@@ -129,7 +129,6 @@ Produced by the adjudicator. Consumed by the orchestrator engine.
 | `adjudication_id` | string (uuid) | yes | Unique identifier |
 | `verdict` | enum: PASS/REWORK/REPLAN/FAIL | yes | Initial Codex decision; non-PASS enters fix/debate handling |
 | `reasoning` | string | yes | Why this verdict was chosen |
-| `rework_steps` | array of integer | no | Legacy step numbers for older artifacts |
 | `rework_feedback` | string | no | Guidance for rework (if REWORK) |
 | `replan_feedback` | string | no | Guidance for replanning (if REPLAN) |
 | `failure_reason` | string | no | Why this is unrecoverable (if FAIL) |

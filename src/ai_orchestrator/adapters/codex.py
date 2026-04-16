@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..metadata import InvocationRecord
-from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure
+from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 
 
 _AUTH_PATTERNS = (
@@ -255,7 +255,7 @@ class CodexAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
-    ) -> str:
+    ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
             prompt,
             reasoning_effort_override=reasoning_effort_override,
@@ -327,7 +327,7 @@ class CodexAdapter(BaseAdapter):
                 stdout=stdout,
                 stderr=stderr,
             )
-        return stdout.strip()
+        return TextInvokeResult(text=stdout.strip())
 
     def _build_command(
         self,

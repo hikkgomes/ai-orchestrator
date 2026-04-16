@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..metadata import InvocationRecord
-from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure
+from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 
 
 # Patterns in stderr that suggest auth or interactive prompts.
@@ -98,13 +98,13 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
-    ) -> str:
+    ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
-            output_format="text",
+            output_format="json",
         )
         return self._invoke_text_command(
             command,
@@ -244,7 +244,7 @@ class ClaudeAdapter(BaseAdapter):
         model: str | None,
         reasoning_effort: str | None,
         allow_effort_retry: bool,
-    ) -> str:
+    ) -> TextInvokeResult:
         completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
         if completed.timed_out:
             if not completed.stdout.strip() and not completed.stderr.strip():
@@ -307,7 +307,23 @@ class ClaudeAdapter(BaseAdapter):
                 output_source="stdout-text",
             )
         )
-        return self._strip_ansi(stdout).strip()
+        return self._parse_text_stdout(stdout)
+
+    def _parse_text_stdout(self, stdout: str) -> TextInvokeResult:
+        clean_stdout = self._strip_ansi(stdout).strip()
+        try:
+            data = json.loads(clean_stdout)
+        except json.JSONDecodeError:
+            return TextInvokeResult(text=clean_stdout)
+
+        session_id = data.get("session_id") if isinstance(data, dict) else None
+        if session_id is not None and not isinstance(session_id, str):
+            session_id = None
+        if isinstance(data, dict) and isinstance(data.get("result"), str):
+            return TextInvokeResult(text=data["result"].strip(), session_id=session_id)
+        if isinstance(data, str):
+            return TextInvokeResult(text=data.strip(), session_id=session_id)
+        return TextInvokeResult(text=clean_stdout, session_id=session_id)
 
     def _parse_stdout(self, stdout: str) -> tuple[dict[str, Any], str | None]:
         clean_stdout = self._strip_ansi(stdout).strip()

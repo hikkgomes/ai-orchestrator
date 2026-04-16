@@ -301,36 +301,6 @@ def build_full_execution_prompt_claude(
     )
 
 
-def build_execution_prompt_codex(
-    step_description: str,
-    plan_context: str,
-    file_contents: str,
-    result_file_path: str,
-    schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
-) -> str:
-    """Build the execution phase prompt for the Codex adapter.
-
-    The prompt instructs Codex to write its result to *result_file_path*.
-    """
-    workspace_section = _workspace_section(workspace_trees)
-    return (
-        "You are a software implementation agent. Implement the following step.\n\n"
-        "STEP:\n"
-        f"{step_description}\n\n"
-        "CONTEXT (from plan):\n"
-        f"{plan_context}\n\n"
-        "RELEVANT FILES:\n"
-        f"{file_contents}\n\n"
-        f"{workspace_section}"
-        "After making changes, write a JSON result file to the path:\n"
-        f"{result_file_path}\n\n"
-        "The JSON must conform to this schema:\n"
-        f"{schema_json}\n\n"
-        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
-    )
-
-
 def build_feasibility_prompt_codex(
     task_description: str,
     plan_json: str,
@@ -398,30 +368,6 @@ def build_feasibility_prompt_claude(
         "3. Flag any implementation steps where the description implies network access, credential use,\n"
         "   or interactive input - all of which cannot proceed.\n"
         "4. Note any ambiguous or contradictory implementation instructions.\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-    )
-
-
-def build_execution_prompt_claude(
-    step_description: str,
-    plan_context: str,
-    file_contents: str,
-    schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
-) -> str:
-    """Build the execution phase prompt for the Claude adapter."""
-    workspace_section = _workspace_section(workspace_trees)
-    return (
-        "You are a software implementation agent. Implement the following step.\n\n"
-        "STEP:\n"
-        f"{step_description}\n\n"
-        "CONTEXT (from plan):\n"
-        f"{plan_context}\n\n"
-        "RELEVANT FILES:\n"
-        f"{file_contents}\n\n"
-        f"{workspace_section}"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"

@@ -22,14 +22,6 @@
       "minLength": 1,
       "description": "Explanation of why this verdict was chosen."
     },
-    "rework_steps": {
-      "type": "array",
-      "items": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "description": "Legacy step numbers that need rework. Optional; natural execution uses rework_feedback."
-    },
     "rework_feedback": {
       "type": "string",
       "description": "Guidance for the rework. Required if verdict is REWORK."

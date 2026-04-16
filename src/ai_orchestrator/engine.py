@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .adapters.base import BlockedOnCLI, InvokeResult, StepFailure
+from .adapters.base import BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 from .adapters.claude import ClaudeAdapter
 from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
@@ -368,7 +368,7 @@ class Engine:
             codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
             self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
             self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
-            claude_scope, codex_scope = invoke_parallel(
+            claude_text_result, codex_text_result = invoke_parallel(
                 [
                     lambda: self._invoke_adapter_text(
                         claude,
@@ -389,6 +389,12 @@ class Engine:
                     ),
                 ]
             )
+            claude_scope = claude_text_result.text
+            codex_scope = codex_text_result.text
+            if claude_text_result.session_id:
+                state.session_ids["scoping_claude"] = claude_text_result.session_id
+            if codex_text_result.session_id:
+                state.session_ids["scoping_codex"] = codex_text_result.session_id
             state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 0, claude_scope)
             state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 0, codex_scope)
             state.scoping_round = 0
@@ -396,30 +402,38 @@ class Engine:
 
             prompt = build_scope_synthesis_prompt(claude_scope, codex_scope, state.task)
             self._artifacts.save_prompt(f"scope-synthesis-{state.run_id[:8]}.md", prompt)
-            scope_md = self._invoke_adapter_text(
+            scope_result = self._invoke_adapter_text(
                 claude,
                 prompt,
                 self._repo_root,
                 "Scoping synthesis",
                 reasoning_effort_override=claude_effort,
                 model_override=claude_model,
+                resume_session_id=state.session_ids.get("scoping_claude"),
             )
+            scope_md = scope_result.text
+            if scope_result.session_id:
+                state.session_ids["scoping_claude"] = scope_result.session_id
             state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
             state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, scope_md)
             state.scoping_round = 1
             self._state_mgr.save(state)
 
-            prompt = build_scope_review_codex_prompt(scope_md, scope_md)
+            prompt = build_scope_review_codex_prompt(claude_scope, scope_md)
             self._artifacts.save_prompt(f"scope-review-codex-r1-{state.run_id[:8]}.md", prompt)
-            codex_scope = self._invoke_adapter_text(
+            codex_result = self._invoke_adapter_text(
                 codex,
                 prompt,
                 self._repo_root,
                 "Scoping round 1/3 with Codex",
                 reasoning_effort_override=codex_effort,
                 model_override=codex_model,
+                resume_session_id=state.session_ids.get("scoping_codex"),
                 legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
             )
+            codex_scope = codex_result.text
+            if codex_result.session_id:
+                state.session_ids["scoping_codex"] = codex_result.session_id
             state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 1, codex_scope)
             state.scoping_agreed = self._scope_review_agreed(codex_scope)
             state.scoping_round = 1
@@ -428,30 +442,39 @@ class Engine:
             if not state.scoping_agreed:
                 prompt = build_scope_rebuttal_claude_prompt(scope_md, codex_scope)
                 self._artifacts.save_prompt(f"scope-rebuttal-claude-r2-{state.run_id[:8]}.md", prompt)
-                scope_md = self._invoke_adapter_text(
+                scope_result = self._invoke_adapter_text(
                     claude,
                     prompt,
                     self._repo_root,
                     "Scoping round 2/3 with Claude",
                     reasoning_effort_override=claude_effort,
                     model_override=claude_model,
+                    resume_session_id=state.session_ids.get("scoping_claude"),
                 )
+                scope_md = scope_result.text
+                if scope_result.session_id:
+                    state.session_ids["scoping_claude"] = scope_result.session_id
                 state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
                 state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 2, scope_md)
                 state.scoping_round = 2
                 self._state_mgr.save(state)
 
-                prompt = build_scope_final_codex_prompt(scope_md, scope_md, codex_scope)
+                claude_scope_md = self._artifacts.read_text(state.claude_scope_ref)
+                prompt = build_scope_final_codex_prompt(claude_scope_md, scope_md, codex_scope)
                 self._artifacts.save_prompt(f"scope-final-codex-r3-{state.run_id[:8]}.md", prompt)
-                codex_scope = self._invoke_adapter_text(
+                codex_result = self._invoke_adapter_text(
                     codex,
                     prompt,
                     self._repo_root,
                     "Scoping round 3/3 with Codex xhigh",
                     reasoning_effort_override=self._config.debate.escalated_codex_effort,
                     model_override=codex_model,
+                    resume_session_id=state.session_ids.get("scoping_codex"),
                     legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the final scope.",
                 )
+                codex_scope = codex_result.text
+                if codex_result.session_id:
+                    state.session_ids["scoping_codex"] = codex_result.session_id
                 state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 3, codex_scope)
                 state.scoping_agreed = self._scope_review_agreed(codex_scope)
                 state.scoping_round = 3
@@ -460,14 +483,18 @@ class Engine:
                 if not state.scoping_agreed:
                     prompt = build_scope_final_claude_prompt(scope_md, codex_scope)
                     self._artifacts.save_prompt(f"scope-final-claude-{state.run_id[:8]}.md", prompt)
-                    scope_md = self._invoke_adapter_text(
+                    scope_result = self._invoke_adapter_text(
                         claude,
                         prompt,
                         self._repo_root,
                         "Finalizing scope with Claude max",
                         reasoning_effort_override=self._config.debate.escalated_claude_effort,
                         model_override=self._config.debate.escalated_claude_model or claude_model,
+                        resume_session_id=state.session_ids.get("scoping_claude"),
                     )
+                    scope_md = scope_result.text
+                    if scope_result.session_id:
+                        state.session_ids["scoping_claude"] = scope_result.session_id
                     state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
                     state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 3, scope_md)
                     state.scoping_round = 3
@@ -614,7 +641,6 @@ class Engine:
         state.adjudication_id = None
         state.debate_state = None
         self._artifacts.clear_feedback(state.run_id, "planning")
-        self._artifacts.clear_execution_manifest(state.run_id)
         state.error = None
         self._state_mgr.save(state)
 
@@ -792,7 +818,6 @@ class Engine:
         if issues:
             feedback = (feedback + "\n\nBlocking issues:\n" + "\n".join(issues)).strip()
         self._artifacts.save_feedback(state.run_id, "planning", feedback)
-        self._artifacts.clear_execution_manifest(state.run_id)
         state.feasibility_id = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.PLANNING)
@@ -802,6 +827,8 @@ class Engine:
         worktree_dir = self._ensure_worktree(state)
         worker_name = self._phase_cli("executing", config_name="worker")
         worker = self._adapter_for_phase("executing")
+        execution_effort = self._resolve_effort_for_phase(state, "executing", worker_name)
+        execution_model = self._resolve_model_for_phase("executing", worker_name, state)
         schema = load_bundled_schema("execution_result.schema.json")
 
         key_files = list(dict.fromkeys(plan.get("key_files", [])))
@@ -831,12 +858,8 @@ class Engine:
                 current_prompt,
                 worktree_dir,
                 schema,
-                reasoning_effort_override=self._resolve_effort_for_phase(
-                    state,
-                    "executing",
-                    worker_name,
-                ),
-                model_override=self._resolve_model_for_phase("executing", worker_name, state),
+                reasoning_effort_override=execution_effort,
+                model_override=execution_model,
             )
 
         attempt_number = 0
@@ -872,7 +895,7 @@ class Engine:
                 state,
                 retry_key="execution",
                 retries=self._retry_limit("executing"),
-                spinner_label="Codex executing" if worker_name == "codex" else "Executing plan",
+                spinner_label=f"Executing full plan with {worker_name.title()} ({execution_effort})",
                 invoke=invoke_and_enforce_status,
                 initial_prompt=prompt,
             )
@@ -891,7 +914,6 @@ class Engine:
         reference = self._artifacts.save_execution_result(state.run_id, result)
         state.execution_result_ref = reference
         state.step_results = [reference]
-        self._artifacts.clear_execution_manifest(state.run_id)
         state.error = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.REVIEWING)
@@ -1324,7 +1346,6 @@ class Engine:
         state.fix_iteration_count += 1
         state.session_ids.pop("planning", None)
         state.error = None
-        self._artifacts.clear_execution_manifest(state.run_id)
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.PLANNING)
 
@@ -1628,8 +1649,8 @@ class Engine:
         model_override: str | None = None,
         resume_session_id: str | None = None,
         legacy_fallback_text: str | None = None,
-    ) -> str:
-        def invoke() -> str:
+    ) -> TextInvokeResult:
+        def invoke() -> TextInvokeResult:
             if hasattr(adapter, "invoke_text"):
                 kwargs = {
                     "reasoning_effort_override": reasoning_effort_override,
@@ -1637,24 +1658,28 @@ class Engine:
                     "resume_session_id": resume_session_id,
                 }
                 try:
-                    return adapter.invoke_text(
-                        prompt,
-                        working_dir,
-                        self._config.orchestrator.watchdog_timeout,
-                        **kwargs,
+                    return self._coerce_text_invoke_result(
+                        adapter.invoke_text(
+                            prompt,
+                            working_dir,
+                            self._config.orchestrator.watchdog_timeout,
+                            **kwargs,
+                        )
                     )
                 except TypeError as exc:
                     if "resume_session_id" not in str(exc):
                         raise
                     kwargs.pop("resume_session_id", None)
-                    return adapter.invoke_text(
-                        prompt,
-                        working_dir,
-                        self._config.orchestrator.watchdog_timeout,
-                        **kwargs,
+                    return self._coerce_text_invoke_result(
+                        adapter.invoke_text(
+                            prompt,
+                            working_dir,
+                            self._config.orchestrator.watchdog_timeout,
+                            **kwargs,
+                        )
                     )
             if legacy_fallback_text is not None:
-                return legacy_fallback_text
+                return TextInvokeResult(legacy_fallback_text)
             schema = load_bundled_schema("scoping.schema.json")
             result = self._coerce_invoke_result(
                 self._invoke_adapter_json(
@@ -1667,12 +1692,29 @@ class Engine:
                     resume_session_id=resume_session_id,
                 )
             )
-            return self._scope_md_from_scoping_result(result.data)
+            return TextInvokeResult(
+                text=self._scope_md_from_scoping_result(result.data),
+                session_id=result.session_id,
+            )
 
         if self._ui is None:
             return invoke()
         with self._ui.phase_spinner(spinner_label):
             return invoke()
+
+    @staticmethod
+    def _coerce_text_invoke_result(result: Any) -> TextInvokeResult:
+        if isinstance(result, TextInvokeResult):
+            return result
+        if isinstance(result, str):
+            return TextInvokeResult(text=result)
+        if isinstance(result, tuple) and len(result) == 2:
+            text, session_id = result
+            return TextInvokeResult(
+                text=str(text),
+                session_id=session_id if isinstance(session_id, str) else None,
+            )
+        raise StepFailure("Adapter returned an unsupported text result type")
 
     def _invoke_adapter_json(
         self,
@@ -1681,13 +1723,11 @@ class Engine:
         working_dir: Path,
         schema: dict[str, Any],
         *,
-        step_number: int | None = None,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
     ) -> Any:
         kwargs = {
-            "step_number": step_number,
             "reasoning_effort_override": reasoning_effort_override,
             "model_override": model_override,
             "resume_session_id": resume_session_id,
@@ -2176,7 +2216,6 @@ class Engine:
         except Exception:
             pass
         self._create_execution_history(state, terminal_reason=message)
-        self._artifacts.clear_execution_manifest(state.run_id)
         return self._transition(
             state,
             WorkflowStatus.FAILED,
@@ -2186,7 +2225,6 @@ class Engine:
 
     def _terminate_run(self, state: RunState, message: str) -> RunState:
         self._create_execution_history(state, terminal_reason=message)
-        self._artifacts.clear_execution_manifest(state.run_id)
         return self._transition(
             state,
             WorkflowStatus.TERMINATED,

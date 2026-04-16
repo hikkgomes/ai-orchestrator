@@ -123,7 +123,7 @@ class Plan(BaseModel):
 
 
 class FileChange(BaseModel):
-    """A single file change within a step result."""
+    """A single file change within an execution result."""
 
     path: str
     action: FileAction
@@ -131,7 +131,7 @@ class FileChange(BaseModel):
 
 
 class StepResult(BaseModel):
-    """Legacy result of executing a single plan step."""
+    """LEGACY result of executing a single plan step."""
 
     step_number: int = Field(ge=1)
     status: StepStatus
@@ -190,7 +190,6 @@ class Adjudication(BaseModel):
     adjudication_id: str
     verdict: AdjudicationVerdict
     reasoning: str = Field(min_length=1)
-    rework_steps: list[int] | None = None
     rework_feedback: str | None = None
     replan_feedback: str | None = None
     failure_reason: str | None = None

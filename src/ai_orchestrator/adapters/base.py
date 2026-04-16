@@ -112,6 +112,14 @@ class InvokeResult:
     session_id: str | None = None
 
 
+@dataclass
+class TextInvokeResult:
+    """Raw text adapter output plus optional vendor session metadata."""
+
+    text: str
+    session_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Base adapter interface
 # ---------------------------------------------------------------------------
@@ -191,7 +199,7 @@ class BaseAdapter(ABC):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
-    ) -> str:
+    ) -> TextInvokeResult:
         """Invoke the CLI with *prompt* and return raw text output."""
 
     # ------------------------------------------------------------------
