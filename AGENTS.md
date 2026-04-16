@@ -138,7 +138,7 @@ codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"
 
 Because `codex exec` mutates files directly and may not produce clean JSON on stdout:
 
-1. **Result file (primary):** The prompt instructs Codex to write a JSON result file. Full-plan execution uses `.ai-orchestrator/results/pending-execution-<run-id>.json`; feasibility uses `.ai-orchestrator/feasibility/pending-<run-id>.json`. Legacy step execution can still use `.ai-orchestrator/results/pending-step-<n>.json` when validating the older `step_result` schema.
+1. **Result file (primary):** The prompt instructs Codex to write a JSON result file. Full-plan execution uses `.ai-orchestrator/results/pending-execution-<run-id>.json`. Legacy step execution can still use `.ai-orchestrator/results/pending-step-<n>.json` when validating the older `step_result` schema.
 2. **Stdout fallback:** If the result file is missing, scan stdout from the end backwards for the last valid JSON object. Parse and validate.
 3. **Git-diff-only fallback:** Execution only. If both above fail for an execution result, reconstruct a minimal `execution_result` from `git diff --name-status` in the worktree. `files_changed` comes from git. `summary` defaults to "Changes detected via git diff." `status` defaults to `partial`. Metadata fields (`issues`, `test_commands`) are empty. The same fallback remains available for legacy `step_result` execution.
 
@@ -151,7 +151,6 @@ no session ID.
 
 | Phase | Used by default |
 |---|---|
-| Feasibility | Yes |
 | Planning | No (Claude default) |
 | Execution | Yes |
 | Review | No (Claude default) |
@@ -168,7 +167,6 @@ Configured in `aio.toml` under `[routing]`:
 [routing]
 scoper = "claude"
 planner = "claude"
-feasibility_checker = "codex"
 worker = "codex"
 reviewer = "claude"
 adjudicator = "codex"
@@ -245,7 +243,6 @@ substitution before each CLI invocation.
 |---|---|---|---|
 | `docs/prompts/scope.md` | SCOPING | `claude -p` + `codex exec` | `scope.md` with YAML frontmatter |
 | `docs/prompts/plan.md` | PLANNING | `claude -p` | `plan.schema.json` |
-| `docs/prompts/feasibility.md` | FEASIBILITY | `codex exec` or `claude -p` | `feasibility.schema.json` |
 | `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `execution_result.schema.json` |
 | `docs/prompts/review.md` | REVIEWING | `claude -p` | `review.schema.json` |
 | `docs/prompts/adjudicate.md` | ADJUDICATING | `codex exec` or `claude -p` | `adjudication.schema.json` |
@@ -279,7 +276,6 @@ a workflow agent. These supplement the prompt with Codex-specific output convent
 |---|---|---|
 | `implementer.md` | EXECUTING | `docs/prompts/implement.md` |
 | `adjudicator.md` | ADJUDICATING | `docs/prompts/adjudicate.md` |
-| `feasibility.md` | FEASIBILITY | `docs/prompts/feasibility.md` |
 | `repairer.md` | EXECUTING (incremental fix loop) | `docs/prompts/implement.md` (fix variant) |
 
 ## Prompt Templates

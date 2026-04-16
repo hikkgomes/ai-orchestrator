@@ -39,7 +39,6 @@ is best-effort metadata.
 | `{git_diff_stat}` | worktree | Output of `git diff --stat <base_commit>...aio/run-<uuid>` |
 | `{run_id}` | run state | UUID of this run |
 | `{fix_iteration_count}` | run state | Total incremental fix cycles used |
-| `{feasibility_replan_count}` | run state | Total feasibility replans used |
 | `{finalize_schema}` | inline below | JSON Schema for the summary output |
 
 ---

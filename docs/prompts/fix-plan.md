@@ -4,7 +4,7 @@
 > CLI: `claude -p --resume <planning-session>` when available, otherwise fresh `claude -p`
 > Output artifact: `plans/plan-<uuid>.json`
 > Schema: `schemas/plan.schema.json`
-> State transitions: PLANNING(fix) → APPROVAL_PLAN (or FEASIBILITY if approval skipped)
+> State transitions: PLANNING(fix) → APPROVAL_PLAN (or EXECUTING if approval skipped)
 > Triggered by: adjudication debate outcome requiring fixes
 
 ---

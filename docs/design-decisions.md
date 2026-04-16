@@ -142,7 +142,7 @@ This document records decisions made during design, including responses to the f
 
 **Context:** Finding 12 suggested cutting to "one planner, one executor, one optional review gate." This would remove the automated quality feedback loop, which is the core differentiator of this tool over a simple script.
 
-**Decision rationale:** The old limits were attached to a discard-and-replan model. The new model preserves the worktree and asks for human input at feasibility and debate tiebreaker points. `orchestrator.max_retries` still bounds individual failed CLI invocations, and `feasibility.max_feasibility_replans` bounds feasibility-specific disagreement.
+**Decision rationale:** The old limits were attached to a discard-and-replan model. The new model preserves the worktree and asks for human input at plan approval and debate tiebreaker points. `orchestrator.max_retries` still bounds individual failed CLI invocations.
 
 ---
 
@@ -220,11 +220,11 @@ This document records decisions made during design, including responses to the f
 
 **Decision rationale:** This closes the gap between raw operator input and the planner input while giving downstream phases a single routing signal.
 
-## DD-19: Add a feasibility phase before execution
+## DD-19: Remove the standalone feasibility phase
 
-**Decision:** Introduce a non-mutating feasibility phase after plan approval and before execution.
+**Decision:** The standalone feasibility phase is removed. Plan approval now proceeds directly to execution.
 
-**Decision rationale:** This catches broken environments and impossible plan assumptions before the worker touches files.
+**Decision rationale:** The fixed Claude/Codex scoping debate already performs early viability checking, and execution failures are handled by the review/adjudication fix loop. Removing the extra phase shortens the common path and avoids asking the operator to adjudicate the same concerns twice.
 
 ---
 
@@ -269,6 +269,6 @@ This document records decisions made during design, including responses to the f
 
 ## DD-24: Preserve worktrees through fix cycles
 
-**Decision:** The engine no longer discards worktrees when feasibility or adjudication sends the run back to planning. Fix planning produces incremental steps that execute on top of existing changes.
+**Decision:** The engine no longer discards worktrees when adjudication sends the run back to planning. Fix planning produces incremental steps that execute on top of existing changes.
 
 **Decision rationale:** Discarding the worktree erased useful implementation progress and made review fixes expensive. Preserving the worktree matches the actual developer workflow: keep the diff, plan the smallest correction, apply it, and review again.

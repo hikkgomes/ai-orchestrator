@@ -11,11 +11,10 @@ Workflow phases exchange JSON artifacts validated against schemas in `schemas/` 
 ```
 Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter]
 Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
-Phase 4 (Feasibility)  → feasibility/feasibility-<uuid>.json [feasibility.schema.json]
-Phase 5 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
-Phase 6 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
-Phase 7 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
-Phase 7 debate rounds  → adjudications/debate-round-*.json   [debate_response.schema.json]
+Phase 4 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
+Phase 5 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
+Phase 6 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
+Phase 6 debate rounds  → adjudications/debate-round-*.json   [debate_response.schema.json]
 ```
 
 ---
@@ -52,21 +51,6 @@ Produced by the planner. Consumed by the executor and reviewer.
 
 **Application-level validation (in `validator.py`):**
 - All file paths are normalized and verified to stay within the repo root (reject paths containing `..` anywhere, e.g. `a/../../b`)
-
----
-
-## Feasibility Contract (`feasibility.schema.json`)
-
-Produced by the feasibility checker. Consumed by the engine before execution.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `verdict` | enum: go/go_with_warnings/blocked | yes | Overall feasibility decision |
-| `blocking_issues` | array | yes | Critical or warning issues |
-| `blocking_issues[].severity` | enum: critical/warning | yes | Issue impact |
-| `blocking_issues[].description` | string | yes | Problem summary |
-| `blocking_issues[].suggestion` | string | no | Suggested operator action |
-| `summary` | string | yes | High-level feasibility summary |
 
 ---
 
@@ -166,11 +150,9 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `normalized_task` | string or null | Scoping-normalized task |
 | `complexity_tier` | string or null | Scoping-derived routing tier |
 | `step_results` | array of string | References to execution result artifacts (legacy field name) |
-| `feasibility_id` | string or null | Reference to current feasibility result |
 | `review_id` | string or null | Reference to current review |
 | `adjudication_id` | string or null | Reference to current adjudication |
 | `fix_iteration_count` | integer | How many incremental fix-planning cycles so far |
-| `feasibility_replan_count` | integer | How many feasibility-driven replans so far |
 | `session_ids` | object | Vendor session IDs keyed by phase |
 | `scope_md_ref` | string or null | Canonical scope markdown reference |
 | `debate_state` | object or null | Adjudication debate progress |

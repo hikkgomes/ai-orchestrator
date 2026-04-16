@@ -184,35 +184,6 @@ def test_debate_tiebreaker_approve_requires_decision(monkeypatch):
     assert "requires --decision fix or --decision pass" in result.output
 
 
-def test_feasibility_approve_defaults_to_override(monkeypatch):
-    captured: dict[str, object] = {}
-
-    class FakeEngine:
-        def approve(self, run_id, gate, *, force=False, decision=None):
-            captured.update(
-                {
-                    "run_id": run_id,
-                    "gate": gate,
-                    "force": force,
-                    "decision": decision,
-                }
-            )
-            state = RunState(run_id=run_id, task="Test")
-            state.status = "DONE"
-            state.current_phase = "DONE"
-            return state
-
-    monkeypatch.setattr("ai_orchestrator.cli._resolve_run_id_arg", lambda ctx, run_id: run_id)
-    monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx: FakeEngine())
-    monkeypatch.setattr("ai_orchestrator.cli._render_run_snapshot", lambda ctx, run_id, *, state=None: None)
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["approve", "run-1", "feasibility"])
-
-    assert result.exit_code == 0
-    assert captured["decision"] == "override"
-
-
 def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):
     repo_root = tmp_path
     artifact_root = repo_root / ".ai-orchestrator"

@@ -26,7 +26,6 @@ class WorkflowStatus(str, Enum):
     SCOPING = "SCOPING"
     PLANNING = "PLANNING"
     APPROVAL_PLAN = "APPROVAL_PLAN"
-    FEASIBILITY = "FEASIBILITY"
     EXECUTING = "EXECUTING"
     REVIEWING = "REVIEWING"
     ADJUDICATING = "ADJUDICATING"
@@ -247,11 +246,9 @@ class RunState(BaseModel):
     commit_commands: list[str] = Field(default_factory=list)
     review_id: str | None = None
     adjudication_id: str | None = None
-    feasibility_id: str | None = None
     rework_count: int = 0
     replan_count: int = 0
     fix_iteration_count: int = 0
-    feasibility_replan_count: int = 0
     retry_counts: dict[str, int] = Field(default_factory=dict)
     session_ids: dict[str, str] = Field(default_factory=dict)
     scope_md_ref: str | None = None

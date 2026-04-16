@@ -7,7 +7,6 @@ planner = "claude"
 worker = "codex"
 reviewer = "claude"
 adjudicator = "codex"
-feasibility_checker = "codex"
 scoper = "claude"
 
 [routing.claude]
@@ -32,10 +31,6 @@ reasoning_effort = "high"
 
 [scoping]
 enabled = true
-
-[feasibility]
-enabled = true
-max_feasibility_replans = 2
 
 [debate]
 escalated_claude_model = "claude-opus-4-5-20250514"

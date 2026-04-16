@@ -26,18 +26,15 @@ class FakeClaudeAdapter:
         reviews,
         adjudications,
         scopings=None,
-        feasibilities=None,
         debate_responses=None,
     ):
         self._scopings = list(scopings or [])
         self._plans = list(plans)
-        self._feasibilities = list(feasibilities or [])
         self._reviews = list(reviews)
         self._adjudications = list(adjudications)
         self._debate_responses = list(debate_responses or [])
         self.scoping_calls = 0
         self.planning_calls = 0
-        self.feasibility_calls = 0
         self.review_calls = 0
         self.adjudication_calls = 0
         self.invocations: list[dict[str, object]] = []
@@ -79,15 +76,6 @@ class FakeClaudeAdapter:
         if title == "Plan":
             self.planning_calls += 1
             return InvokeResult(self._plans.pop(0), session_id="planning-session")
-        if title == "FeasibilityResult":
-            self.feasibility_calls += 1
-            if self._feasibilities:
-                return InvokeResult(self._feasibilities.pop(0))
-            return InvokeResult({
-                "verdict": "go",
-                "blocking_issues": [],
-                "summary": "The plan is feasible.",
-            })
         if title == "Review":
             self.review_calls += 1
             return InvokeResult(self._reviews.pop(0), session_id="review-session")
@@ -152,7 +140,6 @@ class FakeCodexAdapter:
         self.executed_steps: list[int] = []
         self.execution_calls = 0
         self.scoping_calls = 0
-        self.feasibility_calls = 0
         self.adjudication_calls = 0
         self._adjudications = list(adjudications or [])
         self._debate_responses = list(debate_responses or [])
@@ -180,13 +167,6 @@ class FakeCodexAdapter:
                 "resume_session_id": resume_session_id,
             }
         )
-        if schema["title"] == "FeasibilityResult":
-            self.feasibility_calls += 1
-            return InvokeResult({
-                "verdict": "go",
-                "blocking_issues": [],
-                "summary": "Environment checks passed.",
-            })
         if schema["title"] == "Adjudication":
             self.adjudication_calls += 1
             if self._adjudications:
@@ -412,7 +392,6 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     assert state.status == "DONE"
     assert state.normalized_task == "Implement feature"
     assert state.complexity_tier == "moderate"
-    assert state.feasibility_id is not None
     assert codex.executed_steps == [1, 2]
     assert (tmp_repo / "step-1.txt").exists()
     assert (tmp_repo / "step-2.txt").exists()
@@ -1089,12 +1068,6 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "FeasibilityResult":
-                return {
-                    "verdict": "go",
-                    "blocking_issues": [],
-                    "summary": "feasible",
-                }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
             self.calls.append(1)
@@ -1222,12 +1195,6 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "FeasibilityResult":
-                return {
-                    "verdict": "go",
-                    "blocking_issues": [],
-                    "summary": "feasible",
-                }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
             self.calls += 1
@@ -1289,12 +1256,6 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "FeasibilityResult":
-                return {
-                    "verdict": "go",
-                    "blocking_issues": [],
-                    "summary": "feasible",
-                }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
             self.calls += 1
@@ -1394,7 +1355,7 @@ def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
     resumed = engine.resume(paused.run_id)
 
     assert resumed.status == "BLOCKED_ON_CLI"
-    assert resumed.current_phase == "FEASIBILITY"
+    assert resumed.current_phase == "EXECUTING"
 
 
 def test_resume_paused_without_decision_re_pauses(tmp_repo, artifact_root, default_config):
@@ -1440,12 +1401,6 @@ def test_reset_worktree_failure_raises_engine_error(tmp_repo, artifact_root, def
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "FeasibilityResult":
-                return {
-                    "verdict": "go",
-                    "blocking_issues": [],
-                    "summary": "feasible",
-                }
             self.calls += 1
             if self.calls == 1:
                 raise StepFailure("execution failed", validation_error="retry requested")
@@ -1536,154 +1491,6 @@ def test_scoping_disabled_skips_directly_to_planning(tmp_repo, artifact_root, de
     assert state.normalized_task is None
 
 
-def test_feasibility_blocked_replans_with_feedback(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter(
-        [_plan(plan_id="p1"), _plan(plan_id="p2")],
-        [_review()],
-        [_pass_adjudication()],
-    )
-
-    class BlockingFeasibilityCodex(FakeCodexAdapter):
-        def __init__(self):
-            super().__init__()
-            self._first = True
-
-        def invoke(
-            self,
-            prompt,
-            working_dir,
-            timeout,
-            schema,
-            *,
-            step_number=None,
-            reasoning_effort_override=None,
-            model_override=None,
-        ):
-            if schema["title"] == "FeasibilityResult":
-                self.feasibility_calls += 1
-                if self._first:
-                    self._first = False
-                    return {
-                        "verdict": "blocked",
-                        "blocking_issues": [
-                            {"severity": "critical", "description": "Missing dependency"}
-                        ],
-                        "summary": "Plan is blocked.",
-                    }
-                return {
-                    "verdict": "go",
-                    "blocking_issues": [],
-                    "summary": "Feasible after replan.",
-                }
-            return super().invoke(
-                prompt,
-                working_dir,
-                timeout,
-                schema,
-                step_number=step_number,
-                reasoning_effort_override=reasoning_effort_override,
-                model_override=model_override,
-            )
-
-    codex = BlockingFeasibilityCodex()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    paused = engine.start("Implement feature", "15151515-1515-1515-1515-151515151515")
-    assert paused.status == "PAUSED"
-    assert paused.current_phase == "FEASIBILITY"
-
-    state = engine.reject(paused.run_id, "feasibility", "Revise the plan")
-
-    assert state.status == "DONE"
-    assert state.feasibility_replan_count == 1
-    assert claude.planning_calls == 2
-    assert codex.feasibility_calls == 2
-
-
-def test_feasibility_blocked_at_replan_limit_pauses_for_final_decision(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    default_config.feasibility.max_feasibility_replans = 0
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-
-    class AlwaysBlockedCodex(FakeCodexAdapter):
-        def invoke(
-            self,
-            prompt,
-            working_dir,
-            timeout,
-            schema,
-            *,
-            step_number=None,
-            reasoning_effort_override=None,
-            model_override=None,
-        ):
-            if schema["title"] == "FeasibilityResult":
-                self.feasibility_calls += 1
-                return {
-                    "verdict": "blocked",
-                    "blocking_issues": [
-                        {"severity": "critical", "description": "Broken toolchain"}
-                    ],
-                    "summary": "Cannot execute.",
-                }
-            return super().invoke(
-                prompt,
-                working_dir,
-                timeout,
-                schema,
-                step_number=step_number,
-                reasoning_effort_override=reasoning_effort_override,
-                model_override=model_override,
-            )
-
-    codex = AlwaysBlockedCodex()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "16161616-1616-1616-1616-161616161616")
-
-    assert state.status == "PAUSED"
-    assert state.current_phase == "FEASIBILITY"
-    assert "Feasibility check is blocked" in (state.error or "")
-
-    terminated = engine.reject(state.run_id, "feasibility", "Trust Codex", full=True)
-    assert terminated.status == "TERMINATED"
-
-
-def test_feasibility_disabled_skips_to_execution(tmp_repo, artifact_root, default_config):
-    default_config.approval.require_plan_approval = False
-    default_config.approval.require_merge_approval = False
-    default_config.feasibility.enabled = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
-    codex = FakeCodexAdapter()
-    engine = Engine(
-        default_config,
-        tmp_repo,
-        artifact_root,
-        adapters={"claude": claude, "codex": codex},
-        workflow=_workflow(),
-    )
-
-    state = engine.start("Implement feature", "17171717-1717-1717-1717-171717171717")
-
-    assert state.status == "DONE"
-    assert codex.feasibility_calls == 0
-
-
 def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
@@ -1715,10 +1522,8 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     assert state.status == "DONE"
     planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
     review_call = next(call for call in claude.invocations if call["title"] == "Review")
-    feasibility_call = next(call for call in codex.invocations if call["title"] == "FeasibilityResult")
     execute_call = next(call for call in codex.invocations if call["title"] == "ExecutionResult")
     assert planning_call["reasoning_effort_override"] == "max"
-    assert feasibility_call["reasoning_effort_override"] == "xhigh"
     assert execute_call["reasoning_effort_override"] == "xhigh"
     assert review_call["reasoning_effort_override"] == "max"
 

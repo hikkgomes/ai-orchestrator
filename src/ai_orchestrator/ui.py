@@ -37,7 +37,6 @@ except Exception:  # pragma: no cover
 ACTIVE_STATES = {
     WorkflowStatus.SCOPING.value,
     WorkflowStatus.PLANNING.value,
-    WorkflowStatus.FEASIBILITY.value,
     WorkflowStatus.EXECUTING.value,
     WorkflowStatus.REVIEWING.value,
     WorkflowStatus.ADJUDICATING.value,
@@ -60,7 +59,6 @@ _STATUS_STYLES = {
     WorkflowStatus.SCOPING.value: "bright_cyan",
     WorkflowStatus.PLANNING.value: "cyan",
     WorkflowStatus.APPROVAL_PLAN.value: "yellow",
-    WorkflowStatus.FEASIBILITY.value: "bright_magenta",
     WorkflowStatus.EXECUTING.value: "magenta",
     WorkflowStatus.REVIEWING.value: "blue",
     WorkflowStatus.ADJUDICATING.value: "bright_blue",
@@ -133,10 +131,6 @@ class OrchestratorUI:
     def print_scoping_result(self, result: dict[str, Any]) -> None:
         """Render the scoping output."""
         self.console.print(self._render_scoping_result(result))
-
-    def print_feasibility_result(self, result: dict[str, Any]) -> None:
-        """Render the feasibility output."""
-        self.console.print(self._render_feasibility_result(result))
 
     def print_status(
         self,
@@ -505,23 +499,6 @@ class OrchestratorUI:
         if result.get("blocking_reason"):
             table.add_row("Blocking Reason", str(result["blocking_reason"]))
         return Panel(table, title="Scoping Result", border_style="bright_cyan")
-
-    def _render_feasibility_result(self, result: dict[str, Any]) -> RenderableType:
-        table = Table(box=box.ROUNDED, expand=True, header_style="bold magenta")
-        table.add_column("Verdict", width=18)
-        table.add_column("Summary")
-        table.add_row(str(result.get("verdict", "")), self._truncate(str(result.get("summary", "")), 96))
-
-        issues = Table(box=box.SIMPLE, expand=True, header_style="bold magenta")
-        issues.add_column("Severity", width=12)
-        issues.add_column("Description")
-        blocking_issues = result.get("blocking_issues", [])
-        if blocking_issues:
-            for issue in blocking_issues:
-                issues.add_row(str(issue.get("severity", "")), str(issue.get("description", "")))
-        else:
-            issues.add_row("-", "No blocking issues.")
-        return Panel(Group(table, issues), title="Feasibility Result", border_style="bright_magenta")
 
     def _render_diff(self, diff: str) -> RenderableType:
         lines = [line for line in diff.splitlines() if line.strip()]

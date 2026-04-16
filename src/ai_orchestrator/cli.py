@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import json
 import subprocess
 import sys
@@ -10,6 +9,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import click
+try:  # pragma: no cover - optional in minimal test environments
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.key_binding import KeyBindings
+except ImportError:  # pragma: no cover
+    PromptSession = None
+    FileHistory = None
+    KeyBindings = None
 from rich.console import RenderableType
 
 from . import __version__
@@ -29,11 +36,6 @@ from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
 from .worktree import WorktreeManager
-
-try:  # pragma: no cover - platform dependent
-    import readline
-except ImportError:  # pragma: no cover
-    readline = None
 
 
 _HISTORY_FILE = Path.home() / ".config" / "ai-orchestrator" / "shell_history"
@@ -171,7 +173,7 @@ def _start_run(
     plan = _load_plan_file(plan_file) if plan_file else None
     if skip_planning and start_at is None:
         start_at = "executing"
-    if start_at in {"executing", "execution", "feasibility", "reviewing", "review"} and plan is None:
+    if start_at in {"executing", "execution", "reviewing", "review"} and plan is None:
         plan = _synthetic_plan(task)
     engine = _build_engine(ctx)
     run_id = str(uuid4())
@@ -199,7 +201,7 @@ def _start_run(
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
 @click.option("--skip-planning", is_flag=True, default=False)
-@click.option("--start-at", type=click.Choice(["scoping", "planning", "feasibility", "executing", "reviewing"]))
+@click.option("--start-at", type=click.Choice(["scoping", "planning", "executing", "reviewing"]))
 @click.option("--plan-file", type=click.Path(dir_okay=False, path_type=str))
 @click.pass_context
 def cmd_new(
@@ -237,7 +239,7 @@ def cmd_new(
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
 @click.option("--skip-planning", is_flag=True, default=False)
-@click.option("--start-at", type=click.Choice(["scoping", "planning", "feasibility", "executing", "reviewing"]))
+@click.option("--start-at", type=click.Choice(["scoping", "planning", "executing", "reviewing"]))
 @click.option("--plan-file", type=click.Path(dir_okay=False, path_type=str))
 @click.pass_context
 def cmd_run(
@@ -324,48 +326,44 @@ def _read_task_from_stdin_or_prompt() -> str:
     return click.prompt("Task", type=str)
 
 
-def _read_multiline_task() -> str:
-    lines: list[str] = []
-    while True:
-        prompt = "> " if not lines else "  "
-        try:
-            line = input(prompt)
-        except EOFError:
-            return ""
-        if not line and lines:
-            return "\n".join(lines).strip()
-        if not line:
-            continue
-        if line.endswith("\\"):
-            lines.append(line[:-1])
-            continue
-        lines.append(line)
-        if len(lines) == 1:
-            return "\n".join(lines).strip()
-
-
-def _setup_readline() -> None:
-    if readline is None:
-        return
+def _create_prompt_session():
+    if PromptSession is None or FileHistory is None or KeyBindings is None:
+        raise click.ClickException(
+            "prompt_toolkit is required for interactive shell mode. "
+            "Install ai-orchestrator with its project dependencies.",
+        )
     _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        readline.read_history_file(_HISTORY_FILE)
-    except FileNotFoundError:
-        pass
-    readline.set_history_length(500)
-    atexit.register(readline.write_history_file, _HISTORY_FILE)
+    bindings = KeyBindings()
+
+    @bindings.add("enter")
+    def submit(event):
+        event.current_buffer.validate_and_handle()
+
+    @bindings.add("escape", "enter")
+    def newline(event):
+        event.current_buffer.insert_text("\n")
+
+    return PromptSession(
+        history=FileHistory(str(_HISTORY_FILE)),
+        key_bindings=bindings,
+        multiline=False,
+        enable_open_in_editor=True,
+    )
 
 
 def _run_shell(ctx: click.Context) -> None:
-    _setup_readline()
     ui = ctx.obj["ui"]
     repo_name = ctx.obj["repo_root"].name
     ui.info(f"ai-orchestrator {__version__} | repo: {repo_name}")
-    ui.info("Type a task, or /help for commands. Blank line submits multi-line input.")
+    ui.info("Type a task, or /help for commands. Alt+Enter for new line.")
+    session = _create_prompt_session()
     while True:
-        task = _read_multiline_task()
-        if not task:
+        try:
+            task = session.prompt("> ").strip()
+        except (EOFError, KeyboardInterrupt):
             return
+        if not task:
+            continue
         if task.startswith("/"):
             if _handle_shell_command(ctx, task):
                 return
@@ -435,13 +433,13 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 @main.command("approve")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan", "feasibility", "debate_tiebreaker"]))
+@click.argument("gate", type=click.Choice(["scope", "plan", "debate_tiebreaker"]))
 @click.option("--force", is_flag=True, default=False, help="Reserved for backward compatibility.")
 @click.option(
     "--decision",
     type=click.Choice(["fix", "pass", "approve_claude", "approve_codex", "override"]),
     default=None,
-    help="Gate-specific decision for debate or feasibility gates.",
+    help="Gate-specific decision for debate gates.",
 )
 @click.pass_context
 def cmd_approve(
@@ -458,8 +456,6 @@ def cmd_approve(
         raise click.UsageError(
             "Gate 'debate_tiebreaker' requires --decision fix or --decision pass."
         )
-    if gate == "feasibility" and decision is None:
-        decision = "override"
     try:
         state = engine.approve(run_id, gate, force=force, decision=decision)
     except EngineError as exc:
@@ -469,7 +465,7 @@ def cmd_approve(
 
 @main.command("reject")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan", "feasibility"]))
+@click.argument("gate", type=click.Choice(["scope", "plan"]))
 @click.option("--reason", required=True)
 @click.option("--full", "full_reject", is_flag=True, default=False, help="Terminate instead of requesting another plan.")
 @click.pass_context
@@ -724,8 +720,6 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             gate = "scope"
         elif state.current_phase == "APPROVAL_PLAN":
             gate = "plan"
-        elif state.current_phase == "FEASIBILITY":
-            gate = "feasibility"
         elif state.current_phase == "ADJUDICATING":
             gate = "debate_tiebreaker"
         else:
@@ -754,39 +748,6 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             else:
                 reason = ui.rejection_reason("Rejected in interactive mode")
                 state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
-            continue
-        if gate == "feasibility":
-            at_replan_limit = state.feasibility_replan_count >= engine.feasibility_replan_limit
-            if at_replan_limit:
-                choice = ui.approval_choice(
-                    gate,
-                    f"Run {run_id}: feasibility replan limit reached.",
-                    choices=["approve-claude", "approve-codex", "full-reject"],
-                    default="approve-claude",
-                )
-                if choice == "approve-claude":
-                    state = engine.approve(run_id, gate, decision="approve_claude")
-                elif choice == "approve-codex":
-                    state = engine.approve(run_id, gate, decision="approve_codex")
-                else:
-                    state = engine.reject(
-                        run_id,
-                        gate,
-                        "Full rejection after feasibility limit",
-                        full=True,
-                    )
-            else:
-                choice = ui.approval_choice(
-                    gate,
-                    f"Run {run_id} is paused at feasibility review.",
-                    choices=["approve-override", "soft-reject", "full-reject"],
-                    default="approve-override",
-                )
-                if choice == "approve-override":
-                    state = engine.approve(run_id, gate, decision="override")
-                else:
-                    reason = ui.rejection_reason("Feasibility decision")
-                    state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
             continue
         if gate == "debate_tiebreaker":
             choice = ui.approval_choice(
@@ -828,8 +789,6 @@ def _render_run_snapshot(ctx: click.Context, run_id: str, *, state=None) -> None
         )
     if state.current_phase == "APPROVAL_PLAN" and state.plan_id:
         ctx.obj["ui"].print_plan(store.read_json(state.plan_id), run_id=state.run_id)
-    if state.current_phase == "FEASIBILITY" and state.feasibility_id:
-        ctx.obj["ui"].print_feasibility_result(store.read_json(state.feasibility_id))
     ctx.obj["ui"].print_status(
         state,
         plan=store.read_json(state.plan_id) if state.plan_id else None,

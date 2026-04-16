@@ -4,7 +4,7 @@
 > CLI: `claude -p` (default); configurable via `routing.planner`
 > Output artifact: `plans/plan-<uuid>.json`
 > Schema: `schemas/plan.schema.json`
-> State transitions: PLANNING → APPROVAL_PLAN (or FEASIBILITY/EXECUTING if approval skipped)
+> State transitions: PLANNING → APPROVAL_PLAN (or EXECUTING if approval skipped)
 
 ---
 
@@ -25,7 +25,7 @@ file lists, dependencies, or complexity hints.
 | `{directory_tree}` | file system | Depth-3 tree of repo root, truncated to 50 000 chars |
 | `{key_file_contents}` | file system | Full contents of README, config, entry points; each file prefixed with its path |
 | `{plan_schema}` | `schemas/plan.schema.json` | Full JSON Schema for the plan artifact |
-| `{planning_feedback}` | human, feasibility, or debate feedback (optional) | Feedback for iterative refinement |
+| `{planning_feedback}` | human or debate feedback (optional) | Feedback for iterative refinement |
 | `{scope_md}` | scoping artifact | Canonical scope with YAML frontmatter |
 
 ---

@@ -9,17 +9,16 @@ Every orchestrated run moves through these phases in order. Each phase is a dist
 `workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 ```
-INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING
-          ^                    ^                    |              |
-          |                    |                    |              +-- blocked gate
-          |                    |                    +-- soft reject |
+INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
+          ^                    ^                    |
+          |                    |                    +-- soft reject
           |                    +---- incremental fixes <---- ADJUDICATING(debate) <- REVIEWING(session)
           |
           +---- reject/update task while paused at SCOPING
 
 ADJUDICATING -> PAUSED(debate_tiebreaker)
 ADJUDICATING -> MERGING -> DONE
-APPROVAL_PLAN/FEASIBILITY -> TERMINATED on full reject
+APPROVAL_PLAN -> TERMINATED on full reject
 ```
 
 ---
@@ -51,11 +50,11 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 |---|---|
 | Default CLI | `claude -p` |
 | Config key | `routing.planner` |
-| Input | User task description + `scope.md` + repo file listing + any operator/feasibility/adjudication feedback |
+| Input | User task description + `scope.md` + repo file listing + any operator/adjudication feedback |
 | Output | `plans/plan-<uuid>.json` validated against `plan.schema.json` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
-| Session | Fresh on first entry; `claude --resume <session-id>` for soft-reject and feasibility-blocked refinements |
+| Session | Fresh on first entry; `claude --resume <session-id>` for soft-reject refinements |
 
 **Prompt construction:**
 
@@ -99,28 +98,11 @@ Plan approval has three outcomes:
 - `orch reject <run-id> plan --reason "..."` soft-rejects and resumes the same planning session with the feedback.
 - `orch reject <run-id> plan --full --reason "..."` writes execution history and transitions to `TERMINATED`.
 
-**Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to FEASIBILITY when enabled, otherwise EXECUTING.
+**Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to EXECUTING.
 
 ---
 
-## Phase 4: FEASIBILITY
-
-**Purpose:** Validate that the approved plan is executable in the current repository state before any worker mutation.
-
-| Property | Value |
-|---|---|
-| Default CLI | `codex exec` |
-| Config key | `routing.feasibility_checker` |
-| Input | Normalized task + approved plan + pre-execution tree |
-| Output | `feasibility/feasibility-<uuid>.json` validated against `feasibility.schema.json` |
-| Worktree | Yes (read-only probe) |
-| Retries | Up to `max_retries` on schema failure |
-
-Blocked feasibility results pause at the `feasibility` gate. The operator can approve an override, full-reject, or soft-reject back into the same planning session. Feasibility replans are capped by `feasibility.max_feasibility_replans`; after that, the operator must choose whether to proceed with Claude's plan, trust Codex's blocker, or terminate.
-
----
-
-## Phase 5: EXECUTING
+## Phase 4: EXECUTING
 
 **Purpose:** Implement the full natural plan in one Codex or Claude execution session, in a single worktree or in-place across a workspace.
 
@@ -194,7 +176,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 ---
 
-## Phase 6: REVIEWING
+## Phase 5: REVIEWING
 
 **Purpose:** A second AI reviews the implementation for correctness, style, and completeness.
 
@@ -235,7 +217,7 @@ The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 
 ---
 
-## Phase 7: ADJUDICATING
+## Phase 6: ADJUDICATING
 
 **Purpose:** Decide whether the implementation passes review or needs incremental fixes, using a Codex/Claude debate when they disagree.
 
@@ -254,7 +236,7 @@ Fix cycles never discard the worktree. A return to planning means a new incremen
 
 ---
 
-## Phase 8: MERGING
+## Phase 7: MERGING
 
 **Purpose:** Hand off the final implementation without committing on the user's behalf.
 
@@ -281,23 +263,19 @@ The engine does not create worktrees. It inspects each configured repo in place,
 ## Canonical State Machine
 
 ```
-INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ FEASIBILITY ──▶ EXECUTING
-              (debate)     │   ▲          │                              │
-                           │   │          │ (full-reject)                │
-                           │   │          ▼                              ▼
-                           │   │       TERMINATED                    REVIEWING
-                           │   │                                        │
-                           │   └── (soft-reject, same session) ─────┐   │
-                           │                                        │   ▼
-                           │   ◀── (feasibility blocked) ───────────┘ ADJUDICATING
-                           │                                         (debate tree)
-                           │                                            │
-                           └── (fix needed, worktree preserved) ◀───────┤
-                                                                        │
-                                                              ADJUDICATING(PASS)
-                                                                        │
-                                                                        ▼
-                                                                     MERGING ──▶ DONE
+INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXECUTING
+              (debate)     │   ▲          │                  │
+                           │   │          │ (full-reject)    ▼
+                           │   │          ▼              REVIEWING
+                           │   │       TERMINATED            │
+                           │   └── (soft-reject) ───────┐   ▼
+                           │                            └ ADJUDICATING
+                           │                              (debate tree)
+                           │                                  │
+                           └── (fix needed, preserved worktree)│
+                                                              │ PASS
+                                                              ▼
+                                                           MERGING ──▶ DONE
 
 Any state ──▶ FAILED         (unrecoverable error)
 Any state ──▶ TERMINATED     (user full-reject)
@@ -314,7 +292,7 @@ Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth re
 | `TERMINATED` | Not resumable. User chose to end the run. |
 | `BLOCKED_ON_CLI` | Re-attempt the CLI invocation that was blocked |
 | `CONFLICT` | Verify conflict is resolved, then continue merge |
-| `EXECUTING` (crashed mid-step) | Re-run the current step from the beginning in the same worktree |
+| `EXECUTING` (crashed mid-session) | Re-run the full execution session from the beginning in the same worktree |
 | Any other (crashed) | Re-enter at `current_phase` |
 
 ---
@@ -326,7 +304,7 @@ A workspace root is a directory without its own `.git/` that contains one or mor
 - Detection: use `[workspace] repos = [...]` from `aio.toml`, or auto-detect git subdirectories when the current directory is not a repo.
 - Working directory: all AI phases run from the workspace root.
 - Execution: no orchestrator-managed worktrees; the worker runs in place across configured repos.
-- Retry/reset: execution retries reset the current step baseline. Replan and fix cycles preserve existing worktree changes.
+- Retry/reset: execution retries reset the current execution baseline. Replan and fix cycles preserve existing worktree changes.
 - Review input: execution results may include `workspace_diffs`, and the review prompt aggregates those per-repo diffs.
 - Completion: `MERGING` prints per-repo handoff commands instead of changing git history.
 
@@ -337,9 +315,9 @@ A workspace root is a directory without its own `.git/` that contains one or mor
 CLI invocations are still isolated subprocesses, but Claude planning and review
 sessions intentionally preserve transcript continuity:
 
-1. **Planning resume** — initial planning starts a fresh `claude -p` session. Soft-rejects and feasibility replans resume that same session with `claude --resume <session-id>`.
+1. **Planning resume** — initial planning starts a fresh `claude -p` session. Soft-rejects resume that same session with `claude --resume <session-id>`.
 2. **Review resume** — review starts a fresh Claude session. Adjudication debate rounds that need Claude resume that review session, with model and effort escalation when required.
-3. **Codex freshness** — Codex feasibility, execution, and adjudication calls are fresh subprocesses. Session IDs are not reused for Codex.
+3. **Codex freshness** — Codex execution and adjudication calls are fresh subprocesses. Session IDs are not reused for Codex.
 4. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
 5. **Prompt auditability** — prompts are written under `prompts/` for auditability when enabled. They are artifacts, not hidden mutable state.
 6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations. This is intentional: it lets auth and config work normally.

@@ -24,14 +24,14 @@
 │                      ai-orchestrator CLI                      │
 │  (Python – click + rich)                                      │
 │                                                               │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐ │
-│  │  Scoper  │→ │  Planner │→ │ Feasibility│→ │ Reviewer │→ │ Adjudicator  │ │
-│  └────┬─────┘  └────┬─────┘  └──────┬─────┘  └────┬─────┘  └──────┬───────┘ │
-│       │              │              │               │         │
-│       ▼              ▼              ▼               ▼         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐ │
+│  │  Scoper  │→ │  Planner │→ │ Reviewer │→ │ Adjudicator  │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬───────┘ │
+│       │              │             │               │         │
+│       ▼              ▼             ▼               │         │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │              Artifact Store (.ai-orchestrator/)          │ │
-│  │ feasibility/ plans/ results/ reviews/ adjudications/    │ │
+│  │ scoping/ plans/ results/ reviews/ adjudications/        │ │
 │  │ state/ logs/                                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │       │              │                                        │
@@ -51,8 +51,8 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── metadata.sqlite3            # run + adapter invocation metadata
 ├── state/
 │   └── run-<uuid>.json          # orchestrator run state (resumable)
-├── feasibility/
-│   └── feasibility-<uuid>.json  # validated against feasibility.schema.json
+├── scoping/
+│   └── scope-<run>.md            # canonical scope with YAML frontmatter
 ├── plans/
 │   └── plan-<uuid>.json         # validated against plan.schema.json
 ├── results/
@@ -91,7 +91,7 @@ Built with `click` for command parsing and `rich` for terminal UI. Entry points:
 
 ### 2. Orchestrator Engine
 
-The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `workflows/default.yaml` defines the phase structure and default phase-level settings; `aio.toml` overrides the supported routing, retry, timeout, and loop-limit values.
+The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `workflows/default.yaml` defines the phase structure and default phase-level settings; `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 #### Canonical State Machine
 
@@ -103,8 +103,7 @@ States:
 | `SCOPING` | Scoper CLI invocation in progress |
 | `PLANNING` | Planner CLI invocation in progress |
 | `APPROVAL_PLAN` | Waiting for human to approve/reject the plan |
-| `FEASIBILITY` | Feasibility checker validating the approved plan |
-| `EXECUTING` | Worker CLI executing plan steps sequentially |
+| `EXECUTING` | Worker CLI executing the full plan |
 | `REVIEWING` | Reviewer CLI analyzing implementation |
 | `ADJUDICATING` | Adjudicator CLI deciding pass/rework/replan/fail |
 | `APPROVAL_MERGE` | Waiting for human to approve/reject the merge |
@@ -117,7 +116,7 @@ States:
 
 Allowed transitions are defined in `docs/workflow.md`.
 
-The engine is strictly sequential: one step at a time, one worktree per run. Parallel execution is deferred to a future version.
+The engine is strictly sequential: one full-plan execution session at a time, one worktree per run.
 
 ### 3. CLI Adapters
 
@@ -153,7 +152,7 @@ Both adapters:
 
 **Claude adapter (primary):** Parse `--output-format json` stdout. Try `json.loads(stdout)` first. On failure, strip markdown fences and find JSON boundaries (lenient mode). Log a warning on lenient success.
 
-**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`; feasibility writes `.ai-orchestrator/feasibility/pending-<run-id>.json`. Execution still reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
+**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`. Execution reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
 
 ### 4. Schema Validator
 
@@ -209,7 +208,6 @@ watchdog_timeout = 3600
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-feasibility_checker = "codex"
 adjudicator = "codex"
 
 [routing.claude]
@@ -217,10 +215,6 @@ reasoning_effort = "high"
 
 [scoping]
 enabled = true
-
-[feasibility]
-enabled = true
-max_feasibility_replans = 2
 
 [sessions]
 enable_planning_resume = true

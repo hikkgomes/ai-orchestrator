@@ -115,7 +115,7 @@ def test_render_status_shows_failure_detail_panel_for_failed_runs():
     assert "exit_code: 2" in output
 
 
-def test_print_scoping_and_feasibility_results():
+def test_print_scoping_result():
     ui, console, _ = _ui()
 
     ui.print_scoping_result(
@@ -125,16 +125,6 @@ def test_print_scoping_and_feasibility_results():
             "blocking_reason": "Need a repository-scoped task.",
         }
     )
-    ui.print_feasibility_result(
-        {
-            "verdict": "blocked",
-            "blocking_issues": [{"severity": "critical", "description": "Missing config"}],
-            "summary": "Execution is blocked.",
-        }
-    )
-
     output = console.export_text()
     assert "Scoping Result" in output
     assert "Fix typo in README" in output
-    assert "Feasibility Result" in output
-    assert "Missing config" in output

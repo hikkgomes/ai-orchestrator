@@ -20,8 +20,6 @@ from .prompts.templates import (
     build_adjudication_prompt,
     build_debate_claude_rebuttal_prompt,
     build_debate_codex_rebuttal_prompt,
-    build_feasibility_prompt_claude,
-    build_feasibility_prompt_codex,
     build_fix_planning_prompt,
     build_full_execution_prompt_claude,
     build_full_execution_prompt_codex,
@@ -55,7 +53,6 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.INIT: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
-        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.REVIEWING,
         WorkflowStatus.FAILED,
@@ -69,25 +66,15 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     },
     WorkflowStatus.PLANNING: {
         WorkflowStatus.APPROVAL_PLAN,
-        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.APPROVAL_PLAN: {
-        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.PAUSED,
         WorkflowStatus.TERMINATED,
-    },
-    WorkflowStatus.FEASIBILITY: {
-        WorkflowStatus.EXECUTING,
-        WorkflowStatus.PLANNING,
-        WorkflowStatus.PAUSED,
-        WorkflowStatus.TERMINATED,
-        WorkflowStatus.FAILED,
-        WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.EXECUTING: {
         WorkflowStatus.REVIEWING,
@@ -122,13 +109,11 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
-        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.ADJUDICATING,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
-        WorkflowStatus.FEASIBILITY,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.REVIEWING,
         WorkflowStatus.ADJUDICATING,
@@ -168,10 +153,6 @@ class Engine:
         self._adapters = adapters or {}
         self._ui = ui
 
-    @property
-    def feasibility_replan_limit(self) -> int:
-        return self._config.feasibility.max_feasibility_replans
-
     def start(
         self,
         task: str,
@@ -206,7 +187,6 @@ class Engine:
         mapping = {
             "scoping": WorkflowStatus.SCOPING,
             "planning": WorkflowStatus.PLANNING,
-            "feasibility": WorkflowStatus.FEASIBILITY,
             "executing": WorkflowStatus.EXECUTING,
             "execution": WorkflowStatus.EXECUTING,
             "reviewing": WorkflowStatus.REVIEWING,
@@ -334,9 +314,6 @@ class Engine:
                 continue
             if status == WorkflowStatus.APPROVAL_PLAN:
                 state = self._handle_plan_approval(state)
-                continue
-            if status == WorkflowStatus.FEASIBILITY:
-                state = self._run_feasibility(state)
                 continue
             if status == WorkflowStatus.EXECUTING:
                 state = self._run_execution(state)
@@ -632,7 +609,6 @@ class Engine:
         if invoke_result.session_id:
             state.session_ids["planning"] = invoke_result.session_id
         state.plan_id = self._artifacts.save_plan(state.run_id, result)
-        state.feasibility_id = None
         state.review_id = None
         state.adjudication_id = None
         state.debate_state = None
@@ -642,14 +618,10 @@ class Engine:
 
         if self._config.approval.require_plan_approval:
             return self._transition(state, WorkflowStatus.APPROVAL_PLAN)
-        if self._config.feasibility.enabled:
-            return self._transition(state, WorkflowStatus.FEASIBILITY)
         return self._transition(state, WorkflowStatus.EXECUTING)
 
     def _handle_plan_approval(self, state: RunState) -> RunState:
         if not self._config.approval.require_plan_approval:
-            if self._config.feasibility.enabled:
-                return self._transition(state, WorkflowStatus.FEASIBILITY)
             return self._transition(state, WorkflowStatus.EXECUTING)
 
         decision = self._artifacts.consume_approval_decision(state.run_id, "plan")
@@ -672,151 +644,7 @@ class Engine:
                 str(decision.get("reason") or ""),
             )
             return self._transition(state, WorkflowStatus.PLANNING)
-        if self._config.feasibility.enabled:
-            return self._transition(state, WorkflowStatus.FEASIBILITY)
         return self._transition(state, WorkflowStatus.EXECUTING)
-
-    def _run_feasibility(self, state: RunState) -> RunState:
-        if not self._config.feasibility.enabled:
-            return self._transition(state, WorkflowStatus.EXECUTING)
-
-        if state.feasibility_id:
-            existing = self._artifacts.read_json(state.feasibility_id)
-            if existing.get("verdict") == "blocked":
-                return self._handle_feasibility_blocked(state, existing)
-
-        schema = load_bundled_schema("feasibility.schema.json")
-        plan = self._require_artifact(state.plan_id)
-        worktree_dir = self._ensure_worktree(state)
-        result_path = (self._artifact_root / "feasibility" / f"pending-{state.run_id}.json").resolve()
-        if result_path.exists():
-            result_path.unlink()
-
-        task_description = state.normalized_task or state.task
-        plan_json = json_block(plan)
-        directory_tree = render_directory_tree(worktree_dir)
-        workspace_trees = self._workspace_trees(state, max_depth=2)
-        adapter = self._adapter_for_phase("feasibility")
-        cli_name = self._phase_cli("feasibility", config_name="feasibility_checker")
-        if cli_name == "codex":
-            prompt = build_feasibility_prompt_codex(
-                task_description=task_description,
-                plan_json=plan_json,
-                directory_tree=directory_tree,
-                workspace_trees=workspace_trees,
-                result_file_path=str(result_path),
-                schema_json=json_block(schema),
-            )
-        else:
-            prompt = build_feasibility_prompt_claude(
-                task_description=task_description,
-                plan_json=plan_json,
-                directory_tree=directory_tree,
-                workspace_trees=workspace_trees,
-                schema_json=json_block(schema),
-            )
-        self._artifacts.save_prompt(f"feasibility-{state.run_id[:8]}.md", prompt)
-
-        try:
-            invoke_result = self._invoke_with_retries(
-                state,
-                retry_key="feasibility",
-                retries=self._retry_limit("feasibility"),
-                spinner_label="Checking feasibility",
-                invoke=lambda current_prompt: self._invoke_adapter_json(
-                    adapter,
-                    current_prompt,
-                    worktree_dir,
-                    schema,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "feasibility",
-                        cli_name,
-                    ),
-                    model_override=self._resolve_model_for_phase("feasibility", cli_name, state),
-                ),
-                initial_prompt=prompt,
-            )
-        except BlockedOnCLI as exc:
-            return self._transition(
-                state,
-                WorkflowStatus.BLOCKED_ON_CLI,
-                current_phase=WorkflowStatus.FEASIBILITY.value,
-                error=str(exc),
-            )
-        except StepFailure as exc:
-            return self._fail_run(state, self._format_step_failure(exc))
-        finally:
-            if result_path.exists():
-                result_path.unlink()
-
-        result = invoke_result.data
-        state.feasibility_id = self._artifacts.save_feasibility(state.run_id, result)
-        state.error = None
-        self._state_mgr.save(state)
-
-        if result["verdict"] in {"go", "go_with_warnings"}:
-            return self._transition(state, WorkflowStatus.EXECUTING)
-
-        return self._handle_feasibility_blocked(state, result)
-
-    def _handle_feasibility_blocked(
-        self,
-        state: RunState,
-        result: dict[str, Any],
-    ) -> RunState:
-        decision = self._artifacts.consume_approval_decision(state.run_id, "feasibility")
-        if decision is None:
-            return self._transition(
-                state,
-                WorkflowStatus.PAUSED,
-                current_phase=WorkflowStatus.FEASIBILITY.value,
-                error="Feasibility check is blocked. Awaiting operator decision.",
-            )
-        self._artifacts.clear_processed_approval(state.run_id, "feasibility")
-        decision_value = str(decision.get("decision") or "")
-        if decision_value in {"approve", "approve_claude", "override"}:
-            state.error = None
-            self._state_mgr.save(state)
-            return self._transition(state, WorkflowStatus.EXECUTING)
-        if decision_value in {"full_reject", "approve_codex"}:
-            return self._terminate_run(
-                state,
-                str(decision.get("reason") or "Feasibility rejected by user"),
-            )
-        if decision_value != "reject":
-            return self._transition(
-                state,
-                WorkflowStatus.PAUSED,
-                current_phase=WorkflowStatus.FEASIBILITY.value,
-                error=f"Unsupported feasibility decision: {decision_value}",
-            )
-
-        if state.feasibility_replan_count >= self._config.feasibility.max_feasibility_replans:
-            return self._transition(
-                state,
-                WorkflowStatus.PAUSED,
-                current_phase=WorkflowStatus.FEASIBILITY.value,
-                error=(
-                    "Feasibility replan limit reached. Approve with Claude's plan, "
-                    "approve with Codex's assessment, or full-reject."
-                ),
-            )
-
-        state.feasibility_replan_count += 1
-        state.replan_count += 1
-        self._state_mgr.save(state)
-        issues = [
-            f"- {issue['severity']}: {issue['description']}"
-            for issue in result.get("blocking_issues", [])
-        ]
-        feedback = str(result.get("summary") or "").strip()
-        if issues:
-            feedback = (feedback + "\n\nBlocking issues:\n" + "\n".join(issues)).strip()
-        self._artifacts.save_feedback(state.run_id, "planning", feedback)
-        state.feasibility_id = None
-        self._state_mgr.save(state)
-        return self._transition(state, WorkflowStatus.PLANNING)
 
     def _run_execution(self, state: RunState) -> RunState:
         plan = self._require_artifact(state.plan_id)
@@ -1830,7 +1658,6 @@ class Engine:
             config_name={
                 "scoping": "scoper",
                 "planning": "planner",
-                "feasibility": "feasibility_checker",
                 "executing": "worker",
                 "reviewing": "reviewer",
                 "adjudicating": "adjudicator",
@@ -2147,7 +1974,6 @@ class Engine:
         return {
             "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
-            "feasibility": WorkflowStatus.FEASIBILITY.value,
             "debate_tiebreaker": WorkflowStatus.ADJUDICATING.value,
         }[gate]
 
@@ -2255,7 +2081,6 @@ class Engine:
             "",
             "## Artifacts",
             f"- Plan: {state.plan_id or '<none>'}",
-            f"- Feasibility: {state.feasibility_id or '<none>'}",
             f"- Review: {state.review_id or '<none>'}",
             f"- Adjudication: {state.adjudication_id or '<none>'}",
             "",

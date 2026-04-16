@@ -16,7 +16,6 @@ planner = "claude"
 worker = "codex"
 reviewer = "claude"
 adjudicator = "codex"
-feasibility_checker = "codex"
 scoper = "claude"
 
 [routing.claude]
@@ -41,10 +40,6 @@ reasoning_effort = "high"
 
 [scoping]
 enabled = true
-
-[feasibility]
-enabled = true
-max_feasibility_replans = 2
 
 [debate]
 escalated_claude_model = "claude-opus-4-5-20250514"
@@ -84,7 +79,7 @@ DEFAULT_WORKFLOW = """# Default workflow configuration for ai-orchestrator.
 
 name: default
 description: >
-  Full orchestrated run: scope -> plan -> feasibility -> execute -> review -> adjudicate -> merge.
+  Full orchestrated run: scope -> plan -> execute -> review -> adjudicate -> merge.
 
 phases:
   scoping:
@@ -95,11 +90,6 @@ phases:
     cli: claude
     approval_gate: plan
     retries: 3
-
-  feasibility:
-    cli: codex
-    worktree: true
-    retries: 2
 
   executing:
     cli: codex

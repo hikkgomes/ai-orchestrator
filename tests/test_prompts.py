@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
-    build_feasibility_prompt_claude,
-    build_feasibility_prompt_codex,
     build_full_execution_prompt_codex,
     build_review_prompt,
     build_scoping_prompt,
@@ -103,21 +101,6 @@ def test_build_scoping_prompt_includes_required_field_checklist():
     assert '"complexity_tier"' in prompt
 
 
-def test_build_feasibility_prompt_codex_renders_result_path():
-    prompt = build_feasibility_prompt_codex(
-        task_description="Add endpoint",
-        plan_json='{"plan_id":"1"}',
-        directory_tree="repo\n  src",
-        result_file_path="/tmp/feasibility.json",
-        schema_json='{"title":"FeasibilityResult"}',
-    )
-
-    assert "After checking, write your result JSON to:" in prompt
-    assert "/tmp/feasibility.json" in prompt
-    assert "If you cannot write the file, respond with ONLY the raw JSON." in prompt
-    assert "Do NOT modify any source files." in prompt
-
-
 def test_build_full_execution_prompt_codex_renders_single_result_path():
     prompt = build_full_execution_prompt_codex(
         plan_json='{"implementation_steps":["Update endpoint"]}',
@@ -129,19 +112,6 @@ def test_build_full_execution_prompt_codex_renders_single_result_path():
     assert "Execute the full plan" in prompt
     assert "write your result JSON to:" in prompt
     assert "/tmp/execution.json" in prompt
-
-
-def test_build_feasibility_prompt_claude_renders_static_analysis_rules():
-    prompt = build_feasibility_prompt_claude(
-        task_description="Add endpoint",
-        plan_json='{"plan_id":"1"}',
-        directory_tree="repo\n  src",
-        schema_json='{"title":"FeasibilityResult"}',
-    )
-
-    assert "STATIC ANALYSIS" in prompt
-    assert 'Identify any "key_files" paths' in prompt
-    assert "Respond with ONLY valid JSON." in prompt
 
 
 def test_build_review_prompt_renders_optional_reviewer_sections():

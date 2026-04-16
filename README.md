@@ -156,12 +156,10 @@ orch logs <run-id> 3
 orch show latest plan
 orch approve latest plan
 orch approve <run-prefix> plan
-orch approve <run-id> feasibility --decision override
 orch approve <run-id> debate_tiebreaker --decision fix
 orch approve <run-id> debate_tiebreaker --decision pass
 orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
 orch reject <run-id> plan --full --reason "Do not continue"
-orch reject <run-id> feasibility --reason "Revise around the missing dependency"
 orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
 orch resume <run-id>
 orch sync
@@ -178,10 +176,9 @@ orch clean --all
 `orch` drives work through this pipeline:
 
 ```
-SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> FEASIBILITY -> EXECUTING
-                         ^                    |              |
-                         |                    |              +-- blocked gate
-                         |                    +-- soft reject |
+SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
+                         ^                    |
+                         |                    +-- soft reject
                          +---- incremental fixes <---- ADJUDICATION(debate) <- REVIEWING(session)
                                                           |
                                                           v
@@ -193,11 +190,10 @@ Phase summary:
 1. Scoping: Claude and Codex debate the task and produce a canonical `scope.md`.
 2. Planning: Claude generates a step-by-step plan and resumes the same session on soft-reject feedback.
 3. Plan approval: you approve, soft-reject with comments, or full-reject and terminate.
-4. Feasibility: Codex checks that the plan is executable in your repo and pauses for an override/replan/termination decision when blocked.
-5. Execution: Codex or Claude implements each step.
-6. Review: Claude reviews the resulting diff and preserves the review session for debate.
-7. Adjudication: Codex and Claude debate disagreements. Fix cycles create incremental follow-up plans on top of the existing worktree.
-8. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
+4. Execution: Codex or Claude implements the approved plan in one session.
+5. Review: Claude reviews the resulting diff and preserves the review session for debate.
+6. Adjudication: Codex and Claude debate disagreements. Fix cycles create incremental follow-up plans on top of the existing worktree.
+7. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
 
 The review phase can also use non-model evidence:
 
@@ -231,7 +227,7 @@ A workspace is a parent directory that is not itself a git repo but contains mul
 - Workspace runs operate from the workspace root and can touch multiple repos in one run.
 - Workspace runs do not create worktrees; changes are applied in place.
 - At the end of the run, `orch` prints per-repo `git add`, `git commit`, and `git push` suggestions instead of committing for you.
-- All workspace repos must be clean before execution starts.
+- Workspace runs may build on existing uncommitted changes; the orchestrator does not discard them mid-flow.
 
 ## Configuration
 
@@ -245,7 +241,6 @@ planner = "claude"
 worker = "codex"
 reviewer = "claude"
 adjudicator = "codex"
-feasibility_checker = "codex"
 scoper = "claude"
 
 [routing.phases.planning]
@@ -256,10 +251,6 @@ model_architectural = "claude-opus-4-5-20250514"
 
 [scoping]
 enabled = true
-
-[feasibility]
-enabled = true
-max_feasibility_replans = 2
 
 [sessions]
 enable_planning_resume = true
@@ -279,7 +270,7 @@ Notes:
 
 - Complexity-based effort selection is built in.
 - Per-phase overrides in `[routing.phases.*]` win over complexity defaults.
-- Global rework/replan loop limits have been removed. Feasibility replans are capped by `feasibility.max_feasibility_replans`; plan soft-reject loops are operator-driven.
+- Global rework/replan loop limits have been removed. Plan soft-reject and fix-planning loops are operator-driven.
 - `watchdog_timeout` is a global hung-process safety net, not a per-phase runtime budget.
 
 ## Repo Files and Runtime Artifacts
@@ -301,7 +292,6 @@ App-owned runtime and review artifacts should stay gitignored:
   results/
   reviews/
   adjudications/
-  feasibility/
   logs/
   worktrees/
   approvals/

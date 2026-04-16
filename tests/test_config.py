@@ -20,10 +20,8 @@ class TestLoadConfig:
         assert cfg.orchestrator.watchdog_timeout == 3600
         assert cfg.routing.planner == "claude"
         assert cfg.routing.adjudicator == "codex"
-        assert cfg.routing.feasibility_checker == "codex"
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
-        assert cfg.feasibility.enabled is True
         assert cfg.approval.require_plan_approval is True
         assert cfg.routing.claude.reasoning_effort == "high"
         assert cfg.routing.codex.reasoning_effort == "medium"
@@ -41,7 +39,7 @@ class TestLoadConfig:
         assert cfg.routing.codex.model == "gpt-5"
         assert cfg.routing.codex.reasoning_effort == "high"
 
-    def test_loads_phase_routing_scoping_feasibility_and_complexity_sections(self, tmp_path):
+    def test_loads_phase_routing_scoping_and_complexity_sections(self, tmp_path):
         (tmp_path / "aio.toml").write_text(
             "\n".join(
                 [
@@ -54,8 +52,6 @@ class TestLoadConfig:
                     'model = "claude-sonnet"',
                     "[scoping]",
                     "enabled = false",
-                    "[feasibility]",
-                    "enabled = true",
                     "[complexity_routing.simple]",
                     'reviewing = "max"',
                 ]
@@ -68,7 +64,6 @@ class TestLoadConfig:
         assert cfg.routing.phases["executing"].cli == "claude"
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
         assert cfg.scoping.enabled is False
-        assert cfg.feasibility.enabled is True
         assert cfg.complexity_routing.simple["reviewing"] == "max"
 
     def test_global_toml_is_merged_before_repo_overrides(self, tmp_path, monkeypatch):
@@ -136,7 +131,7 @@ class TestLoadConfig:
 
         assert cfg.orchestrator.watchdog_timeout == 900
 
-    def test_deprecated_feasibility_timeout_warns_and_is_ignored(self, tmp_path):
+    def test_deprecated_feasibility_section_warns_and_is_ignored(self, tmp_path):
         (tmp_path / "aio.toml").write_text(
             "\n".join(
                 [
@@ -149,11 +144,11 @@ class TestLoadConfig:
 
         with pytest.warns(
             DeprecationWarning,
-            match="feasibility\\.timeout|watchdog_timeout",
+            match="feasibility|watchdog_timeout",
         ):
             cfg = load_config(repo_root=tmp_path)
 
-        assert cfg.feasibility.enabled is False
+        assert cfg.scoping.enabled is True
 
     def test_deprecated_phase_max_turns_warns_and_is_ignored(self, tmp_path):
         (tmp_path / "aio.toml").write_text(

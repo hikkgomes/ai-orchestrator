@@ -55,7 +55,7 @@ tests/                  # unit + integration tests
 
 ## Canonical workflow states
 
-INIT → SCOPING → PLANNING → APPROVAL_PLAN → FEASIBILITY → EXECUTING → REVIEWING → ADJUDICATING → MERGING → DONE
+INIT → SCOPING → PLANNING → APPROVAL_PLAN → EXECUTING → REVIEWING → ADJUDICATING → MERGING → DONE
 
 Also: FAILED, TERMINATED, PAUSED, BLOCKED_ON_CLI, CONFLICT
 
@@ -94,8 +94,7 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 |---|---|---|
 | `scope.md` | SCOPING | transient scoping result |
 | `plan.md` | PLANNING (first plan) | `plans/plan-<uuid>.json` |
-| `feasibility.md` | FEASIBILITY | `feasibility/feasibility-<uuid>.json` |
-| `implement.md` | EXECUTING (each step) | `results/step-<n>-<uuid>.json` |
+| `implement.md` | EXECUTING (full plan) | `results/execution-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
 | `adjudicate.md` | ADJUDICATING | `adjudications/adj-<uuid>.json` |
 | `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<uuid>.json` (new) |
@@ -129,5 +128,4 @@ as a workflow agent:
 |---|---|---|
 | `implementer.md` | Step executor | EXECUTING |
 | `adjudicator.md` | Adjudicator | ADJUDICATING |
-| `feasibility.md` | Feasibility checker | FEASIBILITY |
 | `repairer.md` | Fix executor | EXECUTING (incremental fix loop) |

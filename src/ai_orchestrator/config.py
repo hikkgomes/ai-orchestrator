@@ -68,7 +68,6 @@ class RoutingConfig:
     worker: str = "codex"
     reviewer: str = "claude"
     adjudicator: str = "codex"
-    feasibility_checker: str = "codex"
     scoper: str = "claude"
     claude: ClaudeRoutingConfig = field(default_factory=ClaudeRoutingConfig)
     codex: CodexRoutingConfig = field(default_factory=CodexRoutingConfig)
@@ -87,12 +86,6 @@ class ScopingConfig:
 
 
 @dataclass
-class FeasibilityConfig:
-    enabled: bool = True
-    max_feasibility_replans: int = 2
-
-
-@dataclass
 class DebateConfig:
     escalated_claude_model: str = "claude-opus-4-5-20250514"
     escalated_claude_effort: str = "max"
@@ -108,14 +101,12 @@ class SessionConfig:
 def _default_complexity_phase_map(
     *,
     planning: str,
-    feasibility: str,
     executing: str,
     reviewing: str,
     adjudicating: str,
 ) -> dict[str, str]:
     return {
         "planning": planning,
-        "feasibility": feasibility,
         "executing": executing,
         "reviewing": reviewing,
         "adjudicating": adjudicating,
@@ -127,7 +118,6 @@ class ComplexityRoutingConfig:
     simple: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="medium",
-            feasibility="medium",
             executing="medium",
             reviewing="high",
             adjudicating="medium",
@@ -136,7 +126,6 @@ class ComplexityRoutingConfig:
     moderate: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="high",
-            feasibility="high",
             executing="high",
             reviewing="high",
             adjudicating="medium",
@@ -145,7 +134,6 @@ class ComplexityRoutingConfig:
     complex: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="high",
-            feasibility="xhigh",
             executing="xhigh",
             reviewing="high",
             adjudicating="high",
@@ -154,7 +142,6 @@ class ComplexityRoutingConfig:
     architectural: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="max",
-            feasibility="xhigh",
             executing="xhigh",
             reviewing="high",
             adjudicating="high",
@@ -190,7 +177,6 @@ class Config:
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     scoping: ScopingConfig = field(default_factory=ScopingConfig)
-    feasibility: FeasibilityConfig = field(default_factory=FeasibilityConfig)
     debate: DebateConfig = field(default_factory=DebateConfig)
     sessions: SessionConfig = field(default_factory=SessionConfig)
     complexity_routing: ComplexityRoutingConfig = field(default_factory=ComplexityRoutingConfig)
@@ -261,9 +247,9 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
                 orchestrator.pop(key, None)
 
     feasibility = data.get("feasibility")
-    if isinstance(feasibility, dict) and "timeout" in feasibility:
-        deprecated_keys.append("feasibility.timeout")
-        feasibility.pop("timeout", None)
+    if isinstance(feasibility, dict):
+        deprecated_keys.append("feasibility")
+        data.pop("feasibility", None)
 
     scoping = data.get("scoping")
     if isinstance(scoping, dict) and "max_scoping_rounds" in scoping:
@@ -272,12 +258,25 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
 
     routing = data.get("routing")
     if isinstance(routing, dict):
+        if "feasibility_checker" in routing:
+            deprecated_keys.append("routing.feasibility_checker")
+            routing.pop("feasibility_checker", None)
         phases = routing.get("phases")
         if isinstance(phases, dict):
+            if "feasibility" in phases:
+                deprecated_keys.append("routing.phases.feasibility")
+                phases.pop("feasibility", None)
             for phase_name, phase_data in phases.items():
                 if isinstance(phase_data, dict) and "max_turns" in phase_data:
                     deprecated_keys.append(f"routing.phases.{phase_name}.max_turns")
                     phase_data.pop("max_turns", None)
+
+    complexity_routing = data.get("complexity_routing")
+    if isinstance(complexity_routing, dict):
+        for tier_name, tier_data in complexity_routing.items():
+            if isinstance(tier_data, dict) and "feasibility" in tier_data:
+                deprecated_keys.append(f"complexity_routing.{tier_name}.feasibility")
+                tier_data.pop("feasibility", None)
 
     if deprecated_keys:
         warnings.warn(
@@ -354,7 +353,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             _validate_int(f"orchestrator.{key}", orchestrator[key], minimum=1)
 
     routing = _expect_mapping("routing", data.get("routing"))
-    for key in ("planner", "worker", "reviewer", "adjudicator", "feasibility_checker", "scoper"):
+    for key in ("planner", "worker", "reviewer", "adjudicator", "scoper"):
         if key in routing:
             _validate_choice(f"routing.{key}", routing[key], {"claude", "codex"})
 
@@ -393,16 +392,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
-
-    feasibility = _expect_mapping("feasibility", data.get("feasibility"))
-    if "enabled" in feasibility:
-        _validate_bool("feasibility.enabled", feasibility["enabled"])
-    if "max_feasibility_replans" in feasibility:
-        _validate_int(
-            "feasibility.max_feasibility_replans",
-            feasibility["max_feasibility_replans"],
-            minimum=0,
-        )
 
     debate = _expect_mapping("debate", data.get("debate"))
     for key in ("escalated_claude_model", "escalated_claude_effort", "escalated_codex_effort"):
@@ -490,7 +479,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             "orchestrator",
             "routing",
             "scoping",
-            "feasibility",
             "debate",
             "sessions",
             "complexity_routing",
@@ -509,7 +497,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             "worker",
             "reviewer",
             "adjudicator",
-            "feasibility_checker",
             "scoper",
             "claude",
             "codex",
@@ -520,7 +507,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     _warn_unknown_keys(
         "routing.phases",
         routing_phases,
-        {"scoping", "planning", "feasibility", "executing", "reviewing", "adjudicating"},
+        {"scoping", "planning", "executing", "reviewing", "adjudicating"},
     )
     phase_overrides: dict[str, PhaseRoutingOverride] = {}
     for phase_name, phase_data in routing_phases.items():
@@ -559,7 +546,7 @@ def load_config(repo_root: Path | None = None) -> Config:
         _warn_unknown_keys(
             f"complexity_routing.{tier_name}",
             getattr(complexity_routing, tier_name),
-            {"planning", "feasibility", "executing", "reviewing", "adjudicating"},
+            {"planning", "executing", "reviewing", "adjudicating"},
         )
 
     config = Config(
@@ -573,7 +560,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             worker=routing_data.get("worker", "codex"),
             reviewer=routing_data.get("reviewer", "claude"),
             adjudicator=routing_data.get("adjudicator", "codex"),
-            feasibility_checker=routing_data.get("feasibility_checker", "codex"),
             scoper=routing_data.get("scoper", "claude"),
             claude=_apply_section(
                 ClaudeRoutingConfig,
@@ -591,11 +577,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             ScopingConfig,
             _expect_mapping("scoping", merged.get("scoping")),
             section_name="scoping",
-        ),
-        feasibility=_apply_section(
-            FeasibilityConfig,
-            _expect_mapping("feasibility", merged.get("feasibility")),
-            section_name="feasibility",
         ),
         debate=_apply_section(
             DebateConfig,
