@@ -355,7 +355,7 @@ def _run_shell(ctx: click.Context) -> None:
     ui = ctx.obj["ui"]
     repo_name = ctx.obj["repo_root"].name
     ui.info(f"ai-orchestrator {__version__} | repo: {repo_name}")
-    ui.info("Type a task, or /help for commands. Alt+Enter for new line.")
+    ui.info("Type a task prompt, or /help for commands.")
     session = _create_prompt_session()
     while True:
         try:
