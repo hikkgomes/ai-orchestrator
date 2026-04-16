@@ -7,8 +7,6 @@ Two validation layers (docs/design-decisions.md DD-8):
 
 2. **Application validation** — semantic invariants that JSON Schema cannot
    express:
-   - Plan step ordering (must be sequential starting from 1)
-   - Dependency acyclicity
    - Path normalisation: reject any path containing ``..`` segments, or
      starting with ``/``, after resolving against the repo root
    - ``files_changed`` correspondence with ``git diff`` (Codex results only)
@@ -19,7 +17,7 @@ Usage::
 
     validator = Validator(repo_root)
     validated_plan = validator.validate_plan(raw_dict)
-    validated_result = validator.validate_step_result(raw_dict, step_number=1)
+    validated_result = validator.validate_execution_result(raw_dict)
 """
 
 from __future__ import annotations
@@ -117,10 +115,8 @@ class Validator:
         """Validate a plan artifact (schema + application level).
 
         Application checks:
-        - Step numbers must be sequential starting from 1
-        - ``depends_on`` values must reference existing step numbers < current step
-        - No circular dependencies
-        - All ``files_to_read`` and ``files_to_modify`` paths are safe
+        - ``implementation_steps`` is non-empty
+        - All flat ``key_files`` paths are safe
 
         Returns the original *data* dict on success.
 
@@ -129,52 +125,13 @@ class Validator:
         ValidationError
         """
         _validate_schema(data, self._get_schema("plan.schema.json"))
-
-        steps = data["steps"]
-        expected_numbers = list(range(1, len(steps) + 1))
-        actual_numbers = [step["step_number"] for step in steps]
-        if actual_numbers != expected_numbers:
+        if not data.get("implementation_steps"):
             raise ValidationError(
-                "Invalid plan step ordering",
-                f"Expected sequential step numbers {expected_numbers}, got {actual_numbers}",
+                "Invalid plan",
+                "Plans require at least one implementation step",
             )
 
-        valid_steps = set(actual_numbers)
-        graph: dict[int, list[int]] = {}
-        for step in steps:
-            number = step["step_number"]
-            depends_on = step.get("depends_on", [])
-            for dependency in depends_on:
-                if dependency not in valid_steps:
-                    raise ValidationError(
-                        "Invalid dependency",
-                        f"Step {number} depends on unknown step {dependency}",
-                    )
-                if dependency >= number:
-                    raise ValidationError(
-                        "Invalid dependency",
-                        f"Step {number} depends on non-prior step {dependency}",
-                    )
-            graph[number] = depends_on
-            _validate_paths_confined(self._repo_root, step.get("files_to_read", []))
-            _validate_paths_confined(self._repo_root, step.get("files_to_modify", []))
-
-        visiting: set[int] = set()
-        visited: set[int] = set()
-
-        def visit(node: int) -> None:
-            if node in visited:
-                return
-            if node in visiting:
-                raise ValidationError("Invalid dependency", "Circular dependency detected")
-            visiting.add(node)
-            for dependency in graph.get(node, []):
-                visit(dependency)
-            visiting.remove(node)
-            visited.add(node)
-
-        for step_number in actual_numbers:
-            visit(step_number)
+        _validate_paths_confined(self._repo_root, data.get("key_files", []))
 
         return data
 
@@ -241,6 +198,27 @@ class Validator:
 
         return data
 
+    def validate_execution_result(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a full execution result artifact."""
+        _validate_schema(data, self._get_schema("execution_result.schema.json"))
+
+        _validate_paths_confined(
+            self._repo_root,
+            [change["path"] for change in data.get("files_changed", [])],
+        )
+
+        if data["status"] == "success" and not data.get("files_changed"):
+            raise ValidationError(
+                "Invalid execution result",
+                "Successful execution results must include at least one changed file",
+            )
+
+        workspace_diffs = data.get("workspace_diffs") or {}
+        if not isinstance(workspace_diffs, dict):
+            raise ValidationError("Invalid execution result", "workspace_diffs must be an object")
+
+        return data
+
     def validate_review(self, data: dict[str, Any]) -> dict[str, Any]:
         """Validate a review artifact (schema + application level).
 
@@ -302,7 +280,7 @@ class Validator:
         """Validate an adjudication artifact (schema + application level).
 
         Application checks:
-        - If ``verdict == "REWORK"``: ``rework_steps`` non-empty, ``rework_feedback`` present
+        - If ``verdict == "REWORK"``: ``rework_feedback`` present
         - If ``verdict == "REPLAN"``: ``replan_feedback`` present
         - If ``verdict == "FAIL"``: ``failure_reason`` present
 
@@ -316,12 +294,12 @@ class Validator:
 
         verdict = data["verdict"]
         if verdict == "REWORK":
-            if not data.get("rework_steps") or not data.get("rework_feedback"):
+            if not data.get("rework_feedback"):
                 raise ValidationError(
                     "Invalid adjudication",
-                    "REWORK requires rework_steps and rework_feedback",
+                    "REWORK requires rework_feedback",
                 )
-            if plan_step_numbers is not None:
+            if plan_step_numbers is not None and data.get("rework_steps"):
                 invalid_steps = sorted(
                     step_number
                     for step_number in data.get("rework_steps", [])

@@ -49,6 +49,10 @@ class ArtifactStore:
         self.clear_pending_step_result(step_number)
         return self._write_versioned_json("results", f"step-{step_number}-{run_id[:8]}", payload)
 
+    def save_execution_result(self, run_id: str, payload: dict[str, Any]) -> str:
+        self.clear_pending_execution_result(run_id)
+        return self._write_versioned_json("results", f"execution-{run_id[:8]}", payload)
+
     def save_review(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("reviews", f"review-{run_id[:8]}", payload)
 
@@ -119,6 +123,14 @@ class ArtifactStore:
 
     def clear_pending_step_result(self, step_number: int) -> None:
         path = self.pending_step_result_path(step_number)
+        if path.exists():
+            path.unlink()
+
+    def pending_execution_result_path(self, run_id: str) -> Path:
+        return self._dirs["results"] / f"pending-execution-{run_id[:8]}.json"
+
+    def clear_pending_execution_result(self, run_id: str) -> None:
+        path = self.pending_execution_result_path(run_id)
         if path.exists():
             path.unlink()
 

@@ -5,9 +5,10 @@ as a subprocess per AGENTS.md.
 
 Three-tier output strategy:
 1. **Result file (primary)**: prompt instructs Codex to write a JSON result to
+   ``.ai-orchestrator/results/pending-execution-<run>.json`` or the legacy
    ``.ai-orchestrator/results/pending-step-<n>.json``.
 2. **Stdout fallback**: scan stdout from the end for the last valid JSON object.
-3. **Git-diff-only fallback**: reconstruct a minimal ``step_result`` from
+3. **Git-diff-only fallback**: reconstruct a minimal execution result from
    ``git diff --name-status`` in the worktree.
 
 In all cases, ``files_changed`` is verified against ``git diff`` — the git diff
@@ -80,6 +81,8 @@ class CodexAdapter(BaseAdapter):
             if step_number is None:
                 raise StepFailure("Codex prompt is missing the pending step result path")
             result_path = self._pending_result_path(step_number)
+        elif schema_title == "ExecutionResult" and result_path is None:
+            raise StepFailure("Codex prompt is missing the pending execution result path")
 
         command, model, reasoning_effort = self._build_command(
             prompt,
@@ -189,6 +192,18 @@ class CodexAdapter(BaseAdapter):
                     working_dir,
                     step_number=step_number or merged.get("step_number"),
                 )
+        elif schema_title == "ExecutionResult":
+            try:
+                git_result = self._git_diff_execution_fallback(working_dir)
+            except StepFailure:
+                if result is None or (working_dir / ".git").exists():
+                    raise
+                validated = self._validate_output(result, schema, working_dir)
+            else:
+                if result is None:
+                    output_source = "git-diff"
+                merged = self._merge_execution_result_metadata(git_result, result)
+                validated = self._validate_output(merged, schema, working_dir)
         else:
             if result is None:
                 raise StepFailure(
@@ -198,6 +213,7 @@ class CodexAdapter(BaseAdapter):
                 )
             validated = self._validate_output(result, schema, working_dir)
         typed_result = self._typed_step_result(validated)
+        typed_execution = self._typed_execution_result(validated)
         self._record_invocation(
             InvocationRecord(
                 cli_name=self.CLI_NAME,
@@ -214,10 +230,18 @@ class CodexAdapter(BaseAdapter):
                 model=model,
                 reasoning_effort=reasoning_effort,
                 output_source=output_source,
-                summary=typed_result.summary if typed_result else None,
-                status=typed_result.status.value if typed_result else None,
-                issues=typed_result.issues if typed_result else None,
-                test_commands=typed_result.test_commands if typed_result else None,
+                summary=(typed_result.summary if typed_result else typed_execution.summary if typed_execution else None),
+                status=(
+                    typed_result.status.value
+                    if typed_result
+                    else typed_execution.status.value if typed_execution else None
+                ),
+                issues=(typed_result.issues if typed_result else typed_execution.issues if typed_execution else None),
+                test_commands=(
+                    typed_result.test_commands
+                    if typed_result
+                    else typed_execution.test_commands if typed_execution else None
+                ),
             )
         )
         return InvokeResult(data=validated, session_id=None)
@@ -412,6 +436,29 @@ class CodexAdapter(BaseAdapter):
 
         Sets ``status`` to ``partial`` and ``summary`` to a default message.
         """
+        files_changed = self._git_diff_files(working_dir)
+
+        return {
+            "step_number": step_number,
+            "status": "partial",
+            "files_changed": files_changed,
+            "summary": "Changes detected via git diff." if files_changed else "No changes detected via git diff.",
+            "issues": [],
+            "test_commands": [],
+        }
+
+    def _git_diff_execution_fallback(self, working_dir: Path) -> dict[str, Any]:
+        """Build a minimal full execution result from ``git diff --name-status``."""
+        files_changed = self._git_diff_files(working_dir)
+        return {
+            "status": "partial",
+            "files_changed": files_changed,
+            "summary": "Changes detected via git diff." if files_changed else "No changes detected via git diff.",
+            "issues": [],
+            "test_commands": [],
+        }
+
+    def _git_diff_files(self, working_dir: Path) -> list[dict[str, str]]:
         completed = subprocess.run(
             ["git", "diff", "--name-status", "--find-renames", "HEAD"],
             cwd=working_dir,
@@ -445,14 +492,7 @@ class CodexAdapter(BaseAdapter):
                 }
             )
 
-        return {
-            "step_number": step_number,
-            "status": "partial",
-            "files_changed": files_changed,
-            "summary": "Changes detected via git diff." if files_changed else "No changes detected via git diff.",
-            "issues": [],
-            "test_commands": [],
-        }
+        return files_changed
 
     @staticmethod
     def _map_git_action(status: str) -> str:
@@ -504,6 +544,43 @@ class CodexAdapter(BaseAdapter):
 
         return {
             "step_number": parsed_result.get("step_number", step_number),
+            "status": (
+                "partial"
+                if parsed_result.get("status") == "success" and not files_changed
+                else parsed_result.get("status", git_result["status"])
+            ),
+            "files_changed": files_changed,
+            "summary": parsed_result.get("summary", git_result["summary"]),
+            "issues": parsed_result.get("issues", []),
+            "test_commands": parsed_result.get("test_commands", []),
+            "workspace_diffs": parsed_result.get("workspace_diffs", {}),
+        }
+
+    def _merge_execution_result_metadata(
+        self,
+        git_result: dict[str, Any],
+        parsed_result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not parsed_result:
+            return git_result
+
+        ai_changes = {
+            change.get("path"): change
+            for change in parsed_result.get("files_changed", [])
+            if isinstance(change, dict) and change.get("path")
+        }
+        files_changed = []
+        for change in git_result["files_changed"]:
+            metadata = ai_changes.get(change["path"], {})
+            files_changed.append(
+                {
+                    "path": change["path"],
+                    "action": change["action"],
+                    "summary": metadata.get("summary") or change["summary"],
+                }
+            )
+
+        return {
             "status": (
                 "partial"
                 if parsed_result.get("status") == "success" and not files_changed

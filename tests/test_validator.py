@@ -16,33 +16,27 @@ class TestPathTraversal:
 
     def test_leading_slash_rejected(self, tmp_path):
         v = Validator(tmp_path)
-        plan = _minimal_plan(files_to_modify=["/etc/passwd"])
+        plan = _minimal_plan(key_files=["/etc/passwd"])
         with pytest.raises(ValidationError):
             v.validate_plan(plan)
 
     def test_dotdot_in_middle_rejected(self, tmp_path):
         v = Validator(tmp_path)
-        plan = _minimal_plan(files_to_modify=["a/../../etc/passwd"])
+        plan = _minimal_plan(key_files=["a/../../etc/passwd"])
         with pytest.raises(ValidationError):
             v.validate_plan(plan)
 
     def test_safe_path_accepted(self, tmp_path):
         v = Validator(tmp_path)
-        plan = _minimal_plan(files_to_modify=["src/foo.py"])
+        plan = _minimal_plan(key_files=["src/foo.py"])
         result = v.validate_plan(plan)
         assert result is not None
 
 
 class TestPlanValidation:
-    def test_sequential_step_numbers(self, tmp_path):
+    def test_implementation_steps_required(self, tmp_path):
         v = Validator(tmp_path)
-        plan = _minimal_plan(step_numbers=[1, 3])  # gap — invalid
-        with pytest.raises(ValidationError):
-            v.validate_plan(plan)
-
-    def test_circular_dependency_rejected(self, tmp_path):
-        v = Validator(tmp_path)
-        plan = _minimal_plan(depends_on={1: [2], 2: [1]})
+        plan = _minimal_plan(implementation_steps=[])
         with pytest.raises(ValidationError):
             v.validate_plan(plan)
 
@@ -56,18 +50,16 @@ class TestReviewValidation:
 
 
 class TestAdjudicationValidation:
-    def test_rework_steps_must_reference_current_plan_steps(self, tmp_path):
+    def test_rework_requires_feedback(self, tmp_path):
         v = Validator(tmp_path)
         adjudication = {
             "adjudication_id": "00000000-0000-0000-0000-000000000000",
             "verdict": "REWORK",
             "reasoning": "Fix step selection.",
-            "rework_steps": [99],
-            "rework_feedback": "Retry the correct step.",
         }
 
         with pytest.raises(ValidationError):
-            v.validate_adjudication(adjudication, plan_step_numbers={1, 2, 3})
+            v.validate_adjudication(adjudication)
 
     def test_request_changes_requires_major_or_critical_finding(self, tmp_path):
         v = Validator(tmp_path)
@@ -87,6 +79,18 @@ class TestStepResultValidation:
         }
         with pytest.raises(ValidationError):
             v.validate_step_result(result, step_number=1)
+
+
+class TestExecutionResultValidation:
+    def test_success_requires_files_changed(self, tmp_path):
+        v = Validator(tmp_path)
+        result = {
+            "status": "success",
+            "files_changed": [],
+            "summary": "Done",
+        }
+        with pytest.raises(ValidationError):
+            v.validate_execution_result(result)
 
 
 class TestScopingValidation:
@@ -160,44 +164,21 @@ class TestFeasibilityValidation:
         }
         assert v.validate_feasibility(feasibility)["verdict"] == "go_with_warnings"
 
-    def test_success_requires_files_changed(self, tmp_path):
-        v = Validator(tmp_path)
-        result = {
-            "step_number": 1,
-            "status": "success",
-            "files_changed": [],
-            "summary": "Done",
-        }
-        with pytest.raises(ValidationError):
-            v.validate_step_result(result, step_number=1)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _minimal_plan(
-    files_to_modify: list[str] | None = None,
-    step_numbers: list[int] | None = None,
-    depends_on: dict[int, list[int]] | None = None,
+    key_files: list[str] | None = None,
+    implementation_steps: list[str] | None = None,
 ) -> dict:
-    steps = []
-    numbers = step_numbers or [1]
-    for n in numbers:
-        steps.append({
-            "step_number": n,
-            "description": f"Step {n}",
-            "files_to_read": [],
-            "files_to_modify": files_to_modify or [],
-            "depends_on": (depends_on or {}).get(n, []),
-            "estimated_complexity": "low",
-        })
     return {
         "plan_id": "00000000-0000-0000-0000-000000000000",
         "task": "Test task",
-        "steps": steps,
-        "reasoning": "Test",
+        "approach": "Test",
+        "implementation_steps": ["Step 1"] if implementation_steps is None else implementation_steps,
+        "key_files": key_files or [],
     }
 
 

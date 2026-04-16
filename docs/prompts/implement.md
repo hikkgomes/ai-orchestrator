@@ -1,20 +1,19 @@
 # Implement Phase Prompt
 
-> Workflow phase: EXECUTING (one prompt per plan step)
+> Workflow phase: EXECUTING (one prompt for the full plan)
 > CLI: `codex exec` (default); configurable via `routing.worker`
-> Output artifact: `results/step-<n>-<uuid>.json`
-> Schema: `schemas/step_result.schema.json`
-> State transitions: EXECUTING (step N) → EXECUTING (step N+1) → REVIEWING
+> Output artifact: `results/execution-<uuid>.json`
+> Schema: `schemas/execution_result.schema.json`
+> State transitions: EXECUTING → REVIEWING
 
 ---
 
 ## Purpose
 
-Execute a single plan step: make the code changes described in the step,
-then write a result JSON file reporting what was changed.
-
-Each step runs in the shared worktree branch for this run. Steps execute
-sequentially. Step N sees all file changes made by steps 1 through N-1.
+Execute the full natural plan in one continuous worker session. Codex receives
+the complete plan, relevant file contents from the flat `key_files` list, and a
+single output schema. The worker may commit after logical chunks; if it leaves
+uncommitted changes, the engine creates one fallback commit.
 
 ---
 
@@ -22,185 +21,67 @@ sequentially. Step N sees all file changes made by steps 1 through N-1.
 
 | Variable | Source | Description |
 |---|---|---|
-| `{step_number}` | plan | Integer step number (1-indexed) |
-| `{step_description}` | plan step | What this step must accomplish |
-| `{estimated_complexity}` | plan step | `low`, `medium`, or `high` |
-| `{plan_context}` | plan | `reasoning` field from the plan JSON |
-| `{all_steps_summary}` | plan | Compact list of all step numbers and descriptions |
-| `{file_contents}` | worktree | Contents of all `files_to_read` for this step, each prefixed with its path |
-| `{files_to_modify}` | plan step | Newline-separated list of target file paths |
-| `{result_file_path}` | engine | Absolute path: `.ai-orchestrator/results/pending-step-{step_number}.json` |
-| `{step_result_schema}` | `schemas/step_result.schema.json` | Full JSON Schema for the result artifact |
-| `{fix_feedback}` | planning/adjudication (optional) | Populated for incremental fix cycles; empty string on first attempt |
-| `{fix_iteration_count}` | run state | 0 on first attempt; increments on each fix-planning cycle |
-| `{max_retries}` | config | Maximum retry attempts per step |
-
----
-
-## Escalation Policy
-
-**Increase effort** when:
-- `estimated_complexity = "high"` — allow full timeout; do not short-circuit
-- `rework_attempt >= 1` — a prior attempt was adjudicated as needing rework;
-  pay close attention to `rework_feedback`
-
-**Set `status = "partial"` and continue** (do not abort) when:
-- A non-critical part of the step cannot be completed
-- A secondary file cannot be created/modified but the core change is done
-- Record all issues in the `issues` array
-
-**Set `status = "failed"` in the result** (do not abort mid-step) when:
-- The step description is contradictory or impossible given the current file state
-- A required file listed in `files_to_read` does not exist and cannot be created
-- Do NOT crash. Write the result file with `status = "failed"` and describe the issue.
-
-**Do NOT escalate to human** from within this phase. Escalation happens only at
-approval gates and is managed by the orchestrator engine. Write the result file
-and let the engine decide what to do next.
+| `{plan_json}` | plan artifact | Full natural plan JSON |
+| `{file_contents}` | worktree | Contents of all `key_files`, each prefixed with its path |
+| `{result_file_path}` | engine | Absolute path: `.ai-orchestrator/results/pending-execution-<run>.json` |
+| `{execution_result_schema}` | `schemas/execution_result.schema.json` | Full JSON Schema for the result artifact |
+| `{workspace_trees}` | workspace mode | Per-repo directory trees, when applicable |
 
 ---
 
 ## Scope Constraints
 
-- Implement only what the step description says. Do not implement adjacent steps.
-- Do not read or modify files outside the repository root.
+- Implement the whole plan, not just the first implementation step.
+- Keep changes limited to the repository/workspace.
 - Do not use paths containing `..` segments.
-- Do not access the network.
-- Do not run tests or verification commands unless `test_commands` is explicitly
-  requested in the step description. Record any test commands you suggest in
-  `test_commands` but do not run them.
-- Do not commit changes. The orchestrator commits after reading the result file.
-- Do not write to `.ai-orchestrator/` except the result file path specified.
-- Prefer writing the result JSON to the specified result file path. If you
-  cannot write the file, respond with ONLY the raw JSON on stdout.
+- Do not access the network unless the existing project workflow requires it and the environment already supports it.
+- Write one execution result JSON artifact.
+- Prefer writing the result JSON to the specified result file path. If that fails, respond with only raw JSON on stdout.
 
 ---
 
-## Template (Codex variant — primary; writes result file)
+## Template (Codex variant)
 
 ```
-You are a software implementation agent for an automated orchestrator.
+You are a software implementation agent. Execute the full plan in this
+single Codex session. Maintain context across all implementation steps and
+make the smallest correct set of changes.
 
-Implement exactly the step described below. Do not implement any other steps.
-Do not ask questions. This is a single-pass invocation with no follow-up.
+FULL PLAN JSON:
+{plan_json}
 
-STEP {step_number}:
-{step_description}
-
-PLAN CONTEXT:
-{plan_context}
-
-ALL STEPS IN THIS RUN (for context only — implement only STEP {step_number}):
-{all_steps_summary}
-
-RELEVANT FILE CONTENTS:
+RELEVANT FILES:
 {file_contents}
 
-FILES YOU MAY MODIFY:
-{files_to_modify}
+IMPLEMENTATION RULES:
+- Implement the whole plan, not just the first listed item.
+- Commit after each logical chunk when running in a git worktree, using:
+  git add -A && git commit -m "aio: <description>"
+- If no changes are needed, explain that in the result summary.
 
-{rework_section}
-
-After making all changes, write your result JSON to EXACTLY this path:
+After making changes, write your result JSON to:
 {result_file_path}
 
-If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
-
 The JSON must conform to this schema:
-{step_result_schema}
+{execution_result_schema}
 
-RESULT RULES:
-- "step_number" must be {step_number}
-- "status" must be "success" if all intended changes were made, "partial" if
-  some were made but not all, "failed" if no useful changes were made
-- If "status" is "success", "files_changed" must have at least one entry
-- Each entry in "files_changed" must have a relative path (no leading /, no ..)
-- "summary" must describe what was actually done (not what was planned)
-- "issues" lists problems encountered; empty array if none
-- "test_commands" lists commands to verify this step; empty array if none
+If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
 ```
 
-### Rework section (injected only when `rework_attempt >= 1`)
+## Template (Claude variant)
 
 ```
-REWORK ATTEMPT {rework_attempt}:
-A previous implementation of this step was reviewed and rejected.
-You must address the following feedback:
+You are a software implementation agent. Execute the full plan in one
+continuous pass and then return one JSON result.
 
-{rework_feedback}
+FULL PLAN JSON:
+{plan_json}
 
-Do not repeat the same approach. Read the feedback carefully and implement
-a corrected version.
-```
-
----
-
-## Template (Claude variant — JSON on stdout)
-
-```
-You are a software implementation agent for an automated orchestrator.
-
-Implement exactly the step described below. Do not implement any other steps.
-Do not ask questions. This is a single-pass invocation with no follow-up.
-
-STEP {step_number}:
-{step_description}
-
-PLAN CONTEXT:
-{plan_context}
-
-ALL STEPS IN THIS RUN (for context only — implement only STEP {step_number}):
-{all_steps_summary}
-
-RELEVANT FILE CONTENTS:
+RELEVANT FILES:
 {file_contents}
 
-FILES YOU MAY MODIFY:
-{files_to_modify}
-
-{rework_section}
-
 OUTPUT SCHEMA:
-{step_result_schema}
-
-RESULT RULES:
-- "step_number" must be {step_number}
-- "status" must be "success", "partial", or "failed"
-- If "status" is "success", "files_changed" must have at least one entry
-- Paths in "files_changed" must be relative (no leading /, no .. segments)
-- "summary" describes what was actually done
-- "issues" lists problems; empty array if none
-- "test_commands" lists verification commands; empty array if none
+{execution_result_schema}
 
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
-
----
-
-## Retry Prompt (on schema/parse/validation failure)
-
-```
-Your previous response was not valid. Error: {validation_error}
-
-Fix the error and try again. The full original prompt follows.
-
----
-
-{original_prompt}
-```
-
----
-
-## Engine Behaviour After This Phase
-
-Per-step sequence:
-1. Orchestrator renders this prompt with the step's variables and invokes the CLI.
-2. For Codex: reads result from `{result_file_path}`. Falls back to stdout scan, then git-diff reconstruction. See `AGENTS.md` for full fallback strategy.
-3. For Claude: parses JSON from stdout (strict, then lenient fallback).
-4. `files_changed` is always reconciled against `git diff` in the worktree. The git diff is ground truth.
-5. Validated result is written to `results/step-{step_number}-<uuid>.json`.
-6. Orchestrator commits: `git add -A && git commit -m "aio: step {step_number} — {step_description[:60]}"`.
-7. Advances to next step or (after all steps) to REVIEWING.
-
-On `status = "failed"` in a validated result: orchestrator treats it as a `StepFailure`
-and retries up to `max_retries`. If retries exhausted, run transitions to FAILED.

@@ -138,7 +138,7 @@ def test_runtime_command_adds_runtime_gitignore_without_init():
 def test_new_defaults_to_interactive(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_start_run(ctx, task, interactive, *, skip_scoping):
+    def fake_start_run(ctx, task, interactive, *, skip_scoping, **kwargs):
         captured["task"] = task
         captured["interactive"] = interactive
         captured["skip_scoping"] = skip_scoping
@@ -159,7 +159,7 @@ def test_new_defaults_to_interactive(monkeypatch):
 def test_run_detach_disables_interactive_default(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_start_run(ctx, task, interactive, *, skip_scoping):
+    def fake_start_run(ctx, task, interactive, *, skip_scoping, **kwargs):
         captured["task"] = task
         captured["interactive"] = interactive
         captured["skip_scoping"] = skip_scoping
@@ -225,17 +225,9 @@ def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):
             {
                 "plan_id": "plan-1",
                 "task": "Inspect the full plan",
-                "steps": [
-                    {
-                        "step_number": 1,
-                        "description": "Read every file listed in the plan",
-                        "files_to_read": ["src/ai_orchestrator/cli.py", "src/ai_orchestrator/ui.py"],
-                        "files_to_modify": ["src/ai_orchestrator/ui.py"],
-                        "depends_on": [],
-                        "estimated_complexity": "medium",
-                    }
-                ],
-                "reasoning": "The user needs the whole plan, not a truncated preview.",
+                "approach": "The user needs the whole plan, not a truncated preview.",
+                "implementation_steps": ["Read every file listed in the plan"],
+                "key_files": ["src/ai_orchestrator/cli.py", "src/ai_orchestrator/ui.py"],
             }
         )
         + "\n",

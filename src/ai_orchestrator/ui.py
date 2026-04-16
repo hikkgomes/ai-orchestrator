@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +27,11 @@ from rich.table import Table
 from rich.text import Text
 
 from .models import Plan, RunState, WorkflowStatus
+
+try:  # pragma: no cover - optional dependency fallback for minimal test envs
+    import questionary
+except Exception:  # pragma: no cover
+    questionary = None
 
 
 ACTIVE_STATES = {
@@ -83,16 +89,23 @@ class OrchestratorUI:
     @contextmanager
     def phase_spinner(self, description: str) -> Generator[None, None, None]:
         """Display a progress spinner with elapsed time."""
+        started = time.monotonic()
         progress = Progress(
             SpinnerColumn(style="bold cyan"),
             TextColumn("[progress.description]{task.description}"),
             TimeElapsedColumn(),
             console=self.stderr_console,
-            transient=True,
+            transient=False,
         )
         with progress:
             progress.add_task(description, total=None)
             yield
+        elapsed = time.monotonic() - started
+        self.stderr_console.print(Text(f"{description} complete ({elapsed:.0f}s)", style="dim"))
+
+    def phase_transition(self, phase: str) -> None:
+        """Emit a persistent phase transition status line."""
+        self.stderr_console.print(Text(f"→ {phase}", style="bold cyan"))
 
     def print_plan(
         self,
@@ -148,7 +161,7 @@ class OrchestratorUI:
         payload_plan = self._coerce_plan(plan) if plan else None
         results = list(step_results or [])
         logs = list(log_entries or [])
-        total_steps = len(payload_plan.steps) if payload_plan else max(len(results), 1)
+        total_steps = len(payload_plan.implementation_steps) if payload_plan else max(len(results), 1)
         completed_steps = min(len(results), total_steps)
 
         summary = Table.grid(expand=True)
@@ -185,17 +198,17 @@ class OrchestratorUI:
             show_header=True,
             header_style="bold cyan",
         )
-        details.add_column("Step", width=6)
+        details.add_column("Result", width=10)
         details.add_column("Status", width=10)
         details.add_column("Summary")
-        for result in results[-5:]:
+        for index, result in enumerate(results[-5:], start=1):
             details.add_row(
-                str(result.get("step_number", "?")),
+                str(result.get("step_number", index)),
                 str(result.get("status", "unknown")),
                 self._truncate(str(result.get("summary", "")), 72),
             )
         if not results:
-            details.add_row("-", "-", "No completed steps yet.")
+            details.add_row("-", "-", "No execution result yet.")
 
         event_table = Table(
             box=box.SIMPLE,
@@ -215,7 +228,7 @@ class OrchestratorUI:
         panels: list[RenderableType] = [
             Panel(summary, title="Run Summary", border_style=self._status_style(state.status)),
             Panel(progress, title="Execution"),
-            Panel(details, title="Recent Step Results"),
+            Panel(details, title="Execution Results"),
             Panel(event_table, title="Recent Events"),
         ]
         if state.debate_state and self._enum_value(
@@ -361,6 +374,25 @@ class OrchestratorUI:
             border_style="yellow",
         )
         self.console.print(panel)
+        if questionary is not None and sys.stdin.isatty():
+            label_map = {
+                "approve": "Approve",
+                "soft-reject": "Request changes",
+                "full-reject": "Reject and terminate",
+                "approve-override": "Approve override",
+                "approve-claude": "Approve Claude plan",
+                "approve-codex": "Accept Codex assessment",
+                "fix": "Fix issues",
+                "pass": "Pass",
+            }
+            reverse = {label_map.get(choice, choice): choice for choice in choices}
+            selected = questionary.select(
+                f"{gate.title()} decision:",
+                choices=list(reverse),
+                default=label_map.get(default, default),
+            ).ask()
+            if selected:
+                return reverse[selected]
         return Prompt.ask(
             f"Decision for {gate}",
             choices=choices,
@@ -408,31 +440,20 @@ class OrchestratorUI:
     ) -> RenderableType:
         """Render the full plan without truncation."""
         payload = self._coerce_plan(plan)
+        steps = "\n".join(
+            f"{index}. {step}" for index, step in enumerate(payload.implementation_steps, start=1)
+        )
+        key_files = "\n".join(payload.key_files) or "-"
         sections: list[RenderableType] = [
             Text(payload.task, style="bold"),
             Panel(
-                Text(payload.reasoning, overflow="fold"),
-                title="Reasoning",
+                Text(payload.approach, overflow="fold"),
+                title="Approach",
                 border_style="dim",
             ),
+            Panel(Text(steps, overflow="fold"), title="Implementation Steps", border_style="cyan"),
+            Panel(Text(key_files, overflow="fold"), title="Key Files", border_style="cyan"),
         ]
-
-        for step in payload.steps:
-            detail = Table.grid(expand=True, padding=(0, 1))
-            detail.add_column(style="bold cyan", width=12)
-            detail.add_column(ratio=1)
-            detail.add_row("Description", step.description)
-            detail.add_row("Complexity", step.estimated_complexity.value)
-            detail.add_row("Depends", ", ".join(str(item) for item in step.depends_on) or "-")
-            detail.add_row("Read", "\n".join(step.files_to_read) or "-")
-            detail.add_row("Modify", "\n".join(step.files_to_modify) or "-")
-            sections.append(
-                Panel(
-                    detail,
-                    title=f"Step {step.step_number}",
-                    border_style="cyan",
-                )
-            )
 
         if run_id:
             short_id = run_id[:8]
@@ -447,30 +468,18 @@ class OrchestratorUI:
         return Panel(Group(*sections), title="Implementation Plan", border_style="cyan")
 
     def _render_plan(self, plan: Plan, *, run_id: str | None = None) -> RenderableType:
-        table = Table(
-            box=box.ROUNDED,
-            expand=True,
-            header_style="bold cyan",
-        )
-        table.add_column("#", width=4, justify="right")
-        table.add_column("Complexity", width=10)
-        table.add_column("Description", ratio=3)
-        table.add_column("Read", ratio=2)
-        table.add_column("Modify", ratio=2)
-        table.add_column("Depends", width=10)
-        for step in plan.steps:
-            table.add_row(
-                str(step.step_number),
-                step.estimated_complexity.value,
-                self._truncate(step.description, 46),
-                self._truncate(", ".join(step.files_to_read) or "-", 26),
-                self._truncate(", ".join(step.files_to_modify) or "-", 26),
-                ", ".join(str(item) for item in step.depends_on) or "-",
-            )
+        steps = Table(box=box.ROUNDED, expand=True, header_style="bold cyan")
+        steps.add_column("#", width=4, justify="right")
+        steps.add_column("Implementation Step")
+        for index, step in enumerate(plan.implementation_steps, start=1):
+            steps.add_row(str(index), self._truncate(step, 92))
+
+        key_files = Text(", ".join(plan.key_files) if plan.key_files else "-", style="dim")
         body: list[RenderableType] = [
             Text(plan.task, style="bold"),
-            Text(self._truncate(plan.reasoning, 120), style="dim"),
-            table,
+            Panel(Text(plan.approach, overflow="fold"), title="Approach", border_style="dim"),
+            steps,
+            Panel(key_files, title="Key Files", border_style="dim"),
         ]
         if run_id:
             body.append(Text(f"Run `orch show {run_id[:8]} plan` to view the full plan.", style="dim"))

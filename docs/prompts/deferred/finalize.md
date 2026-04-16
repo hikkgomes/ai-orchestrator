@@ -153,7 +153,7 @@ RUN ID: {run_id}
 PLAN:
 {plan_json}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 REVIEW SUMMARY:
@@ -177,7 +177,7 @@ SUMMARY RULES:
    results, using the action from the last step that touched each file
 5. "next_actions" lists 1–5 specific actions the operator should take
    (e.g., "Run pytest tests/test_auth.py to verify the new login flow")
-6. "notes" includes any issues or partial completions from step results; empty if none
+6. "notes" includes any issues or partial completions from execution results; empty if none
 7. "review_score" is the score from the review JSON
 8. "loops_used.rework" is {rework_count}, "loops_used.replan" is {replan_count}
 

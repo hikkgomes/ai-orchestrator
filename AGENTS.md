@@ -1,6 +1,6 @@
 # AGENTS.md — CLI Adapter Contracts
 
-> **Design status: UPDATED** as of 2026-04-09.
+> **Design status: UPDATED** as of 2026-04-16.
 
 This document defines the exact contracts for how ai-orchestrator invokes Claude Code and Codex as subprocess workers.
 
@@ -136,9 +136,9 @@ codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"
 
 Because `codex exec` mutates files directly and may not produce clean JSON on stdout:
 
-1. **Result file (primary):** The prompt instructs Codex to write a JSON result file. Execution uses `.ai-orchestrator/results/pending-step-<n>.json`; feasibility uses `.ai-orchestrator/feasibility/pending-<run-id>.json`.
+1. **Result file (primary):** The prompt instructs Codex to write a JSON result file. Full-plan execution uses `.ai-orchestrator/results/pending-execution-<run-id>.json`; feasibility uses `.ai-orchestrator/feasibility/pending-<run-id>.json`. Legacy step execution can still use `.ai-orchestrator/results/pending-step-<n>.json` when validating the older `step_result` schema.
 2. **Stdout fallback:** If the result file is missing, scan stdout from the end backwards for the last valid JSON object. Parse and validate.
-3. **Git-diff-only fallback:** Execution only. If both above fail for a step result, reconstruct a minimal `step_result` from `git diff --name-status` in the worktree. `files_changed` comes from git. `summary` defaults to "Changes detected via git diff." `status` defaults to `partial`. Metadata fields (`issues`, `test_commands`) are empty.
+3. **Git-diff-only fallback:** Execution only. If both above fail for an execution result, reconstruct a minimal `execution_result` from `git diff --name-status` in the worktree. `files_changed` comes from git. `summary` defaults to "Changes detected via git diff." `status` defaults to `partial`. Metadata fields (`issues`, `test_commands`) are empty. The same fallback remains available for legacy `step_result` execution.
 
 In all cases, `files_changed` is verified against `git diff` in the worktree. The git diff is the ground truth for what files changed; the AI-provided `files_changed` is treated as metadata only.
 
@@ -187,7 +187,7 @@ Both adapters follow the same retry protocol, driven by
 
 1. **Initial invocation** — standard prompt.
 2. **On `StepFailure`** — increment retry counter. If retries exhausted,
-   raise to engine (step marked FAILED). Otherwise construct retry prompt:
+   raise to engine (run marked FAILED). Otherwise construct retry prompt:
    ```
    Your previous response was not valid. Error: {error_message}
 
@@ -201,18 +201,17 @@ Both adapters follow the same retry protocol, driven by
 4. Repeat from step 2 until success or retry limit reached.
 
 **Total invocations:** 1 initial + up to `max_retries` retries. With the
-default `max_retries = 3`, a step can be invoked up to **4 times** before
-failing.
+default `max_retries = 3`, a phase attempt can be invoked up to **4 times**
+before failing.
 
 **Execution-phase retries** have an additional pre-retry step: before each
 retry invocation, the engine resets the worktree to the last committed state
 (`git reset --hard HEAD` followed by `git clean -fd`) and clears the pending
-step result file. This ensures each retry starts from an identical filesystem
-baseline. Planning, review, and adjudication retries do not modify the
-worktree and skip this step.
+execution result file. This ensures each retry starts from an identical
+filesystem baseline. Planning, review, and adjudication retries do not modify
+the worktree and skip this step.
 
-**On success:** the retry counter for that step/phase is reset to 0, so
-subsequent steps start with a fresh retry budget.
+**On success:** the retry counter for that phase key is reset to 0.
 
 **On `BlockedOnCLI`:** no retry. Transition to `BLOCKED_ON_CLI` immediately.
 
@@ -228,7 +227,7 @@ All CLI invocations use a single global watchdog timeout from `orchestrator.watc
 - macOS/Linux: SIGTERM, wait 10s, SIGKILL if still alive
 - Windows: `TerminateProcess` (no graceful shutdown equivalent)
 
-On timeout, the step is treated as `StepFailure` (retry if under limit), unless the no-output heuristic triggers `BlockedOnCLI`.
+On timeout, the invocation is treated as `StepFailure` (retry if under limit), unless the no-output heuristic triggers `BlockedOnCLI`.
 
 ---
 
@@ -241,10 +240,10 @@ substitution before each CLI invocation.
 
 | Prompt file | Phase | CLI | Output schema |
 |---|---|---|---|
-| `docs/prompts/scope.md` | SCOPING | `claude -p` | `scoping.schema.json` |
+| `docs/prompts/scope.md` | SCOPING | `claude -p` + `codex exec` | `scope.md` with YAML frontmatter |
 | `docs/prompts/plan.md` | PLANNING | `claude -p` | `plan.schema.json` |
 | `docs/prompts/feasibility.md` | FEASIBILITY | `codex exec` or `claude -p` | `feasibility.schema.json` |
-| `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `step_result.schema.json` |
+| `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `execution_result.schema.json` |
 | `docs/prompts/review.md` | REVIEWING | `claude -p` | `review.schema.json` |
 | `docs/prompts/adjudicate.md` | ADJUDICATING | `codex exec` or `claude -p` | `adjudication.schema.json` |
 | `docs/prompts/fix-plan.md` | PLANNING (replan) | `claude -p` | `plan.schema.json` |
@@ -308,13 +307,11 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 ### Execution prompt (Codex)
 
 ```
-You are a software implementation agent. Implement the following step.
+You are a software implementation agent. Execute the full plan in this
+single Codex session.
 
-STEP:
-{step_description}
-
-CONTEXT (from plan):
-{plan_context}
+FULL PLAN JSON:
+{plan_json}
 
 RELEVANT FILES:
 {file_contents}
@@ -323,7 +320,7 @@ After making changes, write a JSON result file to the path:
 {result_file_path}
 
 The JSON must conform to this schema:
-{step_result.schema.json contents}
+{execution_result.schema.json contents}
 
 If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.
 ```
@@ -331,19 +328,17 @@ If you cannot write the file, respond with ONLY the raw JSON. No markdown fences
 ### Execution prompt (Claude)
 
 ```
-You are a software implementation agent. Implement the following step.
+You are a software implementation agent. Execute the full plan in one
+continuous pass and then return one JSON result.
 
-STEP:
-{step_description}
-
-CONTEXT (from plan):
-{plan_context}
+FULL PLAN JSON:
+{plan_json}
 
 RELEVANT FILES:
 {file_contents}
 
 OUTPUT SCHEMA:
-{step_result.schema.json contents}
+{execution_result.schema.json contents}
 
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
@@ -362,7 +357,7 @@ PLAN:
 IMPLEMENTATION DIFF:
 {git_diff}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 Produce a JSON review conforming to this schema:
@@ -383,7 +378,7 @@ ORIGINAL TASK:
 REVIEW:
 {review_json}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 Produce a JSON adjudication conforming to this schema:

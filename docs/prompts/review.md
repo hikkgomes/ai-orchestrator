@@ -12,7 +12,7 @@
 
 Independently review the full implementation against the original task and plan.
 The reviewer has not participated in planning or execution. It reads the
-task, plan, diff, step results, bundled review categories, optional heuristic
+task, plan, diff, execution results, bundled review categories, optional heuristic
 scanner output, and optional repository context. It must assess:
 
 1. Correctness — does the implementation do what the task requires?
@@ -34,7 +34,7 @@ findings with `critical` or `major` severity.
 | `{task_description}` | run state | Normalized task description |
 | `{plan_json}` | `plans/plan-<uuid>.json` | Full plan JSON |
 | `{git_diff}` | worktree | Output of `git diff <base_commit>...aio/run-<uuid>`, truncated to 80 000 chars |
-| `{step_results_json}` | `results/` | Array of all step result JSONs for this run |
+| `{step_results_json}` | `results/` | Array of execution result JSONs for this run |
 | `{heuristic_scan_section}` | reviewer scanner | Optional regex-based findings for changed files |
 | `{review_categories_section}` | bundled `reviewer/rules.yaml` | Ordered AI-failure checklist |
 | `{repository_context_section}` | `.ai-review/config.json` | Optional repo-aware review hints |
@@ -79,7 +79,7 @@ for correctness failures and security issues. Style issues are `minor` or `info`
   what was actually done.
 - Do not suggest rewriting working code for style.
 - Do not invent requirements that are not in the task description.
-- Each finding must have a `description` grounded in the diff or step results.
+- Each finding must have a `description` grounded in the diff or execution results.
 - Do not repeat the same finding multiple times with different wording.
 - `review_id` must be a valid UUID v4.
 - `score` must reflect the overall implementation quality (1–10), not just
@@ -96,7 +96,7 @@ You are a code review agent for an automated software orchestrator.
 
 You are reviewing an implementation produced by an automated executor. You did
 not participate in planning or execution. Review only what is in the diff and
-step results below. Do not ask questions. This is a single-pass invocation.
+execution results below. Do not ask questions. This is a single-pass invocation.
 
 ORIGINAL TASK:
 {task_description}
@@ -107,7 +107,7 @@ PLAN:
 IMPLEMENTATION DIFF:
 {git_diff}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 {heuristic_scan_section}
@@ -122,7 +122,7 @@ OUTPUT SCHEMA:
 {review_schema}
 
 REVIEW RULES:
-1. Base your review on the diff and step results above. Do not assume code exists
+1. Base your review on the diff and execution results above. Do not assume code exists
    outside the diff.
 2. Assign severity:
    - "critical": security vulnerabilities, data loss risk, broken core functionality

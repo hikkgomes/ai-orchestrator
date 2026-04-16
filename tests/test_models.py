@@ -8,13 +8,12 @@ from pydantic import ValidationError
 from ai_orchestrator.models import (
     Adjudication,
     AdjudicationVerdict,
-    Complexity,
+    ExecutionResult,
     FileAction,
     FileChange,
     Finding,
     FindingSeverity,
     Plan,
-    PlanStep,
     Review,
     ReviewVerdict,
     RunState,
@@ -39,27 +38,25 @@ class TestRunState:
         assert state.updated_at.endswith("+00:00")
 
 
-class TestPlanStep:
-    def test_valid_step(self):
-        step = PlanStep(
-            step_number=1,
-            description="Do something",
-            files_to_read=["README.md"],
-            files_to_modify=["src/foo.py"],
-            depends_on=[],
-            estimated_complexity=Complexity.LOW,
+class TestPlan:
+    def test_valid_plan(self):
+        plan = Plan(
+            plan_id="00000000-0000-0000-0000-000000000001",
+            task="Do something",
+            approach="Keep the change focused.",
+            implementation_steps=["Update the implementation."],
+            key_files=["README.md"],
         )
-        assert step.step_number == 1
+        assert plan.implementation_steps == ["Update the implementation."]
 
-    def test_step_number_must_be_positive(self):
+    def test_requires_implementation_step(self):
         with pytest.raises(ValidationError):
-            PlanStep(
-                step_number=0,
-                description="x",
-                files_to_read=[],
-                files_to_modify=[],
-                depends_on=[],
-                estimated_complexity=Complexity.LOW,
+            Plan(
+                plan_id="00000000-0000-0000-0000-000000000001",
+                task="Do something",
+                approach="Keep the change focused.",
+                implementation_steps=[],
+                key_files=[],
             )
 
 
@@ -67,6 +64,18 @@ class TestStepResult:
     def test_valid_result(self):
         r = StepResult(
             step_number=1,
+            status=StepStatus.SUCCESS,
+            files_changed=[
+                FileChange(path="src/foo.py", action=FileAction.MODIFIED, summary="Updated foo")
+            ],
+            summary="Done",
+        )
+        assert r.status == StepStatus.SUCCESS
+
+
+class TestExecutionResult:
+    def test_valid_result(self):
+        r = ExecutionResult(
             status=StepStatus.SUCCESS,
             files_changed=[
                 FileChange(path="src/foo.py", action=FileAction.MODIFIED, summary="Updated foo")

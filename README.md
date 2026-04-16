@@ -127,16 +127,22 @@ Use `--force` carefully. It rewrites scaffolded files in the current repo.
 Start a run:
 
 ```bash
+orch
 orch new "Add a health check endpoint to the API"
 ```
 
-`orch new` and `orch run` drive approval gates inline by default. Use `--detach`
-or `--no-interactive` if you want the command to return at the next pause.
+Running `orch` with no subcommand opens the interactive shell. `orch new` and
+`orch run` drive approval gates inline by default. Use `--detach` or
+`--no-interactive` if you want the command to return at the next pause.
 
 Skip scoping if the task is already precise:
 
 ```bash
 orch new "Fix the off-by-one in pagination" --skip-scoping
+orch new "Apply this small patch" --skip-planning
+orch new "Review this change" --start-at reviewing
+orch execute plan.json
+orch review
 ```
 
 Common commands:
@@ -250,7 +256,7 @@ model_architectural = "claude-opus-4-5-20250514"
 
 [scoping]
 enabled = true
-max_scoping_rounds = 5
+max_scoping_rounds = 3
 
 [feasibility]
 enabled = true

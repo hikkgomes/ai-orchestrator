@@ -72,11 +72,11 @@ def _ensure_runtime_gitignore(ctx: click.Context) -> None:
     ensure_runtime_gitignore(ctx.obj["repo_root"])
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(context_settings={"help_option_names": ["-h", "--help"]}, invoke_without_command=True)
 @click.version_option(__version__, prog_name="orch")
 @click.pass_context
 def main(ctx: click.Context) -> None:
-    """Coordinate Claude Code and Codex as stateless workers."""
+    """Coordinate Claude Code and Codex as workflow agents."""
     ctx.ensure_object(dict)
     repo_root = Path.cwd()
     artifact_root = repo_root / ".ai-orchestrator"
@@ -93,6 +93,9 @@ def main(ctx: click.Context) -> None:
     except ConfigError as exc:
         ctx.obj["config_error"] = str(exc)
     ctx.obj["workspace_repos"] = _resolve_workspace_repos(repo_root, ctx.obj["config"])
+    if ctx.invoked_subcommand is None:
+        _run_shell(ctx)
+        ctx.exit()
 
 
 @main.command("init")
@@ -126,9 +129,41 @@ def cmd_init(ctx: click.Context, force: bool, skip_review_setup: bool) -> None:
         )
 
 
-def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping: bool) -> None:
+def _synthetic_plan(task: str) -> dict[str, object]:
+    return {
+        "plan_id": str(uuid4()),
+        "task": task,
+        "approach": "Direct execution requested by the operator.",
+        "implementation_steps": [task],
+        "key_files": [],
+    }
+
+
+def _load_plan_file(path: str) -> dict[str, object]:
+    with Path(path).expanduser().open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise click.ClickException("Plan file must contain a JSON object.")
+    return data
+
+
+def _start_run(
+    ctx: click.Context,
+    task: str,
+    interactive: bool,
+    *,
+    skip_scoping: bool,
+    skip_planning: bool = False,
+    start_at: str | None = None,
+    plan_file: str | None = None,
+) -> None:
     if skip_scoping:
         _require_config(ctx).scoping.enabled = False
+    plan = _load_plan_file(plan_file) if plan_file else None
+    if skip_planning and start_at is None:
+        start_at = "executing"
+    if start_at in {"executing", "execution", "feasibility", "reviewing", "review"} and plan is None:
+        plan = _synthetic_plan(task)
     engine = _build_engine(ctx)
     run_id = str(uuid4())
     workspace_repos = ctx.obj["workspace_repos"]
@@ -137,6 +172,8 @@ def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping
         run_id,
         is_workspace=bool(workspace_repos),
         workspace_repos=workspace_repos,
+        start_at=start_at,
+        plan=plan,
     )
     if interactive:
         state = _drive_interactive_approvals(ctx, state.run_id)
@@ -144,7 +181,7 @@ def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping
 
 
 @main.command("new")
-@click.argument("task")
+@click.argument("task", required=False)
 @click.option(
     "--interactive/--no-interactive",
     default=True,
@@ -152,15 +189,37 @@ def _start_run(ctx: click.Context, task: str, interactive: bool, *, skip_scoping
 )
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
+@click.option("--skip-planning", is_flag=True, default=False)
+@click.option("--start-at", type=click.Choice(["scoping", "planning", "feasibility", "executing", "reviewing"]))
+@click.option("--plan-file", type=click.Path(dir_okay=False, path_type=str))
 @click.pass_context
-def cmd_new(ctx: click.Context, task: str, interactive: bool, detach: bool, skip_scoping: bool) -> None:
+def cmd_new(
+    ctx: click.Context,
+    task: str | None,
+    interactive: bool,
+    detach: bool,
+    skip_scoping: bool,
+    skip_planning: bool,
+    start_at: str | None,
+    plan_file: str | None,
+) -> None:
     """Start a new orchestrated run for TASK."""
+    if task is None:
+        task = _read_task_from_stdin_or_prompt()
     interactive = interactive and not detach
-    _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
+    _start_run(
+        ctx,
+        task,
+        interactive,
+        skip_scoping=skip_scoping,
+        skip_planning=skip_planning,
+        start_at=start_at,
+        plan_file=plan_file,
+    )
 
 
 @main.command("run")
-@click.argument("task")
+@click.argument("task", required=False)
 @click.option(
     "--interactive/--no-interactive",
     default=True,
@@ -168,11 +227,174 @@ def cmd_new(ctx: click.Context, task: str, interactive: bool, detach: bool, skip
 )
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.option("--skip-scoping", is_flag=True, default=False)
+@click.option("--skip-planning", is_flag=True, default=False)
+@click.option("--start-at", type=click.Choice(["scoping", "planning", "feasibility", "executing", "reviewing"]))
+@click.option("--plan-file", type=click.Path(dir_okay=False, path_type=str))
 @click.pass_context
-def cmd_run(ctx: click.Context, task: str, interactive: bool, detach: bool, skip_scoping: bool) -> None:
+def cmd_run(
+    ctx: click.Context,
+    task: str | None,
+    interactive: bool,
+    detach: bool,
+    skip_scoping: bool,
+    skip_planning: bool,
+    start_at: str | None,
+    plan_file: str | None,
+) -> None:
     """Start a new orchestrated run for TASK."""
+    if task is None:
+        task = _read_task_from_stdin_or_prompt()
     interactive = interactive and not detach
-    _start_run(ctx, task, interactive, skip_scoping=skip_scoping)
+    _start_run(
+        ctx,
+        task,
+        interactive,
+        skip_scoping=skip_scoping,
+        skip_planning=skip_planning,
+        start_at=start_at,
+        plan_file=plan_file,
+    )
+
+
+@main.command("shell")
+@click.pass_context
+def cmd_shell(ctx: click.Context) -> None:
+    """Open the interactive ai-orchestrator shell."""
+    _run_shell(ctx)
+
+
+@main.command("execute")
+@click.argument("plan_file", type=click.Path(dir_okay=False, path_type=str))
+@click.option("--interactive/--no-interactive", default=True)
+@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
+@click.pass_context
+def cmd_execute(ctx: click.Context, plan_file: str, interactive: bool, detach: bool) -> None:
+    """Execute an existing natural plan JSON file."""
+    plan = _load_plan_file(plan_file)
+    task = str(plan.get("task") or "Execute provided plan")
+    interactive = interactive and not detach
+    _start_run(
+        ctx,
+        task,
+        interactive,
+        skip_scoping=True,
+        start_at="executing",
+        plan_file=plan_file,
+    )
+
+
+@main.command("review")
+@click.argument("task", required=False)
+@click.option("--interactive/--no-interactive", default=True)
+@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
+@click.pass_context
+def cmd_review(ctx: click.Context, task: str | None, interactive: bool, detach: bool) -> None:
+    """Review the current branch diff without running planning or execution."""
+    task = task or "Review the current branch diff."
+    interactive = interactive and not detach
+    engine = _build_engine(ctx)
+    run_id = str(uuid4())
+    state = engine.start(
+        task,
+        run_id,
+        is_workspace=True,
+        workspace_repos=[],
+        start_at="reviewing",
+        plan=_synthetic_plan(task),
+    )
+    if interactive:
+        state = _drive_interactive_approvals(ctx, state.run_id)
+    _render_run_snapshot(ctx, state.run_id, state=state)
+
+
+def _read_task_from_stdin_or_prompt() -> str:
+    if not sys.stdin.isatty():
+        task = sys.stdin.read().strip()
+        if task:
+            return task
+    return click.prompt("Task", type=str)
+
+
+def _read_multiline_task() -> str:
+    lines: list[str] = []
+    while True:
+        prompt = "> " if not lines else "  "
+        try:
+            line = input(prompt)
+        except EOFError:
+            return ""
+        if not line and lines:
+            return "\n".join(lines).strip()
+        if not line:
+            continue
+        if line.endswith("\\"):
+            lines.append(line[:-1])
+            continue
+        lines.append(line)
+        if len(lines) == 1:
+            return "\n".join(lines).strip()
+
+
+def _run_shell(ctx: click.Context) -> None:
+    ui = ctx.obj["ui"]
+    repo_name = ctx.obj["repo_root"].name
+    ui.info(f"ai-orchestrator {__version__} | repo: {repo_name}")
+    ui.info("Type a task, or /help for commands. Blank line submits multi-line input.")
+    while True:
+        task = _read_multiline_task()
+        if not task:
+            return
+        if task.startswith("/"):
+            if _handle_shell_command(ctx, task):
+                return
+            continue
+        _start_run(ctx, task, True, skip_scoping=False)
+
+
+def _handle_shell_command(ctx: click.Context, command: str) -> bool:
+    parts = command.split()
+    name = parts[0].lower()
+    ui = ctx.obj["ui"]
+    if name in {"/quit", "/exit"}:
+        return True
+    if name == "/help":
+        ui.print_logs(
+            "\n".join(
+                [
+                    "/status [run-id|latest]",
+                    "/resume <run-id|latest>",
+                    "/approve <run-id|latest> <gate>",
+                    "/reject <run-id|latest> <gate> <reason>",
+                    "/runs",
+                    "/quit",
+                ]
+            ),
+            title="Shell Commands",
+        )
+        return False
+    if name == "/runs":
+        ctx.invoke(cmd_status, run_id=None, watch=False)
+        return False
+    if name == "/status":
+        ctx.invoke(cmd_status, run_id=parts[1] if len(parts) > 1 else "latest", watch=False)
+        return False
+    if name == "/resume" and len(parts) >= 2:
+        ctx.invoke(cmd_resume, run_id=parts[1])
+        return False
+    if name == "/approve" and len(parts) >= 3:
+        ctx.invoke(cmd_approve, run_id=parts[1], gate=parts[2], force=False, decision=None)
+        return False
+    if name == "/reject" and len(parts) >= 4:
+        ctx.invoke(
+            cmd_reject,
+            run_id=parts[1],
+            gate=parts[2],
+            reason=" ".join(parts[3:]),
+            full_reject=False,
+        )
+        return False
+    ui.warning(f"Unknown shell command: {command}")
+    return False
 
 
 @main.command("resume")

@@ -62,14 +62,22 @@ def build_planning_prompt(
     """
     workspace_section = _workspace_section(workspace_trees)
     return (
-        "You are a software planning agent. Given the following task and repository context,\n"
-        "produce a JSON plan conforming to the schema below.\n\n"
+        "You are a software planning agent. Think like Claude Plan mode: produce a\n"
+        "natural, implementation-ready plan without pretending you know every file\n"
+        "that will change in advance. The plan must still be valid JSON conforming\n"
+        "to the schema below.\n\n"
         "TASK:\n"
         f"{task_description}\n\n"
         "REPOSITORY STRUCTURE:\n"
         f"{directory_tree}{workspace_section}\n\n"
         "KEY FILE CONTENTS:\n"
         f"{key_file_contents}\n\n"
+        "PLAN SHAPE:\n"
+        "- task: concise restatement of the work\n"
+        "- approach: strategy, reasoning, risks, and validation approach\n"
+        "- implementation_steps: ordered plain-language actions, not rigid step objects\n"
+        "- key_files: flat list of likely relevant repository-relative paths\n\n"
+        "Do not include per-step file lists, dependency graphs, or complexity hints.\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
@@ -188,6 +196,24 @@ def build_scope_review_codex_prompt(claude_scope_md: str, scope_md: str) -> str:
     )
 
 
+def build_scope_final_codex_prompt(claude_scope_md: str, scope_md: str, codex_scope_md: str) -> str:
+    """Build Codex final xhigh scope assessment prompt."""
+    return (
+        "You are making the FINAL Codex scope assessment at escalated reasoning.\n\n"
+        "This is the last Codex review before planning. Do not edit scope.md. Return\n"
+        "ONLY markdown for codex-scope.md with YAML frontmatter containing:\n"
+        "agreement: true|false\n\n"
+        "If agreement is false, explain the remaining concern concisely. If agreement\n"
+        "is true, explain why the final scope is safe to plan from.\n\n"
+        "CLAUDE NOTES:\n"
+        f"{claude_scope_md}\n\n"
+        "PREVIOUS CODEX COMMENTS:\n"
+        f"{codex_scope_md}\n\n"
+        "CANONICAL SCOPE.MD:\n"
+        f"{scope_md}\n"
+    )
+
+
 def build_scope_rebuttal_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
     """Build Claude prompt to address Codex scope feedback."""
     return (
@@ -201,6 +227,77 @@ def build_scope_rebuttal_claude_prompt(scope_md: str, codex_scope_md: str) -> st
         f"{scope_md}\n\n"
         "CODEX COMMENTS:\n"
         f"{codex_scope_md}\n"
+    )
+
+
+def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
+    """Build Claude final max-effort scope decision prompt."""
+    return (
+        "You are making the FINAL Claude scope decision at maximum effort.\n\n"
+        "Read Codex's final assessment and return ONLY the final canonical scope.md.\n"
+        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable,\n"
+        "key_files, and context. If Codex still disagrees, decide whether to adjust\n"
+        "the scope or proceed with your current scope, and make that decision clear\n"
+        "in the body.\n\n"
+        "CURRENT SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "CODEX FINAL ASSESSMENT:\n"
+        f"{codex_scope_md}\n"
+    )
+
+
+def build_full_execution_prompt_codex(
+    plan_json: str,
+    file_contents: str,
+    result_file_path: str,
+    schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
+) -> str:
+    """Build a single-session Codex execution prompt for the full plan."""
+    workspace_section = _workspace_section(workspace_trees)
+    return (
+        "You are a software implementation agent. Execute the full plan in this\n"
+        "single Codex session. Maintain context across all implementation steps and\n"
+        "make the smallest correct set of changes.\n\n"
+        "FULL PLAN JSON:\n"
+        f"{plan_json}\n\n"
+        "RELEVANT FILES:\n"
+        f"{file_contents}\n\n"
+        f"{workspace_section}"
+        "IMPLEMENTATION RULES:\n"
+        "- Implement the whole plan, not just the first listed item.\n"
+        "- Commit after each logical chunk when running in a git worktree, using:\n"
+        "  git add -A && git commit -m \"aio: <description>\"\n"
+        "- Do not commit in workspace mode if multiple repos are present unless the\n"
+        "  repo policy clearly allows it.\n"
+        "- If no changes are needed, explain that in the result summary.\n\n"
+        "After making changes, write your result JSON to:\n"
+        f"{result_file_path}\n\n"
+        "The JSON must conform to this schema:\n"
+        f"{schema_json}\n\n"
+        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
+    )
+
+
+def build_full_execution_prompt_claude(
+    plan_json: str,
+    file_contents: str,
+    schema_json: str,
+    workspace_trees: dict[str, str] | None = None,
+) -> str:
+    """Build a single-session Claude execution prompt for the full plan."""
+    workspace_section = _workspace_section(workspace_trees)
+    return (
+        "You are a software implementation agent. Execute the full plan in one\n"
+        "continuous pass and then return one JSON result.\n\n"
+        "FULL PLAN JSON:\n"
+        f"{plan_json}\n\n"
+        "RELEVANT FILES:\n"
+        f"{file_contents}\n\n"
+        f"{workspace_section}"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -256,9 +353,8 @@ def build_feasibility_prompt_codex(
         "REPOSITORY STRUCTURE:\n"
         f"{directory_tree}{workspace_section}\n\n"
         "CHECKS TO PERFORM:\n"
-        '1. Verify that all paths listed in "files_to_read" across all plan steps exist\n'
-        "   in the repository. Paths that don't exist and aren't listed in any step's\n"
-        '   "files_to_modify" are potential issues.\n'
+        '1. Review "key_files" from the plan when present. Missing key files are\n'
+        "   warnings unless the plan clearly depends on an existing file.\n"
         "2. Check that the build/test environment is intact. Run read-only probes only\n"
         '   (e.g., `python -c "import <dep>"`, `which <tool>`, `git status`).\n'
         "3. Check for obvious blockers: broken imports, missing config files the plan\n"
@@ -295,13 +391,13 @@ def build_feasibility_prompt_claude(
         "REPOSITORY STRUCTURE:\n"
         f"{directory_tree}{workspace_section}\n\n"
         "CHECKS TO PERFORM:\n"
-        '1. Verify all "files_to_read" paths exist or will exist by the time the step\n'
-        "   runs (i.e., an earlier step creates them).\n"
-        '2. Identify any "files_to_modify" paths that are outside the repository root\n'
-        "   or contain path traversal (automatic blocking issue).\n"
-        "3. Flag any steps where the description implies network access, credential use,\n"
+        '1. Review "key_files" from the plan when present. Missing key files are\n'
+        "   warnings unless the plan clearly depends on an existing file.\n"
+        '2. Identify any "key_files" paths that are outside the repository root or\n'
+        "   contain path traversal (automatic blocking issue).\n"
+        "3. Flag any implementation steps where the description implies network access, credential use,\n"
         "   or interactive input - all of which cannot proceed.\n"
-        "4. Note any ambiguous or contradictory step dependencies.\n\n"
+        "4. Note any ambiguous or contradictory implementation instructions.\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
@@ -354,7 +450,7 @@ def build_review_prompt(
         f"{plan_json}\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
-        "STEP RESULTS:\n"
+        "EXECUTION RESULTS:\n"
         f"{step_results_json}\n\n"
         f"{heuristic_section}"
         f"{categories_section}"
@@ -383,7 +479,7 @@ def build_adjudication_prompt(
         f"{task_description}\n\n"
         "REVIEW:\n"
         f"{review_json}\n\n"
-        "STEP RESULTS:\n"
+        "EXECUTION RESULTS:\n"
         f"{step_results_json}\n\n"
         "Produce a JSON adjudication conforming to this schema:\n"
         f"{schema_json}\n\n"
@@ -461,7 +557,7 @@ def build_debate_codex_rebuttal_prompt(
         f"{claude_rebuttal}\n\n"
         "DEBATE HISTORY:\n"
         f"{debate_history}\n\n"
-        "STEP RESULTS:\n"
+        "EXECUTION RESULTS:\n"
         f"{step_results}\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
@@ -481,17 +577,17 @@ def build_fix_planning_prompt(
 ) -> str:
     """Build a planning prompt for incremental fix steps only."""
     return (
-        "You are a software planning agent creating incremental fix steps.\n\n"
+        "You are a software planning agent creating an incremental natural fix plan.\n\n"
         "The worktree already contains implementation changes. Do NOT produce a full\n"
-        "replacement plan. Produce only the smallest set of follow-up steps needed to\n"
-        "fix the issues below on top of the existing worktree.\n\n"
+        "replacement plan. Produce only the smallest follow-up implementation_steps\n"
+        "needed to fix the issues below on top of the existing worktree.\n\n"
         "TASK:\n"
         f"{task}\n\n"
         "SCOPE.MD:\n"
         f"{scope_md}\n\n"
         "ORIGINAL PLAN:\n"
         f"{original_plan}\n\n"
-        "EXISTING STEP RESULTS:\n"
+        "EXISTING EXECUTION RESULTS:\n"
         f"{step_results}\n\n"
         "CURRENT DIFF:\n"
         f"{diff}\n\n"

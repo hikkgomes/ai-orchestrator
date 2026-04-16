@@ -7,6 +7,16 @@ from ai_orchestrator.models import RunState, WorkflowStatus
 from ai_orchestrator.ui import OrchestratorUI
 
 
+def _plan_dict(approach: str = "Single focused UI change."):
+    return {
+        "plan_id": "00000000-0000-0000-0000-000000000000",
+        "task": "Ship the terminal UI",
+        "approach": approach,
+        "implementation_steps": ["Render a status dashboard"],
+        "key_files": ["src/ai_orchestrator/ui.py", "src/ai_orchestrator/cli.py"],
+    }
+
+
 def _ui():
     console = Console(record=True, force_terminal=False, width=120)
     stderr_console = Console(record=True, force_terminal=False, width=120)
@@ -16,23 +26,7 @@ def _ui():
 def test_print_plan_renders_table():
     ui, console, _ = _ui()
 
-    ui.print_plan(
-        {
-            "plan_id": "00000000-0000-0000-0000-000000000000",
-            "task": "Ship the terminal UI",
-            "steps": [
-                {
-                    "step_number": 1,
-                    "description": "Render a status dashboard",
-                    "files_to_read": ["src/ai_orchestrator/ui.py"],
-                    "files_to_modify": ["src/ai_orchestrator/ui.py"],
-                    "depends_on": [],
-                    "estimated_complexity": "medium",
-                }
-            ],
-            "reasoning": "Single focused UI change.",
-        }
-    )
+    ui.print_plan(_plan_dict())
 
     output = console.export_text()
     assert "Implementation Plan" in output
@@ -42,55 +36,18 @@ def test_print_plan_renders_table():
 def test_print_plan_summary_includes_show_hint_when_run_id_is_available():
     ui, console, _ = _ui()
 
-    ui.print_plan(
-        {
-            "plan_id": "00000000-0000-0000-0000-000000000000",
-            "task": "Ship the terminal UI",
-            "steps": [
-                {
-                    "step_number": 1,
-                    "description": "Render a status dashboard",
-                    "files_to_read": ["src/ai_orchestrator/ui.py"],
-                    "files_to_modify": ["src/ai_orchestrator/ui.py"],
-                    "depends_on": [],
-                    "estimated_complexity": "medium",
-                }
-            ],
-            "reasoning": "Single focused UI change.",
-        },
-        run_id="12345678-0000-0000-0000-000000000000",
-    )
+    ui.print_plan(_plan_dict(), run_id="12345678-0000-0000-0000-000000000000")
 
     output = console.export_text()
     assert "orch show 12345678 plan" in output
 
 
-def test_render_plan_detail_shows_full_reasoning_and_file_lists():
+def test_render_plan_detail_shows_full_approach_and_file_lists():
     ui, console, _ = _ui()
     reasoning = "Because the approval decision depends on reading the full step context without truncation."
 
     ui.print_plan(
-        {
-            "plan_id": "00000000-0000-0000-0000-000000000000",
-            "task": "Ship the terminal UI",
-            "steps": [
-                {
-                    "step_number": 1,
-                    "description": "Render a status dashboard with panels and untruncated file lists",
-                    "files_to_read": [
-                        "src/ai_orchestrator/ui.py",
-                        "src/ai_orchestrator/cli.py",
-                    ],
-                    "files_to_modify": [
-                        "src/ai_orchestrator/ui.py",
-                        "src/ai_orchestrator/cli.py",
-                    ],
-                    "depends_on": [],
-                    "estimated_complexity": "medium",
-                }
-            ],
-            "reasoning": reasoning,
-        },
+        _plan_dict(reasoning),
         run_id="12345678-0000-0000-0000-000000000000",
         detailed=True,
     )

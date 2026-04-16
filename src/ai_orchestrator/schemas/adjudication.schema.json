@@ -28,7 +28,7 @@
         "type": "integer",
         "minimum": 1
       },
-      "description": "Step numbers that need rework. Required if verdict is REWORK."
+      "description": "Legacy step numbers that need rework. Optional; natural execution uses rework_feedback."
     },
     "rework_feedback": {
       "type": "string",
@@ -51,12 +51,7 @@
         }
       },
       "then": {
-        "required": ["adjudication_id", "verdict", "reasoning", "rework_steps", "rework_feedback"],
-        "properties": {
-          "rework_steps": {
-            "minItems": 1
-          }
-        }
+        "required": ["adjudication_id", "verdict", "reasoning", "rework_feedback"]
       }
     },
     {

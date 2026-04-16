@@ -24,7 +24,7 @@ the worktree is not discarded.
 | `{task}` | run state | Original user task |
 | `{scope_md}` | scoping artifact | Canonical scope markdown |
 | `{original_plan}` | `plans/` | Plan that produced the current implementation |
-| `{step_results}` | `results/` | All existing step result artifacts |
+| `{step_results}` | `results/` | Existing execution result artifacts |
 | `{diff}` | git | Current implementation diff |
 | `{issues}` | review/debate | Consolidated issues to fix |
 | `{debate_context}` | adjudication artifacts | Debate transcript |
@@ -50,7 +50,7 @@ SCOPE.MD:
 ORIGINAL PLAN:
 {original_plan}
 
-EXISTING STEP RESULTS:
+EXISTING EXECUTION RESULTS:
 {step_results}
 
 CURRENT DIFF:
@@ -74,5 +74,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 - Plan only follow-up fixes; do not restate completed work.
 - Keep file paths relative and confined to the repository.
-- Step numbers still start at 1 because each fix plan is a standalone plan artifact.
-- Existing step result artifacts remain in run state; new fix step results are appended.
+- Implementation steps are natural-language strings and should cover only the
+  incremental fixes.
+- Existing execution result artifacts remain in run state; new fix execution
+  results are appended through the legacy `step_results` state field.

@@ -56,7 +56,7 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── plans/
 │   └── plan-<uuid>.json         # validated against plan.schema.json
 ├── results/
-│   └── step-<n>-<uuid>.json     # validated against step_result.schema.json
+│   └── execution-<uuid>.json    # validated against execution_result.schema.json
 ├── reviews/
 │   └── review-<uuid>.json       # validated against review.schema.json
 ├── adjudications/
@@ -153,7 +153,7 @@ Both adapters:
 
 **Claude adapter (primary):** Parse `--output-format json` stdout. Try `json.loads(stdout)` first. On failure, strip markdown fences and find JSON boundaries (lenient mode). Log a warning on lenient success.
 
-**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-step-<n>.json`; feasibility writes `.ai-orchestrator/feasibility/pending-<run-id>.json`. Execution still reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
+**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`; feasibility writes `.ai-orchestrator/feasibility/pending-<run-id>.json`. Execution still reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
 
 ### 4. Schema Validator
 
@@ -217,7 +217,7 @@ reasoning_effort = "high"
 
 [scoping]
 enabled = true
-max_scoping_rounds = 5
+max_scoping_rounds = 3
 
 [feasibility]
 enabled = true

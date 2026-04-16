@@ -12,7 +12,7 @@ Workflow phases exchange JSON artifacts validated against schemas in `schemas/` 
 Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter]
 Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
 Phase 4 (Feasibility)  → feasibility/feasibility-<uuid>.json [feasibility.schema.json]
-Phase 5 (Execution)    → results/step-<n>-<uuid>.json       [step_result.schema.json]
+Phase 5 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
 Phase 6 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
 Phase 7 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
 Phase 7 debate rounds  → adjudications/debate-round-*.json   [debate_response.schema.json]
@@ -42,25 +42,16 @@ Produced by the planner. Consumed by the executor and reviewer.
 |---|---|---|---|
 | `plan_id` | string (uuid) | yes | Unique identifier |
 | `task` | string | yes | Original task description |
-| `steps` | array of Step | yes | Ordered implementation steps |
-| `steps[].step_number` | integer | yes | 1-indexed position |
-| `steps[].description` | string | yes | What this step does |
-| `steps[].files_to_read` | array of string | yes | Files to include in prompt context |
-| `steps[].files_to_modify` | array of string | yes | Files this step will create or edit |
-| `steps[].depends_on` | array of integer | yes | Step numbers that must complete first (empty = independent) |
-| `steps[].estimated_complexity` | enum: low/medium/high | yes | Complexity hint for routing and timeouts |
-| `reasoning` | string | yes | Explanation of decomposition strategy |
+| `approach` | string | yes | Reasoning, strategy, risks, and validation approach |
+| `implementation_steps` | array of string | yes | Ordered natural-language implementation steps |
+| `key_files` | array of string | yes | Flat list of likely relevant repository-relative paths |
 
 **Schema validation rules:**
-- `steps` must have at least 1 element
-- `step_number` values must be sequential starting from 1
-- `depends_on` values must reference existing step numbers < current step
+- `implementation_steps` must have at least 1 element
 - File paths must not start with `..` or `/`
 
 **Application-level validation (in `validator.py`):**
-- No circular dependencies in the dependency graph
 - All file paths are normalized and verified to stay within the repo root (reject paths containing `..` anywhere, e.g. `a/../../b`)
-- `depends_on` references are valid
 
 ---
 
@@ -79,13 +70,12 @@ Produced by the feasibility checker. Consumed by the engine before execution.
 
 ---
 
-## Step Result Contract (`step_result.schema.json`)
+## Execution Result Contract (`execution_result.schema.json`)
 
-Produced by the executor (one per plan step). Consumed by the reviewer.
+Produced by the executor once for the full plan. Consumed by the reviewer.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `step_number` | integer | yes | Which plan step this fulfills |
 | `status` | enum: success/partial/failed | yes | Self-assessed outcome |
 | `files_changed` | array of FileChange | yes | What files were modified |
 | `files_changed[].path` | string | yes | Relative file path |
@@ -96,7 +86,6 @@ Produced by the executor (one per plan step). Consumed by the reviewer.
 | `test_commands` | array of string | no | Commands to verify this step |
 
 **Schema validation rules:**
-- `step_number` must match the step being executed
 - `files_changed` must have at least 1 element if `status` is `success`
 - Each `path` must not start with `..` or `/`
 
@@ -140,16 +129,15 @@ Produced by the adjudicator. Consumed by the orchestrator engine.
 | `adjudication_id` | string (uuid) | yes | Unique identifier |
 | `verdict` | enum: PASS/REWORK/REPLAN/FAIL | yes | Initial Codex decision; non-PASS enters fix/debate handling |
 | `reasoning` | string | yes | Why this verdict was chosen |
-| `rework_steps` | array of integer | no | Which steps need rework (if REWORK) |
+| `rework_steps` | array of integer | no | Legacy step numbers for older artifacts |
 | `rework_feedback` | string | no | Guidance for rework (if REWORK) |
 | `replan_feedback` | string | no | Guidance for replanning (if REPLAN) |
 | `failure_reason` | string | no | Why this is unrecoverable (if FAIL) |
 
 **Validation rules:**
-- If `verdict` is `REWORK`, `rework_steps` must be non-empty and `rework_feedback` must be present
+- If `verdict` is `REWORK`, `rework_feedback` must be present
 - If `verdict` is `REPLAN`, `replan_feedback` must be present
 - If `verdict` is `FAIL`, `failure_reason` must be present
-- `rework_steps` values must reference valid step numbers from the plan
 
 ---
 
@@ -178,7 +166,7 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `plan_id` | string or null | Reference to current plan |
 | `normalized_task` | string or null | Scoping-normalized task |
 | `complexity_tier` | string or null | Scoping-derived routing tier |
-| `step_results` | array of string | References to completed step results |
+| `step_results` | array of string | References to execution result artifacts (legacy field name) |
 | `feasibility_id` | string or null | Reference to current feasibility result |
 | `review_id` | string or null | Reference to current review |
 | `adjudication_id` | string or null | Reference to current adjudication |
@@ -187,7 +175,7 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `session_ids` | object | Vendor session IDs keyed by phase |
 | `scope_md_ref` | string or null | Canonical scope markdown reference |
 | `debate_state` | object or null | Adjudication debate progress |
-| `retry_counts` | object | Per-step retry counts |
+| `retry_counts` | object | Per-phase retry counts, plus legacy per-step keys |
 | `created_at` | string (ISO 8601) | When the run started |
 | `updated_at` | string (ISO 8601) | Last state change |
 | `error` | string or null | Error message if FAILED |

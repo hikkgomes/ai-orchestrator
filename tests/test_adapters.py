@@ -88,17 +88,9 @@ class TestClaudeAdapter:
                         {
                             "plan_id": "00000000-0000-0000-0000-000000000000",
                             "task": "Example",
-                            "steps": [
-                                {
-                                    "step_number": 1,
-                                    "description": "One",
-                                    "files_to_read": [],
-                                    "files_to_modify": ["src/file.py"],
-                                    "depends_on": [],
-                                    "estimated_complexity": "low",
-                                }
-                            ],
-                            "reasoning": "Keep it simple",
+                            "approach": "Keep it simple",
+                            "implementation_steps": ["Update one file"],
+                            "key_files": ["src/file.py"],
                         }
                     ),
                 }

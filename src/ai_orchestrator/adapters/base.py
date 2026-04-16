@@ -23,7 +23,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..metadata import InvocationRecord, MetadataStore
-from ..models import StepResult
+from ..models import ExecutionResult, StepResult
 from ..validator import ValidationError, Validator, validate_schema
 
 
@@ -259,6 +259,8 @@ class BaseAdapter(ABC):
                 if step_number is None:
                     step_number = int(data.get("step_number", 0))
                 return validator.validate_step_result(data, step_number)
+            if title == "ExecutionResult":
+                return validator.validate_execution_result(data)
             if title == "FeasibilityResult":
                 return validator.validate_feasibility(data)
             if title == "Review":
@@ -346,5 +348,12 @@ class BaseAdapter(ABC):
             return None
         try:
             return StepResult.model_validate(data)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _typed_execution_result(data: dict[str, Any]) -> ExecutionResult | None:
+        try:
+            return ExecutionResult.model_validate(data)
         except Exception:
             return None

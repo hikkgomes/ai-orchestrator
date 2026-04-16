@@ -29,9 +29,8 @@ REPOSITORY STRUCTURE:
 {directory_tree}
 
 CHECKS TO PERFORM:
-1. Verify that all paths listed in "files_to_read" across all plan steps exist
-   in the repository. Paths that do not exist and are not listed in a step's
-   "files_to_modify" are potential issues.
+1. Review all paths listed in "key_files". Missing key files are warnings unless
+   the plan clearly depends on them already existing.
 2. Check that the build/test environment is intact using read-only probes only.
 3. Check for obvious blockers: broken imports, missing config files, invalid dependencies.
 4. Do NOT attempt to fix anything. Report only.
@@ -64,10 +63,11 @@ REPOSITORY STRUCTURE:
 {directory_tree}
 
 CHECKS TO PERFORM:
-1. Verify all "files_to_read" paths exist or will exist by the time the step runs.
-2. Identify any "files_to_modify" paths outside the repository root or with traversal.
-3. Flag any steps that imply network access, credential use, or interactive input.
-4. Note ambiguous or contradictory dependencies.
+1. Review all paths listed in "key_files". Missing key files are warnings unless
+   the plan clearly depends on them already existing.
+2. Identify any "key_files" paths outside the repository root or with traversal.
+3. Flag any implementation steps that imply network access, credential use, or interactive input.
+4. Note ambiguous or contradictory implementation instructions.
 
 OUTPUT SCHEMA:
 {feasibility_schema}

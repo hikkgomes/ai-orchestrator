@@ -41,7 +41,7 @@ reasoning_effort = "high"
 
 [scoping]
 enabled = true
-max_scoping_rounds = 5
+max_scoping_rounds = 3
 
 [feasibility]
 enabled = true

@@ -14,8 +14,8 @@
 
 ## Purpose
 
-Codex performs the first adjudication pass over Claude's review and the step
-results. The engine compares Codex's position with Claude's review:
+Codex performs the first adjudication pass over Claude's review and the
+execution results. The engine compares Codex's position with Claude's review:
 
 - Claude found issues and Codex agrees: produce incremental fix-planning feedback.
 - Claude found no issues and Codex agrees: proceed to merge.
@@ -33,7 +33,7 @@ rebuttal prompts use `debate_response.schema.json`.
 |---|---|---|
 | `{task_description}` | run state | Normalized task description |
 | `{review_json}` | `reviews/review-<uuid>.json` | Full review JSON |
-| `{step_results_json}` | `results/` | Array of all step result JSONs for this run |
+| `{step_results_json}` | `results/` | Array of execution result JSONs for this run |
 | `{adjudication_schema}` | `schemas/adjudication.schema.json` | Full JSON Schema |
 
 ---
@@ -50,7 +50,7 @@ ORIGINAL TASK:
 REVIEW:
 {review_json}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 Produce a JSON adjudication conforming to this schema:
@@ -72,7 +72,7 @@ structured debate prompts:
 - If disagreement remains, the run pauses at `debate_tiebreaker`.
 
 Fix outcomes return to PLANNING with the original task, `scope.md`, the original
-plan, all existing step results, current diff, consolidated issues, and the
+plan, all existing execution results, current diff, consolidated issues, and the
 debate transcript. The worktree is preserved.
 
 ---

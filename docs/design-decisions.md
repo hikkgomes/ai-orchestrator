@@ -126,13 +126,13 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-9: Sequential execution only for v1
+## DD-9: Single-session execution
 
-**Decision:** v1 supports sequential step execution only. Parallel execution is deferred.
+**Decision:** Execution runs the full natural plan in one worker session. Parallel execution is deferred.
 
-**Context:** Feasibility Finding 12 suggested cutting scope. The original design supported parallel execution of independent steps, which adds merge complexity, error handling complexity, and requires multiple worktrees.
+**Context:** Real runs showed that one subprocess per step wastes tokens and loses useful implementation context. The original design also supported parallel execution of independent steps, which adds merge complexity, error handling complexity, and requires multiple worktrees.
 
-**Decision rationale:** Sequential execution in a single worktree is simpler, correct, and sufficient for v1. `depends_on` is retained in the plan schema for future use but is not acted on in v1 — all steps execute in order.
+**Decision rationale:** A single Codex session can reason across the whole plan, commit after logical chunks, and produce one execution result artifact. The plan schema no longer includes `depends_on`; ordering is represented by natural-language `implementation_steps`.
 
 ---
 

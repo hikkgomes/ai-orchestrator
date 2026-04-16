@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-orchestrator.dev/schemas/execution_result.schema.json",
+  "title": "ExecutionResult",
+  "description": "Result of executing a full implementation plan.",
+  "type": "object",
+  "required": ["status", "files_changed", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial", "failed"],
+      "description": "Self-assessed outcome of the full execution."
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileChange"
+      },
+      "description": "List of files modified by the full execution."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Overall summary of what was implemented."
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Known issues or caveats with this implementation."
+    },
+    "test_commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Shell commands used or recommended to verify the implementation."
+    },
+    "workspace_diffs": {
+      "type": "object",
+      "description": "Optional per-repo git diffs captured for workspace-mode runs.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "status": { "const": "success" }
+    }
+  },
+  "then": {
+    "properties": {
+      "files_changed": {
+        "minItems": 1
+      }
+    }
+  },
+  "$defs": {
+    "FileChange": {
+      "type": "object",
+      "required": ["path", "action", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\./)",
+          "description": "Relative file path. Must not contain .. segments or start with /."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["created", "modified", "deleted"],
+          "description": "Type of change."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of what changed in this file."
+        }
+      }
+    }
+  }
+}

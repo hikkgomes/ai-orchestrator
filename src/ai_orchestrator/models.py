@@ -39,14 +39,6 @@ class WorkflowStatus(str, Enum):
     CONFLICT = "CONFLICT"
 
 
-class Complexity(str, Enum):
-    """Step complexity hint used for routing and timeout decisions."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
 class ComplexityTier(str, Enum):
     """Repository-level task complexity tier resolved during scoping."""
 
@@ -115,28 +107,18 @@ class DebatePhase(str, Enum):
 # ---------------------------------------------------------------------------
 
 
-class PlanStep(BaseModel):
-    """A single step in a decomposed implementation plan."""
-
-    step_number: int = Field(ge=1)
-    description: str = Field(min_length=1)
-    files_to_read: list[str] = Field(default_factory=list)
-    files_to_modify: list[str] = Field(default_factory=list)
-    depends_on: list[int] = Field(default_factory=list)
-    estimated_complexity: Complexity
-
-
 class Plan(BaseModel):
-    """Decomposed implementation plan produced by the planning phase."""
+    """Natural implementation plan produced by the planning phase."""
 
     plan_id: str
     task: str = Field(min_length=1)
-    steps: list[PlanStep] = Field(min_length=1)
-    reasoning: str = Field(min_length=1)
+    approach: str = Field(min_length=1)
+    implementation_steps: list[str] = Field(min_length=1)
+    key_files: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# Step result artifact (step_result.schema.json)
+# Execution result artifact (execution_result.schema.json)
 # ---------------------------------------------------------------------------
 
 
@@ -149,9 +131,20 @@ class FileChange(BaseModel):
 
 
 class StepResult(BaseModel):
-    """Result of executing a single plan step."""
+    """Legacy result of executing a single plan step."""
 
     step_number: int = Field(ge=1)
+    status: StepStatus
+    files_changed: list[FileChange] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
+    issues: list[str] = Field(default_factory=list)
+    test_commands: list[str] = Field(default_factory=list)
+    workspace_diffs: dict[str, str] = Field(default_factory=dict)
+
+
+class ExecutionResult(BaseModel):
+    """Result of executing a full implementation plan."""
+
     status: StepStatus
     files_changed: list[FileChange] = Field(default_factory=list)
     summary: str = Field(min_length=1)
@@ -250,6 +243,7 @@ class RunState(BaseModel):
     plan_id: str | None = None
     normalized_task: str | None = None
     complexity_tier: str | None = None
+    execution_result_ref: str | None = None
     step_results: list[str] = Field(default_factory=list)
     commit_commands: list[str] = Field(default_factory=list)
     review_id: str | None = None

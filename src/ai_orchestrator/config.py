@@ -84,7 +84,8 @@ class ApprovalConfig:
 @dataclass
 class ScopingConfig:
     enabled: bool = True
-    max_scoping_rounds: int = 5
+    # Fixed debate structure uses up to three visible debate rounds.
+    max_scoping_rounds: int = 3
 
 
 @dataclass

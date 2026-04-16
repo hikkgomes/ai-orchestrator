@@ -20,14 +20,16 @@ from .prompts.templates import (
     build_adjudication_prompt,
     build_debate_claude_rebuttal_prompt,
     build_debate_codex_rebuttal_prompt,
-    build_execution_prompt_claude,
-    build_execution_prompt_codex,
     build_feasibility_prompt_claude,
     build_feasibility_prompt_codex,
     build_fix_planning_prompt,
+    build_full_execution_prompt_claude,
+    build_full_execution_prompt_codex,
     build_planning_prompt,
     build_prescope_claude_prompt,
     build_prescope_codex_prompt,
+    build_scope_final_claude_prompt,
+    build_scope_final_codex_prompt,
     build_scope_rebuttal_claude_prompt,
     build_scope_review_codex_prompt,
     build_scope_synthesis_prompt,
@@ -53,6 +55,9 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.INIT: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
+        WorkflowStatus.FEASIBILITY,
+        WorkflowStatus.EXECUTING,
+        WorkflowStatus.REVIEWING,
         WorkflowStatus.FAILED,
         WorkflowStatus.TERMINATED,
     },
@@ -174,6 +179,8 @@ class Engine:
         *,
         is_workspace: bool = False,
         workspace_repos: list[str] | None = None,
+        start_at: str | None = None,
+        plan: dict[str, Any] | None = None,
     ) -> RunState:
         state = RunState(
             run_id=run_id,
@@ -181,12 +188,33 @@ class Engine:
             is_workspace=is_workspace,
             workspace_repos=list(workspace_repos or []),
         )
+        if plan is not None:
+            state.plan_id = self._artifacts.save_plan(run_id, plan)
         self._state_mgr.save(state)
-        if self._config.scoping.enabled:
+        if start_at:
+            phase = self._phase_from_start_at(start_at)
+            state = self._transition(state, phase)
+        elif self._config.scoping.enabled:
             state = self._transition(state, WorkflowStatus.SCOPING)
         else:
             state = self._transition(state, WorkflowStatus.PLANNING)
         return self._run(state)
+
+    @staticmethod
+    def _phase_from_start_at(start_at: str) -> WorkflowStatus:
+        phase = start_at.strip().lower().replace("-", "_")
+        mapping = {
+            "scoping": WorkflowStatus.SCOPING,
+            "planning": WorkflowStatus.PLANNING,
+            "feasibility": WorkflowStatus.FEASIBILITY,
+            "executing": WorkflowStatus.EXECUTING,
+            "execution": WorkflowStatus.EXECUTING,
+            "reviewing": WorkflowStatus.REVIEWING,
+            "review": WorkflowStatus.REVIEWING,
+        }
+        if phase not in mapping:
+            raise EngineError(f"Unsupported start phase: {start_at}")
+        return mapping[phase]
 
     def resume(self, run_id: str) -> RunState:
         state = self._state_mgr.load(run_id)
@@ -336,112 +364,114 @@ class Engine:
         codex_model = self._resolve_model_for_phase("scoping", "codex", state)
 
         try:
-            if not state.claude_scope_ref or not state.codex_scope_ref:
-                claude_prompt = build_prescope_claude_prompt(state.task, summary, directory_tree)
-                codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
-                self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
-                self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
-                claude_scope, codex_scope = invoke_parallel(
-                    [
-                        lambda: self._invoke_adapter_text(
-                            claude,
-                            claude_prompt,
-                            self._repo_root,
-                            "Scoping with Claude",
-                            reasoning_effort_override=claude_effort,
-                            model_override=claude_model,
-                        ),
-                        lambda: self._invoke_adapter_text(
-                            codex,
-                            codex_prompt,
-                            self._repo_root,
-                            "Scoping with Codex",
-                            reasoning_effort_override=codex_effort,
-                            model_override=codex_model,
-                            legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
-                        ),
-                    ]
-                )
-                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 0, claude_scope)
-                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 0, codex_scope)
-                state.scoping_round = 0
-                self._state_mgr.save(state)
+            claude_prompt = build_prescope_claude_prompt(state.task, summary, directory_tree)
+            codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
+            self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
+            self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
+            claude_scope, codex_scope = invoke_parallel(
+                [
+                    lambda: self._invoke_adapter_text(
+                        claude,
+                        claude_prompt,
+                        self._repo_root,
+                        "Scoping round 0/3 with Claude",
+                        reasoning_effort_override=claude_effort,
+                        model_override=claude_model,
+                    ),
+                    lambda: self._invoke_adapter_text(
+                        codex,
+                        codex_prompt,
+                        self._repo_root,
+                        "Scoping round 0/3 with Codex",
+                        reasoning_effort_override=codex_effort,
+                        model_override=codex_model,
+                        legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
+                    ),
+                ]
+            )
+            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 0, claude_scope)
+            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 0, codex_scope)
+            state.scoping_round = 0
+            self._state_mgr.save(state)
 
-            if not state.scope_md_ref:
-                claude_scope = self._artifacts.read_text(state.claude_scope_ref)
-                codex_scope = self._artifacts.read_text(state.codex_scope_ref)
-                prompt = build_scope_synthesis_prompt(claude_scope, codex_scope, state.task)
-                self._artifacts.save_prompt(f"scope-synthesis-{state.run_id[:8]}.md", prompt)
+            prompt = build_scope_synthesis_prompt(claude_scope, codex_scope, state.task)
+            self._artifacts.save_prompt(f"scope-synthesis-{state.run_id[:8]}.md", prompt)
+            scope_md = self._invoke_adapter_text(
+                claude,
+                prompt,
+                self._repo_root,
+                "Scoping synthesis",
+                reasoning_effort_override=claude_effort,
+                model_override=claude_model,
+            )
+            state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
+            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, scope_md)
+            state.scoping_round = 1
+            self._state_mgr.save(state)
+
+            prompt = build_scope_review_codex_prompt(scope_md, scope_md)
+            self._artifacts.save_prompt(f"scope-review-codex-r1-{state.run_id[:8]}.md", prompt)
+            codex_scope = self._invoke_adapter_text(
+                codex,
+                prompt,
+                self._repo_root,
+                "Scoping round 1/3 with Codex",
+                reasoning_effort_override=codex_effort,
+                model_override=codex_model,
+                legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
+            )
+            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 1, codex_scope)
+            state.scoping_agreed = self._scope_review_agreed(codex_scope)
+            state.scoping_round = 1
+            self._state_mgr.save(state)
+
+            if not state.scoping_agreed:
+                prompt = build_scope_rebuttal_claude_prompt(scope_md, codex_scope)
+                self._artifacts.save_prompt(f"scope-rebuttal-claude-r2-{state.run_id[:8]}.md", prompt)
                 scope_md = self._invoke_adapter_text(
                     claude,
                     prompt,
                     self._repo_root,
-                    "Synthesizing scope",
+                    "Scoping round 2/3 with Claude",
                     reasoning_effort_override=claude_effort,
                     model_override=claude_model,
                 )
                 state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, scope_md)
-                state.scoping_round = 1
+                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 2, scope_md)
+                state.scoping_round = 2
                 self._state_mgr.save(state)
 
-            codex_reviews = 0
-            round_number = max(state.scoping_round + 1, 2)
-            # Each debate round is one Codex review plus one Claude rebuttal.
-            while not state.scoping_agreed and codex_reviews < self._config.scoping.max_scoping_rounds:
-                scope_md = self._artifacts.read_text(state.scope_md_ref)
-                claude_scope = self._artifacts.read_text(state.claude_scope_ref)
-                prompt = build_scope_review_codex_prompt(claude_scope, scope_md)
-                self._artifacts.save_prompt(
-                    f"scope-review-codex-r{round_number}-{state.run_id[:8]}.md",
-                    prompt,
-                )
+                prompt = build_scope_final_codex_prompt(scope_md, scope_md, codex_scope)
+                self._artifacts.save_prompt(f"scope-final-codex-r3-{state.run_id[:8]}.md", prompt)
                 codex_scope = self._invoke_adapter_text(
                     codex,
                     prompt,
                     self._repo_root,
-                    f"Codex scope review round {round_number}",
-                    reasoning_effort_override=codex_effort,
+                    "Scoping round 3/3 with Codex xhigh",
+                    reasoning_effort_override=self._config.debate.escalated_codex_effort,
                     model_override=codex_model,
-                    legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
+                    legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the final scope.",
                 )
-                state.codex_scope_ref = self._artifacts.save_codex_scope(
-                    state.run_id,
-                    round_number,
-                    codex_scope,
-                )
-                state.scoping_round = round_number
+                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 3, codex_scope)
                 state.scoping_agreed = self._scope_review_agreed(codex_scope)
+                state.scoping_round = 3
                 self._state_mgr.save(state)
-                codex_reviews += 1
-                if state.scoping_agreed:
-                    break
-                if codex_reviews >= self._config.scoping.max_scoping_rounds:
-                    break
 
-                rebuttal_round = round_number + 1
-                prompt = build_scope_rebuttal_claude_prompt(scope_md, codex_scope)
-                self._artifacts.save_prompt(
-                    f"scope-rebuttal-claude-r{rebuttal_round}-{state.run_id[:8]}.md",
-                    prompt,
-                )
-                scope_md = self._invoke_adapter_text(
-                    claude,
-                    prompt,
-                    self._repo_root,
-                    f"Claude scope rebuttal round {rebuttal_round}",
-                    reasoning_effort_override=claude_effort,
-                    model_override=claude_model,
-                )
-                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                state.claude_scope_ref = self._artifacts.save_claude_scope(
-                    state.run_id,
-                    rebuttal_round,
-                    scope_md,
-                )
-                state.scoping_round = rebuttal_round
-                self._state_mgr.save(state)
-                round_number = rebuttal_round + 1
+                if not state.scoping_agreed:
+                    prompt = build_scope_final_claude_prompt(scope_md, codex_scope)
+                    self._artifacts.save_prompt(f"scope-final-claude-{state.run_id[:8]}.md", prompt)
+                    scope_md = self._invoke_adapter_text(
+                        claude,
+                        prompt,
+                        self._repo_root,
+                        "Finalizing scope with Claude max",
+                        reasoning_effort_override=self._config.debate.escalated_claude_effort,
+                        model_override=self._config.debate.escalated_claude_model or claude_model,
+                    )
+                    state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
+                    state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 3, scope_md)
+                    state.scoping_round = 3
+                    self._state_mgr.save(state)
         except BlockedOnCLI as exc:
             return self._transition(
                 state,
@@ -769,136 +799,101 @@ class Engine:
 
     def _run_execution(self, state: RunState) -> RunState:
         plan = self._require_artifact(state.plan_id)
-        manifest = self._ensure_execution_manifest(state, plan)
-        target_steps = manifest["target_steps"]
-        completed_steps = set(manifest["completed_steps"])
-        steps_by_number = {step["step_number"]: step for step in plan["steps"]}
-
         worktree_dir = self._ensure_worktree(state)
         worker_name = self._phase_cli("executing", config_name="worker")
         worker = self._adapter_for_phase("executing")
-        schema = load_bundled_schema("step_result.schema.json")
+        schema = load_bundled_schema("execution_result.schema.json")
 
-        for step_number in target_steps:
-            if step_number in completed_steps:
-                continue
-            step = steps_by_number[step_number]
-            files_to_read = list(dict.fromkeys(step["files_to_read"] + step["files_to_modify"]))
-            file_contents, _ = collect_file_context(worktree_dir, files_to_read)
-            plan_context = json_block(
-                {
-                    "plan_artifact": state.plan_id,
-                    "execution_manifest": manifest,
-                    "current_step": step,
-                    "dependency_results": self._dependency_results(
-                        state,
-                        step.get("depends_on", []),
-                    ),
-                }
+        key_files = list(dict.fromkeys(plan.get("key_files", [])))
+        file_contents, _ = collect_file_context(worktree_dir, key_files)
+        pending_result_path = str(self._artifacts.pending_execution_result_path(state.run_id))
+        self._artifacts.clear_pending_execution_result(state.run_id)
+
+        if worker_name == "codex":
+            prompt = build_full_execution_prompt_codex(
+                plan_json=json_block(plan),
+                file_contents=file_contents,
+                result_file_path=pending_result_path,
+                schema_json=json_block(schema),
+                workspace_trees=self._workspace_trees(state, max_depth=2),
             )
-            pending_result_path = str(self._artifacts.pending_step_result_path(step_number))
-            self._artifacts.clear_pending_step_result(step_number)
+        else:
+            prompt = build_full_execution_prompt_claude(
+                plan_json=json_block(plan),
+                file_contents=file_contents,
+                schema_json=json_block(schema),
+                workspace_trees=self._workspace_trees(state, max_depth=2),
+            )
 
-            if worker_name == "codex":
-                prompt = build_execution_prompt_codex(
-                    step_description=step["description"],
-                    plan_context=plan_context,
-                    file_contents=file_contents,
-                    result_file_path=pending_result_path,
-                    schema_json=json_block(schema),
-                    workspace_trees=self._workspace_trees(state, max_depth=2),
-                )
-                invoke = lambda current_prompt, step_number=step_number: self._invoke_adapter_json(
-                    worker,
-                    current_prompt,
-                    worktree_dir,
-                    schema,
-                    step_number=step_number,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "executing",
-                        worker_name,
-                    ),
-                    model_override=self._resolve_model_for_phase("executing", worker_name, state),
-                )
-            else:
-                prompt = build_execution_prompt_claude(
-                    step_description=step["description"],
-                    plan_context=plan_context,
-                    file_contents=file_contents,
-                    schema_json=json_block(schema),
-                    workspace_trees=self._workspace_trees(state, max_depth=2),
-                )
-                invoke = lambda current_prompt: self._invoke_adapter_json(
-                    worker,
-                    current_prompt,
-                    worktree_dir,
-                    schema,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "executing",
-                        worker_name,
-                    ),
-                    model_override=self._resolve_model_for_phase("executing", worker_name, state),
-                )
+        def invoke(current_prompt: str) -> Any:
+            return self._invoke_adapter_json(
+                worker,
+                current_prompt,
+                worktree_dir,
+                schema,
+                reasoning_effort_override=self._resolve_effort_for_phase(
+                    state,
+                    "executing",
+                    worker_name,
+                ),
+                model_override=self._resolve_model_for_phase("executing", worker_name, state),
+            )
 
-            attempt_number = 0
+        attempt_number = 0
 
-            def invoke_and_enforce_status(current_prompt: str) -> InvokeResult:
-                nonlocal attempt_number
-                if attempt_number > 0:
-                    self._artifacts.clear_pending_step_result(step_number)
-                    if state.is_workspace:
-                        self._reset_workspace_repos(state)
-                    else:
-                        self._reset_worktree(worktree_dir)
-                attempt_number += 1
-                invoke_result = self._coerce_invoke_result(invoke(current_prompt))
-                result = invoke_result.data
-                if result.get("status") == "failed":
-                    detail = str(result.get("summary") or "Execution step reported failure")
-                    issues = result.get("issues") or []
-                    if issues:
-                        detail = detail + " Issues: " + "; ".join(str(issue) for issue in issues)
-                    raise StepFailure(
-                        "Execution step reported failed status",
-                        validation_error=detail,
-                    )
+        def invoke_and_enforce_status(current_prompt: str) -> InvokeResult:
+            nonlocal attempt_number
+            if attempt_number > 0:
+                self._artifacts.clear_pending_execution_result(state.run_id)
                 if state.is_workspace:
-                    result["workspace_diffs"] = self._collect_workspace_diffs(state)
-                return InvokeResult(data=result, session_id=invoke_result.session_id)
-
-            self._artifacts.save_prompt(f"step-{step_number}.md", prompt)
-
-            try:
-                invoke_result = self._invoke_with_retries(
-                    state,
-                    retry_key=f"step-{step_number}",
-                    retries=self._retry_limit("executing"),
-                    spinner_label=f"Executing step {step_number}",
-                    invoke=invoke_and_enforce_status,
-                    initial_prompt=prompt,
-                )
-            except BlockedOnCLI as exc:
-                return self._transition(
-                    state,
-                    WorkflowStatus.BLOCKED_ON_CLI,
-                    current_phase=WorkflowStatus.EXECUTING.value,
-                    error=str(exc),
-                )
-            except StepFailure as exc:
-                return self._fail_run(state, self._format_step_failure(exc))
-
+                    self._reset_workspace_repos(state)
+                else:
+                    self._reset_worktree(worktree_dir)
+            attempt_number += 1
+            invoke_result = self._coerce_invoke_result(invoke(current_prompt))
             result = invoke_result.data
-            self._commit_worktree_step(state, worktree_dir, step_number, step["description"])
-            reference = self._artifacts.save_step_result(state.run_id, step_number, result)
-            self._update_step_result_reference(state, step_number, reference)
-            manifest = self._mark_step_completed(manifest, step_number)
-            self._artifacts.save_execution_manifest(state.run_id, manifest)
-            state.error = None
-            self._state_mgr.save(state)
+            if result.get("status") == "failed":
+                detail = str(result.get("summary") or "Execution reported failure")
+                issues = result.get("issues") or []
+                if issues:
+                    detail = detail + " Issues: " + "; ".join(str(issue) for issue in issues)
+                raise StepFailure(
+                    "Execution reported failed status",
+                    validation_error=detail,
+                )
+            if state.is_workspace:
+                result["workspace_diffs"] = self._collect_workspace_diffs(state)
+            return InvokeResult(data=result, session_id=invoke_result.session_id)
 
+        self._artifacts.save_prompt(f"execution-{state.run_id[:8]}.md", prompt)
+
+        try:
+            invoke_result = self._invoke_with_retries(
+                state,
+                retry_key="execution",
+                retries=self._retry_limit("executing"),
+                spinner_label="Codex executing" if worker_name == "codex" else "Executing plan",
+                invoke=invoke_and_enforce_status,
+                initial_prompt=prompt,
+            )
+        except BlockedOnCLI as exc:
+            return self._transition(
+                state,
+                WorkflowStatus.BLOCKED_ON_CLI,
+                current_phase=WorkflowStatus.EXECUTING.value,
+                error=str(exc),
+            )
+        except StepFailure as exc:
+            return self._fail_run(state, self._format_step_failure(exc))
+
+        result = invoke_result.data
+        self._commit_worktree_all(state, worktree_dir, self._task_summary(plan.get("task") or state.task))
+        reference = self._artifacts.save_execution_result(state.run_id, result)
+        state.execution_result_ref = reference
+        state.step_results = [reference]
         self._artifacts.clear_execution_manifest(state.run_id)
+        state.error = None
+        self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.REVIEWING)
 
     def _run_review(self, state: RunState) -> RunState:
@@ -1001,6 +996,20 @@ class Engine:
 
     def _review_changed_files(self, state: RunState) -> list[str]:
         if state.is_workspace:
+            if not state.workspace_repos:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD"],
+                    cwd=self._repo_root,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise EngineError(
+                        f"Failed to list changed files: {result.stderr.strip() or result.stdout.strip()}"
+                    )
+                return [path.strip() for path in result.stdout.splitlines() if path.strip()]
             changed: list[str] = []
             for repo in state.workspace_repos:
                 result = subprocess.run(
@@ -1074,8 +1083,6 @@ class Engine:
 
     def _debate_initial_adjudication(self, state: RunState) -> RunState:
         schema = load_bundled_schema("adjudication.schema.json")
-        plan = self._require_artifact(state.plan_id)
-        plan_step_numbers = {int(step["step_number"]) for step in plan["steps"]}
         validator = Validator(self._repo_root)
         review = self._require_artifact(state.review_id)
         task_description = state.normalized_task or state.task
@@ -1116,7 +1123,6 @@ class Engine:
                             )
                         ).data,
                         validator,
-                        plan_step_numbers,
                     )
                 ),
                 initial_prompt=prompt,
@@ -1559,6 +1565,8 @@ class Engine:
         state.current_phase = current_phase or new_status.value
         state.error = error
         self._state_mgr.save(state)
+        if self._ui:
+            self._ui.phase_transition(state.current_phase)
         return state
 
     def _invoke_with_retries(
@@ -1890,53 +1898,10 @@ class Engine:
         state.base_commit = ""
         self._state_mgr.save(state)
 
-    def _ensure_execution_manifest(self, state: RunState, plan: dict[str, Any]) -> dict[str, Any]:
-        manifest = self._artifacts.load_execution_manifest(state.run_id)
-        if manifest:
-            return manifest
-
-        adjudication = self._artifacts.read_json(state.adjudication_id) if state.adjudication_id else None
-        if state.fix_iteration_count > 0 and self._artifacts.load_feedback(state.run_id, "planning") is None:
-            target_steps = [step["step_number"] for step in plan["steps"]]
-            completed_steps = []
-            feedback = None
-            mode = "fix"
-        elif adjudication and adjudication.get("verdict") == "REWORK":
-            target_steps = list(adjudication.get("rework_steps") or [])
-            feedback = adjudication.get("rework_feedback")
-            completed_steps: list[int] = []
-            mode = "rework"
-        else:
-            target_steps = [step["step_number"] for step in plan["steps"]]
-            completed_steps = self._completed_step_numbers(state)
-            feedback = None
-            mode = "plan"
-
-        manifest = {
-            "run_id": state.run_id,
-            "plan_artifact": state.plan_id,
-            "mode": mode,
-            "target_steps": target_steps,
-            "completed_steps": completed_steps,
-            "feedback": feedback,
-        }
-        self._artifacts.save_execution_manifest(state.run_id, manifest)
-        return manifest
-
-    def _mark_step_completed(self, manifest: dict[str, Any], step_number: int) -> dict[str, Any]:
-        completed = list(manifest.get("completed_steps", []))
-        if step_number not in completed:
-            completed.append(step_number)
-        completed.sort()
-        updated = dict(manifest)
-        updated["completed_steps"] = completed
-        return updated
-
-    def _commit_worktree_step(
+    def _commit_worktree_all(
         self,
         state: RunState,
         worktree_dir: Path,
-        step_number: int,
         description: str,
     ) -> None:
         if state.is_workspace:
@@ -1966,7 +1931,7 @@ class Engine:
             raise EngineError(f"git add failed: {add.stderr.strip()}")
 
         commit = subprocess.run(
-            ["git", "commit", "-m", f"aio: step {step_number} - {description}"],
+            ["git", "commit", "-m", f"aio: {description}"],
             cwd=worktree_dir,
             capture_output=True,
             text=True,
@@ -1978,7 +1943,13 @@ class Engine:
 
     def _implementation_diff(self, state: RunState) -> str:
         if state.is_workspace:
-            return self._aggregate_workspace_diffs(state)
+            aggregated = self._aggregate_workspace_diffs(state)
+            if aggregated:
+                return aggregated
+            return "\n\n".join(
+                f"--- {repo}/ ---\n{diff}"
+                for repo, diff in self._collect_workspace_diffs(state).items()
+            )
         if not state.base_commit or not state.worktree_branch:
             return ""
         completed = subprocess.run(
@@ -2026,6 +1997,22 @@ class Engine:
 
     def _collect_workspace_diffs(self, state: RunState) -> dict[str, str]:
         diffs: dict[str, str] = {}
+        if not state.workspace_repos:
+            result = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=self._repo_root,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise EngineError(
+                    f"Failed to collect workspace diff: {result.stderr.strip() or result.stdout.strip()}"
+                )
+            if result.stdout.strip():
+                diffs["."] = result.stdout
+            return diffs
         for repo in state.workspace_repos:
             repo_path = self._repo_root / repo
             result = subprocess.run(
@@ -2056,6 +2043,26 @@ class Engine:
         task_summary = self._task_summary(state.task)
         base_branch = self._config.worktree.base_branch
         commands: list[str] = []
+        if not state.workspace_repos:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self._repo_root,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise EngineError(
+                    f"Failed to inspect repository: {result.stderr.strip() or result.stdout.strip()}"
+                )
+            if result.stdout.strip():
+                return [
+                    "git add .",
+                    f'git commit -m "aio: {task_summary}"',
+                    f"git push origin {base_branch}",
+                ]
+            return ["# No changes detected."]
         for repo in state.workspace_repos:
             repo_path = self._repo_root / repo
             result = subprocess.run(
@@ -2086,40 +2093,10 @@ class Engine:
             return ["# No changes detected in any workspace repo."]
         return commands
 
-    def _completed_step_numbers(self, state: RunState) -> list[int]:
-        numbers: list[int] = []
-        for result in self._load_step_results(state):
-            step_number = int(result["step_number"])
-            if step_number not in numbers:
-                numbers.append(step_number)
-        return sorted(numbers)
-
-    def _dependency_results(self, state: RunState, depends_on: list[int]) -> list[dict[str, Any]]:
-        if not depends_on:
-            return []
-        wanted = set(depends_on)
-        results = []
-        for payload in self._load_step_results(state):
-            if int(payload["step_number"]) in wanted:
-                results.append(payload)
-        results.sort(key=lambda item: item["step_number"])
-        return results
-
     def _require_artifact(self, reference: str | None) -> dict[str, Any]:
         if not reference:
             raise EngineError("Required artifact reference is missing")
         return self._artifacts.read_json(reference)
-
-    def _update_step_result_reference(self, state: RunState, step_number: int, reference: str) -> None:
-        if state.fix_iteration_count > 0:
-            state.step_results.append(reference)
-            return
-        existing: dict[int, str] = {}
-        for ref in state.step_results:
-            payload = self._artifacts.read_json(ref)
-            existing[int(payload["step_number"])] = ref
-        existing[step_number] = reference
-        state.step_results = [existing[number] for number in sorted(existing)]
 
     def _gate_phase(self, gate: str) -> str:
         return {
@@ -2253,15 +2230,11 @@ class Engine:
     def _validate_adjudication_result(
         result: dict[str, Any],
         validator: Validator,
-        plan_step_numbers: set[int],
     ) -> dict[str, Any]:
         try:
-            return validator.validate_adjudication(
-                result,
-                plan_step_numbers=plan_step_numbers,
-            )
+            return validator.validate_adjudication(result)
         except ValidationError as exc:
             raise StepFailure(
-                "Adjudication referenced invalid plan steps",
+                "Adjudication validation failed",
                 validation_error=exc.detail or str(exc),
             ) from exc

@@ -35,9 +35,9 @@ APPROVAL_PLAN/FEASIBILITY -> TERMINATED on full reject
 | Input | Raw task + repo summary + shallow directory tree |
 | Output | `scoping/scope-<run>.md` with YAML frontmatter |
 | Worktree | No |
-| Rounds | Codex review rounds capped by `scoping.max_scoping_rounds` |
+| Rounds | Fixed debate flow, up to 3 visible rounds with escalation |
 
-Round 0 invokes Claude and Codex in parallel to produce independent pre-scope markdown. Claude then synthesizes canonical `scope.md`. Codex reviews it and either agrees or writes comments. Claude may update `scope.md`, but Codex always reviews again and never edits the canonical file.
+Round 0 invokes Claude and Codex in parallel to produce independent pre-scope markdown. Claude then synthesizes canonical `scope.md`. Codex reviews it and either agrees or writes comments. If needed, Claude updates `scope.md`, Codex gives a final escalated assessment, and Claude makes the final scoping call before planning. Codex never edits the canonical file.
 
 If the final scope is not actionable, the run pauses at the `SCOPING` gate. The operator can approve to continue anyway or reject with a replacement task, which re-runs scoping.
 
@@ -78,7 +78,7 @@ OUTPUT SCHEMA:
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
 
-**Repo context strategy:** Directory tree (truncated at depth 3) for orientation, plus full contents of key files (README, config, entry points). For large repos, the tree is truncated to fit within ~50K chars. The planner's `files_to_read` field guides subsequent phases.
+**Repo context strategy:** Directory tree (truncated at depth 3) for orientation, plus full contents of key files (README, config, entry points). For large repos, the tree is truncated to fit within ~50K chars. The planner's flat `key_files` field guides execution context.
 
 ---
 
@@ -122,80 +122,75 @@ Blocked feasibility results pause at the `feasibility` gate. The operator can ap
 
 ## Phase 5: EXECUTING
 
-**Purpose:** Implement each step in the plan, sequentially, in a single worktree or in-place across a workspace.
-
-All steps execute in one worktree branch. Each step sees the filesystem state left by prior steps.
+**Purpose:** Implement the full natural plan in one Codex or Claude execution session, in a single worktree or in-place across a workspace.
 
 | Property | Value |
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.worker` |
-| Input | Step description + relevant file contents (read from worktree) + plan context |
-| Output | `results/step-<n>-<uuid>.json` validated against `step_result.schema.json` |
-| Worktree | Yes (single worktree for the entire run, created on first step) |
-| Retries | Up to `max_retries` per step |
+| Input | Full plan JSON + contents of `key_files` + repository/workspace context |
+| Output | `results/execution-<uuid>.json` validated against `execution_result.schema.json` |
+| Worktree | Yes (single worktree for the entire run, created on execution entry) |
+| Retries | Up to `max_retries` for the full execution session |
 
 **Worktree lifecycle:**
 
-1. On first step: create worktree `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`. Record the base commit SHA.
-2. All subsequent steps execute in the same worktree.
-3. If a step attempt fails and is retried, the engine resets the worktree to the last committed step baseline before re-invoking the worker.
+1. On execution entry: create worktree `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`. Record the base commit SHA.
+2. Codex executes the full plan in one session and may commit after logical chunks.
+3. If the worker leaves uncommitted changes, the engine creates one fallback commit.
+4. If an execution attempt fails and is retried, the engine resets the worktree before re-invoking the worker.
 
-**Per-step sequence:**
+**Execution sequence:**
 
-1. Read relevant files from the worktree (using `files_to_read` from the plan)
-2. Render prompt with step description, file contents, and output schema
+1. Read relevant files from the worktree using the flat `key_files` list from the plan
+2. Render prompt with the full plan, file contents, and output schema
 3. Invoke CLI adapter with `working_dir` set to the worktree
 4. Capture output: for Codex, check result file first, then stdout, then git-diff-only fallback
 5. Validate result (schema + application-level)
-6. Commit changes in the worktree: `git add -A && git commit -m "aio: step <n> — <description>"`
+6. Commit any outstanding changes in the worktree: `git add -A && git commit -m "aio: <task summary>"`
 7. Write validated result to `results/`
-8. Advance state
+8. Advance to review
 
 **Prompt construction (Codex):**
 
 ```
-You are a software implementation agent. Implement the following step.
+You are a software implementation agent. Execute the full plan in this
+single Codex session.
 
-STEP:
-{step_description}
-
-CONTEXT (from plan):
-{plan_context}
+FULL PLAN JSON:
+{plan_json}
 
 RELEVANT FILES:
 {file_contents}
 
-After making changes, write a JSON result file to the path:
+After making changes, write your result JSON to:
 {result_file_path}
 
 The JSON must conform to this schema:
-{step_result.schema.json contents}
+{execution_result.schema.json contents}
 
-Do not print the JSON to stdout. Write it to the file path above.
+If you cannot write the file, respond with ONLY the raw JSON.
 ```
 
 **Prompt construction (Claude):**
 
 ```
-You are a software implementation agent. Implement the following step.
+You are a software implementation agent. Execute the full plan in one
+continuous pass and then return one JSON result.
 
-STEP:
-{step_description}
-
-CONTEXT (from plan):
-{plan_context}
+FULL PLAN JSON:
+{plan_json}
 
 RELEVANT FILES:
 {file_contents}
 
 OUTPUT SCHEMA:
-{step_result.schema.json contents}
+{execution_result.schema.json contents}
 
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
 
-**Relevant file selection:** The plan specifies which files each step reads and modifies. The orchestrator reads those files from the worktree and includes them in the prompt. If total content exceeds 100K chars, files are prioritized by plan relevance and truncated.
+**Relevant file selection:** The plan provides one flat `key_files` list. The orchestrator reads those files from the worktree and includes them in the prompt. If total content exceeds 100K chars, files are prioritized by plan relevance and truncated.
 
 ---
 
@@ -207,7 +202,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 |---|---|
 | Default CLI | `claude -p` |
 | Config key | `routing.reviewer` |
-| Input | Original task + plan + step results + git diff from worktree |
+| Input | Original task + plan + execution results + git diff from worktree |
 | Output | `reviews/review-<uuid>.json` validated against `review.schema.json` |
 | Worktree | Uses the implementation worktree as working directory for review context |
 | Retries | Up to `max_retries` on schema failure |
@@ -227,7 +222,7 @@ PLAN:
 IMPLEMENTATION DIFF:
 {git_diff}
 
-STEP RESULTS:
+EXECUTION RESULTS:
 {step_results_json}
 
 Produce a JSON review conforming to this schema:
@@ -248,14 +243,14 @@ The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.adjudicator` |
-| Input | Review JSON + step results + original task |
+| Input | Review JSON + execution results + original task |
 | Output | `adjudications/adj-<uuid>.json` plus `adjudications/debate-round-*.json` |
 | Worktree | No |
 | Retries | Up to `max_retries` on schema failure |
 
 Agreement cases are direct: Claude issues + Codex agrees creates an incremental fix-planning pass; Claude clean + Codex agrees proceeds to merge. Disagreements resume the Claude review session, escalate to Opus/max when needed, and may ask the user for a `debate_tiebreaker` decision.
 
-Fix cycles never discard the worktree. A return to planning means a new incremental plan that sees the original task, `scope.md`, existing step results, current diff, review issues, and debate transcript.
+Fix cycles never discard the worktree. A return to planning means a new incremental plan that sees the original task, `scope.md`, existing execution results, current diff, review issues, and debate transcript.
 
 ---
 
@@ -330,9 +325,9 @@ A workspace root is a directory without its own `.git/` that contains one or mor
 
 - Detection: use `[workspace] repos = [...]` from `aio.toml`, or auto-detect git subdirectories when the current directory is not a repo.
 - Working directory: all AI phases run from the workspace root.
-- Execution: no worktrees and no per-step commits.
+- Execution: no orchestrator-managed worktrees; the worker runs in place across configured repos.
 - Retry/reset: execution retries reset the current step baseline. Replan and fix cycles preserve existing worktree changes.
-- Review input: step results may include `workspace_diffs`, and the review prompt aggregates those per-repo diffs.
+- Review input: execution results may include `workspace_diffs`, and the review prompt aggregates those per-repo diffs.
 - Completion: `MERGING` prints per-repo handoff commands instead of changing git history.
 
 ---

@@ -203,6 +203,7 @@ class ClaudeAdapter(BaseAdapter):
         parsed, session_id = self._parse_stdout(stdout)
         validated = self._validate_output(parsed, schema, working_dir)
         typed_result = self._typed_step_result(validated)
+        typed_execution = self._typed_execution_result(validated)
         self._record_invocation(
             InvocationRecord(
                 cli_name=self.CLI_NAME,
@@ -218,10 +219,18 @@ class ClaudeAdapter(BaseAdapter):
                 model=model,
                 reasoning_effort=reasoning_effort,
                 output_source="stdout-json",
-                summary=typed_result.summary if typed_result else None,
-                status=typed_result.status.value if typed_result else None,
-                issues=typed_result.issues if typed_result else None,
-                test_commands=typed_result.test_commands if typed_result else None,
+                summary=(typed_result.summary if typed_result else typed_execution.summary if typed_execution else None),
+                status=(
+                    typed_result.status.value
+                    if typed_result
+                    else typed_execution.status.value if typed_execution else None
+                ),
+                issues=(typed_result.issues if typed_result else typed_execution.issues if typed_execution else None),
+                test_commands=(
+                    typed_result.test_commands
+                    if typed_result
+                    else typed_execution.test_commands if typed_execution else None
+                ),
             )
         )
         return InvokeResult(data=validated, session_id=session_id)

@@ -1,28 +1,33 @@
 # Scope Phase Prompt
 
-> Workflow phase: pre-PLANNING
-> CLI: `claude -p`
-> Output artifact: transient result consumed by the engine before PLANNING
-> Schema: `schemas/scoping.schema.json`
+> Workflow phase: SCOPING
+> CLI: `claude -p` and `codex exec`
+> Output artifacts: `scoping/claude-scope-*.md`, `scoping/codex-scope-*.md`, canonical `scoping/scope-<run>.md`
+> Contract: canonical `scope.md` with YAML frontmatter
 
 ## Purpose
 
-Validate and normalize the raw task string submitted via `aio run <task>` before
-planning begins. This phase:
+Validate and normalize the raw task string submitted via `orch new <task>`
+before planning begins. Scoping is a bounded Claude/Codex debate:
 
-1. Confirms the task is actionable and repo-scoped
-2. Produces a normalized task description suitable for the planner
-3. Assigns a `complexity_tier` used for downstream routing
-4. Surfaces unresolvable scope problems before any worker step begins
+1. Round 0 invokes Claude and Codex in parallel for independent pre-scope notes.
+2. Claude synthesizes canonical `scope.md`.
+3. Codex reviews the canonical scope.
+4. If needed, Claude updates `scope.md`, Codex gives a final escalated
+   assessment, and Claude makes the final scoping call.
 
-## Template
+The canonical scope must include YAML frontmatter fields:
+`normalized_task`, `complexity_tier`, `actionable`, `key_files`, and `context`.
+
+## Round 0 Template
 
 ```
-You are a task intake agent for an automated software orchestrator.
+You are {actor}, independently scoping a user request for an automated
+software orchestrator.
 
-Your only job is to validate and normalize the task below. Do not implement
-anything. Do not discuss implementation. Do not ask questions. Produce output
-in exactly one pass.
+Do not implement. Identify what the task really asks for, whether it is
+actionable, likely key files or areas, risks, and a recommended complexity tier.
+Return ONLY markdown notes.
 
 RAW TASK:
 {raw_task}
@@ -30,34 +35,30 @@ RAW TASK:
 REPOSITORY SUMMARY:
 {repo_summary}
 
-REPOSITORY STRUCTURE (depth 2):
+REPOSITORY STRUCTURE:
 {directory_tree}
+```
 
+## Canonical Scope Template
+
+```
+---
+normalized_task: "..."
+complexity_tier: simple|moderate|complex|architectural
+actionable: true|false
+key_files:
+  - path/or/area
+context: "Assumptions, constraints, or blocking context."
 ---
 
-RULES:
-1. If the task is actionable and scoped to this repository:
-   - Set "actionable" to true
-   - Set "normalized_task" to a clean, precise restatement of what must be done
-   - List any assumptions you made to resolve ambiguity in "assumptions"
-   - Omit "blocking_reason"
-
-2. If the task cannot proceed:
-   - Set "actionable" to false
-   - Set "normalized_task" to the raw task verbatim
-   - Set "blocking_reason" to a one-sentence explanation for the operator
-   - Set "assumptions" to []
-
-3. Assess complexity:
-   - "simple": single-file or config change, no architectural impact
-   - "moderate": multi-file change, clear scope
-   - "complex": cross-cutting, tricky dependencies, weak test coverage
-   - "architectural": system design change, new patterns, ambiguous requirements
-
-4. When in doubt: default to actionable = true. Record uncertainty in "assumptions".
-
-OUTPUT SCHEMA:
-{define_schema}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+Markdown explanation of the chosen scope.
 ```
+
+## Review/Rebuttal Contract
+
+Codex review artifacts are markdown files with YAML frontmatter containing
+`agreement: true|false`. When `agreement` is false, the body must explain the
+specific scope concerns. Codex never edits canonical `scope.md`.
+
+Claude rebuttal artifacts update canonical `scope.md` directly, either
+accepting Codex feedback or documenting why the final scope proceeds as written.

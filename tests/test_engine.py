@@ -121,7 +121,11 @@ class FakeClaudeAdapter:
                     "complexity_tier": "moderate",
                 }
             return _scope_md(self._last_scope)
-        if "resolving task scope" in prompt or "updating canonical scope.md" in prompt:
+        if (
+            "resolving task scope" in prompt
+            or "updating canonical scope.md" in prompt
+            or "FINAL Claude scope decision" in prompt
+        ):
             return _scope_md(self._last_scope or {
                 "actionable": True,
                 "normalized_task": "Implement feature",
@@ -134,6 +138,7 @@ class FakeClaudeAdapter:
 class FakeCodexAdapter:
     def __init__(self, adjudications=None, debate_responses=None):
         self.executed_steps: list[int] = []
+        self.execution_calls = 0
         self.scoping_calls = 0
         self.feasibility_calls = 0
         self.adjudication_calls = 0
@@ -178,6 +183,27 @@ class FakeCodexAdapter:
             if self._debate_responses:
                 return InvokeResult(self._debate_responses.pop(0))
             return InvokeResult({"position": "issues_dismissed", "reasoning": "Convinced.", "issues": []})
+        if schema["title"] == "ExecutionResult":
+            self.execution_calls += 1
+            files_changed = []
+            for step_number in (1, 2):
+                self.executed_steps.append(step_number)
+                target = working_dir / f"step-{step_number}.txt"
+                target.write_text(f"step {step_number}\n", encoding="utf-8")
+                files_changed.append(
+                    {
+                        "path": target.name,
+                        "action": "created",
+                        "summary": f"Created {target.name}",
+                    }
+                )
+            return InvokeResult({
+                "status": "success",
+                "files_changed": files_changed,
+                "summary": "Implemented the full plan",
+                "issues": [],
+                "test_commands": [],
+            })
         if step_number is None:
             match = re.search(r"pending-step-(\d+)\.json", prompt)
             step_number = int(match.group(1)) if match else 0
@@ -236,25 +262,12 @@ def _plan(*, plan_id: str = "11111111-1111-1111-1111-111111111111"):
     return {
         "plan_id": plan_id,
         "task": "Implement feature",
-        "steps": [
-            {
-                "step_number": 1,
-                "description": "Create first file",
-                "files_to_read": ["README.md"],
-                "files_to_modify": ["step-1.txt"],
-                "depends_on": [],
-                "estimated_complexity": "low",
-            },
-            {
-                "step_number": 2,
-                "description": "Create second file",
-                "files_to_read": ["README.md"],
-                "files_to_modify": ["step-2.txt"],
-                "depends_on": [1],
-                "estimated_complexity": "low",
-            },
+        "approach": "Two small sequential changes in one execution session.",
+        "implementation_steps": [
+            "Create the first file.",
+            "Create the second file.",
         ],
-        "reasoning": "Two small sequential steps.",
+        "key_files": ["README.md"],
     }
 
 
@@ -383,7 +396,8 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     assert codex.executed_steps == [1, 2]
     assert (tmp_repo / "step-1.txt").exists()
     assert (tmp_repo / "step-2.txt").exists()
-    assert len(state.step_results) == 2
+    assert len(state.step_results) == 1
+    assert state.execution_result_ref == state.step_results[0]
     assert state.commit_commands == [
         "# Review staged changes:",
         "git status",
@@ -437,7 +451,7 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
             )
-            if schema["title"] == "StepResult" and step_number == 1:
+            if schema["title"] == "ExecutionResult":
                 (working_dir / "step-1.txt").write_text('dummy_key = "changeme"\n', encoding="utf-8")
             return result
 
@@ -651,7 +665,7 @@ def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_
     )
 
     assert state.status == "DONE"
-    execution_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "StepResult"]
+    execution_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "ExecutionResult"]
     assert execution_prompts
     assert "Workspace repos:" in execution_prompts[0]
     assert "## frontend/" in execution_prompts[0]
@@ -903,7 +917,7 @@ def test_adjudication_fix_planning_preserves_existing_step_results(
 
     assert state.status == "DONE"
     assert state.fix_iteration_count == 1
-    assert len(state.step_results) == 4
+    assert len(state.step_results) == 1
     assert discard_phases == ["MERGING"]
 
 
@@ -934,32 +948,13 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
     assert review_invocations[1]["resume_session_id"] == "review-session"
 
 
-def test_resume_from_executing_uses_manifest(tmp_repo, artifact_root, default_config):
+def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
     run_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
     state_mgr = StateManager(artifact_root)
     store = ArtifactStore(artifact_root)
     plan_ref = store.save_plan(run_id, _plan())
-    first_result_ref = store.save_step_result(
-        run_id,
-        1,
-        {
-            "step_number": 1,
-            "status": "success",
-            "files_changed": [
-                {
-                    "path": "step-1.txt",
-                    "action": "created",
-                    "summary": "Created step-1.txt",
-                }
-            ],
-            "summary": "Implemented step 1",
-            "issues": [],
-            "test_commands": [],
-        },
-    )
-
     from ai_orchestrator.worktree import WorktreeManager
 
     worktrees = WorktreeManager(tmp_repo, artifact_root)
@@ -968,24 +963,11 @@ def test_resume_from_executing_uses_manifest(tmp_repo, artifact_root, default_co
         default_config.worktree.base_branch,
         default_config.worktree.branch_prefix,
     )
-    (worktree_path / "step-1.txt").write_text("step 1\n", encoding="utf-8")
-    store.save_execution_manifest(
-        run_id,
-        {
-            "run_id": run_id,
-            "plan_artifact": plan_ref,
-            "mode": "plan",
-            "target_steps": [1, 2],
-            "completed_steps": [1],
-            "feedback": None,
-        },
-    )
 
     state = RunState(run_id=run_id, task="Implement feature")
     state.status = "EXECUTING"
     state.current_phase = "EXECUTING"
     state.plan_id = plan_ref
-    state.step_results = [first_result_ref]
     state.worktree_path = str(worktree_path)
     state.worktree_branch = branch_name
     state.base_commit = base_commit
@@ -1004,7 +986,7 @@ def test_resume_from_executing_uses_manifest(tmp_repo, artifact_root, default_co
     resumed = engine.resume(run_id)
 
     assert resumed.status == "DONE"
-    assert codex.executed_steps == [2]
+    assert codex.executed_steps == [1, 2]
 
 
 def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root, default_config):
@@ -1037,17 +1019,13 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
                 }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
-            if step_number is None:
-                match = re.search(r"pending-step-(\d+)\.json", prompt)
-                step_number = int(match.group(1)) if match else 0
-            self.calls.append(step_number)
+            self.calls.append(1)
             self.prompts.append(prompt)
-            target = working_dir / f"step-{step_number}.txt"
-            target.write_text(f"step {step_number}\n", encoding="utf-8")
-            if step_number == 1 and self.failures == 0:
+            target = working_dir / "step-1.txt"
+            target.write_text("step 1\n", encoding="utf-8")
+            if self.failures == 0:
                 self.failures += 1
                 return {
-                    "step_number": 1,
                     "status": "failed",
                     "files_changed": [],
                     "summary": "Required file was not ready yet.",
@@ -1055,7 +1033,6 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
                     "test_commands": [],
                 }
             return {
-                "step_number": step_number,
                 "status": "success",
                 "files_changed": [
                     {
@@ -1064,7 +1041,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
                         "summary": f"Created {target.name}",
                     }
                 ],
-                "summary": f"Implemented step {step_number}",
+                "summary": "Implemented the full plan",
                 "issues": [],
                 "test_commands": [],
             }
@@ -1081,9 +1058,9 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
     state = engine.start("Implement feature", "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 
     assert state.status == "DONE"
-    assert codex.calls == [1, 1, 2]
-    assert state.retry_counts["step-1"] == 0
-    assert "Create first file" in codex.prompts[1]
+    assert codex.calls == [1, 1]
+    assert state.retry_counts["execution"] == 0
+    assert "Execute the full plan" in codex.prompts[1]
     assert "The full original prompt follows." in codex.prompts[1]
 
 
@@ -1175,9 +1152,6 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
                 }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
-            if step_number is None:
-                match = re.search(r"pending-step-(\d+)\.json", prompt)
-                step_number = int(match.group(1)) if match else 0
             self.calls += 1
             if self.calls == 1:
                 (working_dir / "leftover.txt").write_text("stale\n", encoding="utf-8")
@@ -1186,10 +1160,9 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
 
             assert not (working_dir / "leftover.txt").exists()
             assert (working_dir / "README.md").read_text(encoding="utf-8") == "# Test repo\n"
-            target = working_dir / f"step-{step_number}.txt"
-            target.write_text(f"step {step_number}\n", encoding="utf-8")
+            target = working_dir / "step-1.txt"
+            target.write_text("step 1\n", encoding="utf-8")
             return {
-                "step_number": step_number,
                 "status": "success",
                 "files_changed": [
                     {
@@ -1198,7 +1171,7 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
                         "summary": f"Created {target.name}",
                     }
                 ],
-                "summary": f"Implemented step {step_number}",
+                "summary": "Implemented the full plan",
                 "issues": [],
                 "test_commands": [],
             }
@@ -1215,7 +1188,7 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
     state = engine.start("Implement feature", "abababab-abab-abab-abab-abababababab")
 
     assert state.status == "DONE"
-    assert codex.calls == 3
+    assert codex.calls == 2
 
 
 def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, default_config):
@@ -1246,9 +1219,6 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
                 }
             if schema["title"] == "Adjudication":
                 return _pass_adjudication()
-            if step_number is None:
-                match = re.search(r"pending-step-(\d+)\.json", prompt)
-                step_number = int(match.group(1)) if match else 0
             self.calls += 1
             if self.calls == 1:
                 (working_dir / "README.md").write_text("staged dirty\n", encoding="utf-8")
@@ -1279,10 +1249,9 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
                 text=True,
             )
             assert cached_diff.stdout.strip() == ""
-            target = working_dir / f"step-{step_number}.txt"
-            target.write_text(f"step {step_number}\n", encoding="utf-8")
+            target = working_dir / "step-1.txt"
+            target.write_text("step 1\n", encoding="utf-8")
             return {
-                "step_number": step_number,
                 "status": "success",
                 "files_changed": [
                     {
@@ -1291,7 +1260,7 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
                         "summary": f"Created {target.name}",
                     }
                 ],
-                "summary": f"Implemented step {step_number}",
+                "summary": "Implemented the full plan",
                 "issues": [],
                 "test_commands": [],
             }
@@ -1308,7 +1277,7 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
     state = engine.start("Implement feature", "acacacac-acac-acac-acac-acacacacacac")
 
     assert state.status == "DONE"
-    assert codex.calls == 3
+    assert codex.calls == 2
 
 
 def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
@@ -1669,7 +1638,7 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
     review_call = next(call for call in claude.invocations if call["title"] == "Review")
     feasibility_call = next(call for call in codex.invocations if call["title"] == "FeasibilityResult")
-    execute_call = next(call for call in codex.invocations if call["title"] == "StepResult")
+    execute_call = next(call for call in codex.invocations if call["title"] == "ExecutionResult")
     assert planning_call["reasoning_effort_override"] == "max"
     assert feasibility_call["reasoning_effort_override"] == "xhigh"
     assert execute_call["reasoning_effort_override"] == "xhigh"
