@@ -591,6 +591,10 @@ class Engine:
             if is_iteration and self._config.sessions.enable_planning_resume
             else None
         )
+        planning_effort = self._resolve_effort_for_phase(state, "planning", cli_name)
+        planning_model = self._resolve_model_for_phase("planning", cli_name, state)
+        planning_label = self._model_label(planning_model, cli_name)
+        planning_spinner = f"Planning with {planning_label} ({planning_effort or 'default'})"
 
         def clear_resume_on_retry() -> None:
             nonlocal resume_session_id
@@ -601,22 +605,14 @@ class Engine:
                 state,
                 retry_key="planning",
                 retries=self._retry_limit("planning"),
-                spinner_label="Planning",
+                spinner_label=planning_spinner,
                 invoke=lambda current_prompt: self._invoke_adapter_json(
                     adapter,
                     current_prompt,
                     self._repo_root,
                     schema,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "planning",
-                        cli_name,
-                    ),
-                    model_override=self._resolve_model_for_phase(
-                        "planning",
-                        cli_name,
-                        state,
-                    ),
+                    reasoning_effort_override=planning_effort,
+                    model_override=planning_model,
                     resume_session_id=resume_session_id,
                 ),
                 initial_prompt=prompt,
@@ -947,6 +943,10 @@ class Engine:
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter_for_phase("reviewing")
         cli_name = self._phase_cli("reviewing", config_name="reviewer")
+        review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name)
+        review_model = self._resolve_model_for_phase("reviewing", cli_name, state)
+        review_label = self._model_label(review_model, cli_name)
+        review_spinner = f"Reviewing with {review_label} ({review_effort or 'default'})"
         resume_session_id = (
             state.session_ids.get("reviewing")
             if self._config.sessions.enable_review_resume
@@ -958,18 +958,14 @@ class Engine:
                 state,
                 retry_key="reviewing",
                 retries=self._retry_limit("reviewing"),
-                spinner_label="Reviewing changes",
+                spinner_label=review_spinner,
                 invoke=lambda current_prompt: self._invoke_adapter_json(
                     adapter,
                     current_prompt,
                     review_root,
                     schema,
-                    reasoning_effort_override=self._resolve_effort_for_phase(
-                        state,
-                        "reviewing",
-                        cli_name,
-                    ),
-                    model_override=self._resolve_model_for_phase("reviewing", cli_name, state),
+                    reasoning_effort_override=review_effort,
+                    model_override=review_model,
                     resume_session_id=resume_session_id,
                 ),
                 initial_prompt=review_prompt,
@@ -1895,6 +1891,15 @@ class Engine:
             if tier_model:
                 return tier_model
         return getattr(getattr(self._config.routing, cli_name), "model", "") or None
+
+    @staticmethod
+    def _model_label(model: str | None, cli_name: str) -> str:
+        if not model:
+            return cli_name.title()
+        parts = model.split("-")
+        if len(parts) > 1 and parts[1]:
+            return parts[1].title()
+        return model
 
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries

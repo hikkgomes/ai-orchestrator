@@ -35,7 +35,6 @@ to `schemas/adjudication.schema.json`:
   "adjudication_id": "<uuid-v4>",
   "verdict": "PASS|REWORK|REPLAN|FAIL",
   "reasoning": "<why this verdict>",
-  "rework_steps": [1, 2],
   "rework_feedback": "<specific guidance if REWORK>",
   "replan_feedback": "<why the plan was wrong if REPLAN>",
   "failure_reason": "<why unrecoverable if FAIL>"
@@ -45,7 +44,7 @@ to `schemas/adjudication.schema.json`:
 Do NOT print the JSON to stdout. Write it to the file path specified in the prompt.
 
 Conditional field requirements (enforced by schema):
-- `REWORK`: `rework_steps` (non-empty) + `rework_feedback` required
+- `REWORK`: `rework_feedback` required (specific guidance on what to fix)
 - `REPLAN`: `replan_feedback` required
 - `FAIL`: `failure_reason` required
 
@@ -70,7 +69,6 @@ Conditional field requirements (enforced by schema):
 3. **REWORK** if:
    - Specific, fixable issues exist in the implementation
    - Rework count is below the limit
-   - `rework_steps` must list exactly which step numbers need re-execution
    - `rework_feedback` must be specific: file names, function names, what to change
 
 4. **PASS** if:
