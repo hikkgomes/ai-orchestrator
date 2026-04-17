@@ -6,8 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from ai_orchestrator.models import (
-    Adjudication,
-    AdjudicationVerdict,
     ExecutionResult,
     FileAction,
     FileChange,
@@ -107,13 +105,3 @@ class TestReview:
                 summary="x",
                 blocks_merge=False,
             )
-
-
-class TestAdjudication:
-    def test_pass_verdict(self):
-        a = Adjudication(
-            adjudication_id="00000000-0000-0000-0000-000000000001",
-            verdict=AdjudicationVerdict.PASS,
-            reasoning="Looks good.",
-        )
-        assert a.verdict == AdjudicationVerdict.PASS

@@ -138,7 +138,7 @@ This document records decisions made during design, including responses to the f
 
 ## DD-10: Remove global rework/replan loop limits
 
-**Decision:** The review/adjudication quality loop remains, but global `max_rework_loops` and `max_replan_loops` are removed. Fix cycles are worktree-preserving incremental plans, and human soft-reject loops are intentionally unbounded.
+**Decision:** The review quality loop remains, but global `max_rework_loops` and `max_replan_loops` are removed. Fix cycles are worktree-preserving incremental plans, and human soft-reject loops are intentionally unbounded.
 
 **Context:** Finding 12 suggested cutting to "one planner, one executor, one optional review gate." This would remove the automated quality feedback loop, which is the core differentiator of this tool over a simple script.
 
@@ -206,7 +206,7 @@ This document records decisions made during design, including responses to the f
 
 ## DD-17: Reasoning effort is user-configurable with sensible defaults
 
-**Decision:** Reasoning effort per phase is configurable in `aio.toml` with defaults: planner=high, worker=medium, reviewer=high, adjudicator=high.
+**Decision:** Reasoning effort per phase is configurable in `aio.toml` with defaults: planner=high, worker=medium, reviewer=high.
 
 **Context:** The exact flags supported by `claude -p` for reasoning effort need to be tested during implementation. If the flag is not available, the adapter silently omits it.
 
@@ -224,7 +224,7 @@ This document records decisions made during design, including responses to the f
 
 **Decision:** The standalone feasibility phase is removed. Plan approval now proceeds directly to execution.
 
-**Decision rationale:** The fixed Claude/Codex scoping debate already performs early viability checking, and execution failures are handled by the review/adjudication fix loop. Removing the extra phase shortens the common path and avoids asking the operator to adjudicate the same concerns twice.
+**Decision rationale:** The fixed Claude/Codex scoping debate already performs early viability checking, and execution failures are handled by the review fix loop. Removing the extra phase shortens the common path and avoids asking the operator to resolve the same concerns twice.
 
 ---
 
@@ -236,11 +236,11 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-21: Default adjudication moves to Codex
+## DD-21: Codex participates in review
 
-**Decision:** Change the default adjudicator from Claude to Codex.
+**Decision:** Codex provides the cross-model review pass after Claude's review.
 
-**Decision rationale:** The default review/adjudication pair is now cross-model, which avoids asking Claude to adjudicate its own review loop by default.
+**Decision rationale:** The review pair is cross-model, which avoids relying on one model's single review pass before merge or fix planning.
 
 ---
 
@@ -259,16 +259,16 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-23: Cross-model debate for scope and adjudication
+## DD-23: Cross-model debate for scope and review
 
-**Decision:** Scoping and adjudication are no longer single-shot outputs. Scoping starts with parallel Claude/Codex pre-scope notes and converges on a canonical `scope.md`. Adjudication compares Claude's review with Codex's judgment and escalates disagreement through a bounded debate tree.
+**Decision:** Scoping and review are no longer single-shot outputs. Scoping starts with parallel Claude/Codex pre-scope notes and converges on a canonical `scope.md`. Review compares Claude's review with Codex's review and escalates disagreement through a bounded debate tree.
 
-**Decision rationale:** The product relies on disagreement being useful rather than hidden. Claude owns canonical scope and review continuity; Codex has the final scoping review and first adjudication pass. When they disagree after escalation, the operator breaks the tie.
+**Decision rationale:** The product relies on disagreement being useful rather than hidden. Claude owns canonical scope and review continuity; Codex has the final scoping review and cross-model review pass. When they disagree after escalation, the operator breaks the tie.
 
 ---
 
 ## DD-24: Preserve worktrees through fix cycles
 
-**Decision:** The engine no longer discards worktrees when adjudication sends the run back to planning. Fix planning produces incremental steps that execute on top of existing changes.
+**Decision:** The engine no longer discards worktrees when review sends the run back to planning. Fix planning produces incremental steps that execute on top of existing changes.
 
 **Decision rationale:** Discarding the worktree erased useful implementation progress and made review fixes expensive. Preserving the worktree matches the actual developer workflow: keep the diff, plan the smallest correction, apply it, and review again.

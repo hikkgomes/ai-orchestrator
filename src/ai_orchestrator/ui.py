@@ -270,7 +270,7 @@ class OrchestratorUI:
         if state.complexity_tier:
             summary.add_row("Complexity", state.complexity_tier)
         if state.error:
-            summary.add_row("Error", Text(self._truncate(state.error, 88), style="bold red"))
+            summary.add_row("Error", Text(state.error, style="bold red", overflow="fold"))
 
         details = Table(
             box=box.SIMPLE_HEAVY,

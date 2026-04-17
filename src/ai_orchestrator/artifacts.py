@@ -26,7 +26,6 @@ class ArtifactStore:
             "plans": artifact_root / "plans",
             "results": artifact_root / "results",
             "reviews": artifact_root / "reviews",
-            "adjudications": artifact_root / "adjudications",
             "prompts": artifact_root / "prompts",
             "approvals": artifact_root / "approvals",
             "feedback": artifact_root / "feedback",
@@ -56,9 +55,6 @@ class ArtifactStore:
     def save_review(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("reviews", f"review-{run_id[:8]}", payload)
 
-    def save_adjudication(self, run_id: str, payload: dict[str, Any]) -> str:
-        return self._write_versioned_json("adjudications", f"adj-{run_id[:8]}", payload)
-
     def save_scope_md(self, run_id: str, content: str) -> str:
         relative = Path("scoping") / f"scope-{run_id[:8]}.md"
         self._write_text(relative, content)
@@ -80,7 +76,7 @@ class ArtifactStore:
 
     def save_debate_round(self, run_id: str, round_number: int, payload: dict[str, Any]) -> str:
         return self._write_versioned_json(
-            "adjudications",
+            "reviews",
             f"debate-round-{round_number}-{run_id[:8]}",
             payload,
         )

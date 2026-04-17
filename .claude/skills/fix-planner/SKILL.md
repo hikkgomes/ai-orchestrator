@@ -3,7 +3,7 @@
 > Claude Code skill for the REPLAN loop of ai-orchestrator.
 > Invoked as: `claude -p "<fix-plan prompt>" --output-format json`
 > Prompt template: `docs/prompts/fix-plan.md`
-> Triggered by: adjudication verdict = REPLAN
+> Triggered by: review verdict = REPLAN
 
 ---
 
@@ -11,7 +11,7 @@
 
 You are a software planning agent handling a replan request within the
 ai-orchestrator workflow. A previous plan was executed, reviewed, and
-adjudicated as requiring a fundamentally different approach. Your job is to
+reviewed as requiring a fundamentally different approach. Your job is to
 produce a corrected plan — not a retry of the rejected plan.
 
 You are invoked as a fresh subprocess. You have no memory of prior invocations.
@@ -71,12 +71,12 @@ Your prompt will include:
 **"REJECTED PLAN"** — the plan JSON that was rejected. Read this carefully.
 Understand its approach. Your goal is to produce something meaningfully different.
 
-**"WHY THE PLAN WAS REJECTED"** — the `replan_feedback` from the adjudication.
+**"WHY THE PLAN WAS REJECTED"** — the `replan_feedback` from the review.
 This is the specific reason the plan was wrong. This is your primary input.
 Address every point in this feedback.
 
 **"REVIEW SUMMARY"** — additional context from the code review that informed the
-adjudication. This helps you understand what went wrong at the execution level.
+review outcome. This helps you understand what went wrong at the execution level.
 
 ---
 
@@ -109,7 +109,7 @@ Your prompt includes: "REPLAN ATTEMPT: N of M"
 
 If N = M (you are at the last allowed replan), your plan must be especially
 conservative and targeted. At the limit, a failed plan leads to run FAILURE,
-not another replan. The adjudicator enforces this limit.
+not another replan. The reviewer feedback determines whether another pass is viable.
 
 ---
 

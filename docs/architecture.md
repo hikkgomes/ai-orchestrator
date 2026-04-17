@@ -24,14 +24,14 @@
 │                      ai-orchestrator CLI                      │
 │  (Python – click + rich)                                      │
 │                                                               │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐ │
-│  │  Scoper  │→ │  Planner │→ │ Reviewer │→ │ Adjudicator  │ │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬───────┘ │
-│       │              │             │               │         │
-│       ▼              ▼             ▼               │         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────────┐ │
+│  │  Scoper  │→ │  Planner │→ │  Reviewer + Fix Debate   │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────────────────────┘ │
+│       │              │             │                       │
+│       ▼              ▼             ▼                       │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │              Artifact Store (.ai-orchestrator/)          │ │
-│  │ scoping/ plans/ results/ reviews/ adjudications/        │ │
+│  │ scoping/ plans/ results/ reviews/                       │ │
 │  │ state/ logs/                                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │       │              │                                        │
@@ -58,9 +58,8 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── results/
 │   └── execution-<uuid>.json    # validated against execution_result.schema.json
 ├── reviews/
-│   └── review-<uuid>.json       # validated against review.schema.json
-├── adjudications/
-│   └── adj-<uuid>.json          # validated against adjudication.schema.json
+│   ├── review-<uuid>.json       # validated against review.schema.json
+│   └── debate-round-<n>-<run>.json
 ├── worktrees/
 │   └── run-<uuid>/              # single git worktree per run
 ├── prompts/

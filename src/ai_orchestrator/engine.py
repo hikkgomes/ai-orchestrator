@@ -479,12 +479,6 @@ class Engine:
         planning_feedback = self._artifacts.load_feedback(state.run_id, "planning")
         if planning_feedback:
             feedback_parts.append(f"Planning feedback:\n{planning_feedback}")
-        if state.adjudication_id:
-            adjudication = self._artifacts.read_json(state.adjudication_id)
-            if adjudication.get("verdict") == "REPLAN" and adjudication.get("replan_feedback"):
-                feedback_parts.append(
-                    f"Replan feedback:\n{adjudication['replan_feedback']}"
-                )
         if feedback_parts:
             task_description = (
                 task_description
@@ -578,7 +572,6 @@ class Engine:
             state.session_ids["planning"] = invoke_result.session_id
         state.plan_id = self._artifacts.save_plan(state.run_id, result)
         state.review_id = None
-        state.adjudication_id = None
         state.debate_state = None
         self._artifacts.clear_feedback(state.run_id, "planning")
         state.error = None
@@ -1365,8 +1358,6 @@ class Engine:
         lowered = markdown.lower()
         if re.search(r"\bagreement\s*:\s*true\b", lowered):
             return True
-        if re.search(r"\bagree[s]?\b", lowered) and "disagree" not in lowered:
-            return True
         return False
 
     @staticmethod
@@ -1871,7 +1862,6 @@ class Engine:
             "## Artifacts",
             f"- Plan: {state.plan_id or '<none>'}",
             f"- Review: {state.review_id or '<none>'}",
-            f"- Adjudication: {state.adjudication_id or '<none>'}",
             "",
             "## Step Results",
         ]

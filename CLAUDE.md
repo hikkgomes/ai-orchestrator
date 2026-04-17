@@ -126,5 +126,4 @@ as a workflow agent:
 | File | Role | Phase |
 |---|---|---|
 | `implementer.md` | Step executor | EXECUTING |
-| `adjudicator.md` | Legacy review cross-checker | REVIEWING |
 | `repairer.md` | Fix executor | EXECUTING (incremental fix loop) |

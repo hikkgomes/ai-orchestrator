@@ -273,8 +273,6 @@ class BaseAdapter(ABC):
                 return validator.validate_feasibility(data)
             if title == "Review":
                 return validator.validate_review(data)
-            if title == "Adjudication":
-                return validator.validate_adjudication(data)
             validate_schema(data, schema)
         except ValidationError as exc:
             detail = exc.detail or str(exc)

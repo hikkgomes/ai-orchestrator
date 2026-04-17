@@ -115,6 +115,23 @@ def test_render_status_shows_failure_detail_panel_for_failed_runs():
     assert "exit_code: 2" in output
 
 
+def test_render_status_wraps_paused_error_without_truncating():
+    ui, console, _ = _ui()
+    state = RunState(run_id="run-paused", task="Test paused error")
+    state.status = WorkflowStatus.PAUSED
+    state.current_phase = "SCOPING"
+    state.error = (
+        "Task is blocked because the scoping debate reached the feasibility limit "
+        "and needs operator clarification before planning can continue."
+    )
+
+    ui.print_status(state)
+
+    output = console.export_text()
+    assert "operator clarification before planning can continue" in output
+    assert "..." not in output
+
+
 def test_print_scoping_result():
     ui, console, _ = _ui()
 

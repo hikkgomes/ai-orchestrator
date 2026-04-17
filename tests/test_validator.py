@@ -49,18 +49,6 @@ class TestReviewValidation:
             v.validate_review(review)
 
 
-class TestAdjudicationValidation:
-    def test_rework_requires_feedback(self, tmp_path):
-        v = Validator(tmp_path)
-        adjudication = {
-            "adjudication_id": "00000000-0000-0000-0000-000000000000",
-            "verdict": "REWORK",
-            "reasoning": "Fix step selection.",
-        }
-
-        with pytest.raises(ValidationError):
-            v.validate_adjudication(adjudication)
-
     def test_request_changes_requires_major_or_critical_finding(self, tmp_path):
         v = Validator(tmp_path)
         review = _minimal_review(verdict="request_changes", blocks_merge=False)

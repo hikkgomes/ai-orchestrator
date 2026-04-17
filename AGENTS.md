@@ -114,7 +114,6 @@ and other non-JSON debate artifacts.
 | Planning | Yes, session-resumable | complexity-based |
 | Execution | No (Codex default) | medium |
 | Review | Yes, session-resumable | high |
-| Adjudication | No (Codex default) | medium |
 
 ---
 
@@ -155,7 +154,6 @@ no session ID.
 | Execution | Yes |
 | Review | No (Claude default) |
 | Scoping debate | Yes |
-| Adjudication | Yes |
 
 ---
 
@@ -169,7 +167,6 @@ scoper = "claude"
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "codex"
 ```
 
 Any phase can be routed to either CLI:
@@ -209,7 +206,7 @@ before failing.
 retry invocation, the engine resets the worktree to the last committed state
 (`git reset --hard HEAD` followed by `git clean -fd`) and clears the pending
 execution result file. This ensures each retry starts from an identical
-filesystem baseline. Planning, review, and adjudication retries do not modify
+filesystem baseline. Planning and review retries do not modify
 the worktree and skip this step.
 
 **On success:** the retry counter for that phase key is reset to 0.
@@ -245,7 +242,6 @@ substitution before each CLI invocation.
 | `docs/prompts/plan.md` | PLANNING | `claude -p` | `plan.schema.json` |
 | `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `execution_result.schema.json` |
 | `docs/prompts/review.md` | REVIEWING | `claude -p` | `review.schema.json` |
-| `docs/prompts/adjudicate.md` | ADJUDICATING | `codex exec` or `claude -p` | `adjudication.schema.json` |
 | `docs/prompts/fix-plan.md` | PLANNING (replan) | `claude -p` | `plan.schema.json` |
 
 Deferred prompt drafts are kept under `docs/prompts/deferred/` and are not invoked by the current engine:
@@ -275,7 +271,6 @@ a workflow agent. These supplement the prompt with Codex-specific output convent
 | Agent file | Active phase | Prompt used |
 |---|---|---|
 | `implementer.md` | EXECUTING | `docs/prompts/implement.md` |
-| `adjudicator.md` | ADJUDICATING | `docs/prompts/adjudicate.md` |
 | `repairer.md` | EXECUTING (incremental fix loop) | `docs/prompts/implement.md` (fix variant) |
 
 ## Prompt Templates
@@ -361,27 +356,6 @@ EXECUTION RESULTS:
 
 Produce a JSON review conforming to this schema:
 {review.schema.json contents}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
-```
-
-### Adjudication prompt
-
-```
-You are an adjudication agent. Decide whether this implementation should be merged,
-reworked, replanned, or abandoned.
-
-ORIGINAL TASK:
-{task_description}
-
-REVIEW:
-{review_json}
-
-EXECUTION RESULTS:
-{step_results_json}
-
-Produce a JSON adjudication conforming to this schema:
-{adjudication.schema.json contents}
 
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```

@@ -13,7 +13,7 @@ Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter
 Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
 Phase 4 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
 Phase 5 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
-Review debate rounds   → adjudications/debate-round-*.json  [debate_response.schema.json]
+Review debate rounds   → reviews/debate-round-*.json        [debate_response.schema.json]
 ```
 
 ---
@@ -103,26 +103,6 @@ Produced by Claude and Codex during REVIEWING. Consumed by the engine.
 
 ---
 
-## Legacy Adjudication Contract (`adjudication.schema.json`)
-
-Kept for backward compatibility with old runs. New runs do not create adjudication artifacts because Codex's verdict is represented as a review-shaped artifact inside REVIEWING.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `adjudication_id` | string (uuid) | yes | Unique identifier |
-| `verdict` | enum: PASS/REWORK/REPLAN/FAIL | yes | Initial Codex decision; non-PASS enters fix/debate handling |
-| `reasoning` | string | yes | Why this verdict was chosen |
-| `rework_feedback` | string | no | Guidance for rework (if REWORK) |
-| `replan_feedback` | string | no | Guidance for replanning (if REPLAN) |
-| `failure_reason` | string | no | Why this is unrecoverable (if FAIL) |
-
-**Validation rules:**
-- If `verdict` is `REWORK`, `rework_feedback` must be present
-- If `verdict` is `REPLAN`, `replan_feedback` must be present
-- If `verdict` is `FAIL`, `failure_reason` must be present
-
----
-
 ## Debate Response Contract (`debate_response.schema.json`)
 
 Produced by Claude final review-debate rounds. Consumed by the merged REVIEWING state machine.
@@ -150,7 +130,6 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `complexity_tier` | string or null | Scoping-derived routing tier |
 | `step_results` | array of string | References to execution result artifacts (legacy field name) |
 | `review_id` | string or null | Reference to current review |
-| `adjudication_id` | string or null | Legacy reference to an old adjudication artifact |
 | `fix_iteration_count` | integer | How many incremental fix-planning cycles so far |
 | `session_ids` | object | Vendor session IDs keyed by phase |
 | `scope_md_ref` | string or null | Canonical scope markdown reference |

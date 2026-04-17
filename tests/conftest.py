@@ -31,7 +31,6 @@ def artifact_root(tmp_path: Path) -> Path:
         "plans",
         "results",
         "reviews",
-        "adjudications",
         "logs",
         "worktrees",
         "prompts",

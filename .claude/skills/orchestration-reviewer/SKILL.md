@@ -180,7 +180,7 @@ implementation. In this case:
 
 ## Escalation: When to Stop
 
-You cannot stop execution yourself. The adjudicator and orchestrator control
+You cannot stop execution yourself. The orchestrator controls
 all transitions based on your verdict. Your job is to provide accurate findings.
 Do not soften findings to avoid a rework loop — accurate findings lead to better outcomes.
 

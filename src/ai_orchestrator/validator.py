@@ -11,7 +11,6 @@ Two validation layers (docs/design-decisions.md DD-8):
      starting with ``/``, after resolving against the repo root
    - ``files_changed`` correspondence with ``git diff`` (Codex results only)
    - Review conditional field requirements
-   - Adjudication conditional field requirements
 
 Usage::
 
@@ -268,46 +267,5 @@ class Validator:
                     "Invalid feasibility result",
                     "Blocked feasibility results require at least one critical issue",
                 )
-
-        return data
-
-    def validate_adjudication(
-        self,
-        data: dict[str, Any],
-        *,
-        plan_step_numbers: set[int] | None = None,
-    ) -> dict[str, Any]:
-        """Validate an adjudication artifact (schema + application level).
-
-        Application checks:
-        - If ``verdict == "REWORK"``: ``rework_feedback`` present
-        - If ``verdict == "REPLAN"``: ``replan_feedback`` present
-        - If ``verdict == "FAIL"``: ``failure_reason`` present
-
-        Returns the original *data* dict on success.
-
-        Raises
-        ------
-        ValidationError
-        """
-        _validate_schema(data, self._get_schema("adjudication.schema.json"))
-
-        verdict = data["verdict"]
-        if verdict == "REWORK":
-            if not data.get("rework_feedback"):
-                raise ValidationError(
-                    "Invalid adjudication",
-                    "REWORK requires rework_feedback",
-                )
-        if verdict == "REPLAN" and not data.get("replan_feedback"):
-            raise ValidationError(
-                "Invalid adjudication",
-                "REPLAN requires replan_feedback",
-            )
-        if verdict == "FAIL" and not data.get("failure_reason"):
-            raise ValidationError(
-                "Invalid adjudication",
-                "FAIL requires failure_reason",
-            )
 
         return data

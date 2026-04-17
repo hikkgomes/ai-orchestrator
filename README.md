@@ -287,7 +287,6 @@ App-owned runtime and review artifacts should stay gitignored:
   plans/
   results/
   reviews/
-  adjudications/
   logs/
   worktrees/
   approvals/

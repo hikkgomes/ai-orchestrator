@@ -35,7 +35,7 @@ is best-effort metadata.
 | `{plan_json}` | `plans/plan-<uuid>.json` | Final executed plan |
 | `{step_results_json}` | `results/` | Array of all step result JSONs for this run |
 | `{review_json}` | `reviews/review-<uuid>.json` | Final review JSON |
-| `{adjudication_json}` | `adjudications/adj-<uuid>.json` | Final adjudication JSON (verdict = PASS) |
+| `{review_json}` | `reviews/review-<uuid>.json` | Final review JSON (verdict = approve) |
 | `{git_diff_stat}` | worktree | Output of `git diff --stat <base_commit>...aio/run-<uuid>` |
 | `{run_id}` | run state | UUID of this run |
 | `{fix_iteration_count}` | run state | Total incremental fix cycles used |

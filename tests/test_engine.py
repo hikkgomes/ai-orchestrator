@@ -24,19 +24,17 @@ class FakeClaudeAdapter:
         self,
         plans,
         reviews,
-        adjudications,
+        review_placeholders=None,
         scopings=None,
         debate_responses=None,
     ):
         self._scopings = list(scopings or [])
         self._plans = list(plans)
         self._reviews = list(reviews)
-        self._adjudications = list(adjudications)
         self._debate_responses = list(debate_responses or [])
         self.scoping_calls = 0
         self.planning_calls = 0
         self.review_calls = 0
-        self.adjudication_calls = 0
         self.invocations: list[dict[str, object]] = []
         self.text_invocations: list[dict[str, object]] = []
         self._last_scope = None
@@ -79,9 +77,6 @@ class FakeClaudeAdapter:
         if title == "Review":
             self.review_calls += 1
             return InvokeResult(self._reviews.pop(0), session_id="review-session")
-        if title == "Adjudication":
-            self.adjudication_calls += 1
-            return InvokeResult(self._adjudications.pop(0))
         if title == "DebateResponse":
             if self._debate_responses:
                 return InvokeResult(self._debate_responses.pop(0))
@@ -138,12 +133,12 @@ class FakeClaudeAdapter:
 
 
 class FakeCodexAdapter:
-    def __init__(self, adjudications=None, debate_responses=None):
+    def __init__(self, reviews=None, debate_responses=None):
         self.executed_steps: list[int] = []
         self.execution_calls = 0
         self.scoping_calls = 0
-        self.adjudication_calls = 0
-        self._adjudications = list(adjudications or [])
+        self.review_calls = 0
+        self._reviews = list(reviews or [])
         self._debate_responses = list(debate_responses or [])
         self.invocations: list[dict[str, object]] = []
         self.text_invocations: list[dict[str, object]] = []
@@ -169,15 +164,10 @@ class FakeCodexAdapter:
                 "resume_session_id": resume_session_id,
             }
         )
-        if schema["title"] == "Adjudication":
-            self.adjudication_calls += 1
-            if self._adjudications:
-                return InvokeResult(self._adjudications.pop(0))
-            return InvokeResult(_pass_adjudication())
         if schema["title"] == "Review":
-            self.adjudication_calls += 1
-            if self._adjudications:
-                return InvokeResult(_review_from_adjudication(self._adjudications.pop(0)))
+            self.review_calls += 1
+            if self._reviews:
+                return InvokeResult(self._reviews.pop(0))
             return InvokeResult(_review())
         if schema["title"] == "DebateResponse":
             if self._debate_responses:
@@ -309,40 +299,18 @@ def _review_with_issue():
     }
 
 
-def _pass_adjudication():
+def _codex_approve_review():
     return {
-        "adjudication_id": "33333333-3333-3333-3333-333333333333",
-        "verdict": "PASS",
-        "reasoning": "Ship it.",
+        "review_id": "33333333-3333-3333-3333-333333333333",
+        "verdict": "approve",
+        "score": 9,
+        "findings": [],
+        "summary": "Ship it.",
+        "blocks_merge": False,
     }
 
 
-def _rework_adjudication(*, feedback: str = "Fix step 1."):
-    return {
-        "adjudication_id": "44444444-4444-4444-4444-444444444444",
-        "verdict": "REWORK",
-        "reasoning": feedback,
-        "rework_feedback": feedback,
-    }
-
-
-def _review_from_adjudication(adjudication: dict) -> dict:
-    if adjudication.get("verdict") == "PASS":
-        return {
-            "review_id": "33333333-3333-3333-3333-333333333333",
-            "verdict": "approve",
-            "score": 9,
-            "findings": [],
-            "summary": str(adjudication.get("reasoning") or "Ship it."),
-            "blocks_merge": False,
-        }
-    feedback = str(
-        adjudication.get("rework_feedback")
-        or adjudication.get("replan_feedback")
-        or adjudication.get("failure_reason")
-        or adjudication.get("reasoning")
-        or "Codex requested fixes."
-    )
+def _codex_request_changes_review(*, feedback: str = "Fix step 1."):
     return {
         "review_id": "44444444-4444-4444-4444-444444444444",
         "verdict": "request_changes",
@@ -396,7 +364,7 @@ def _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config):
         ],
     )
     codex = FakeCodexAdapter(
-        adjudications=[_rework_adjudication(feedback="Codex found a real issue.")],
+        reviews=[_codex_request_changes_review(feedback="Codex found a real issue.")],
         debate_responses=[
             {
                 "position": "issues_confirmed",
@@ -419,7 +387,7 @@ def _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config):
 def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -496,7 +464,7 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
                 (working_dir / "step-1.txt").write_text('dummy_key = "changeme"\n', encoding="utf-8")
             return result
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = HeuristicCodexAdapter()
     engine = Engine(
         default_config,
@@ -522,7 +490,7 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
 def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_root, default_config, monkeypatch):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -551,7 +519,7 @@ def test_codex_review_prompt_uses_normalized_task(tmp_repo, artifact_root, defau
     claude = FakeClaudeAdapter(
         [_plan()],
         [_review()],
-        [_pass_adjudication()],
+        [_codex_approve_review()],
         scopings=[
             {
                 "actionable": True,
@@ -582,7 +550,7 @@ def test_codex_review_prompt_uses_normalized_task(tmp_repo, artifact_root, defau
 def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -633,7 +601,7 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
                 return TextInvokeResult("## Claude pre-scope\n\nUse the router notes.", "scope-session-1")
             raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
 
-    claude = DistinctScopeClaude([_plan()], [_review()], [_pass_adjudication()])
+    claude = DistinctScopeClaude([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -676,7 +644,7 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
                 return "## Codex pre-scope\n\nThe task is implementable."
             return "---\nagreement: false\n---\n\nStill disagreeing.\n"
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = DisagreeingCodex()
     engine = Engine(
         default_config,
@@ -694,13 +662,24 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
     assert state.scope_md_ref is not None
 
 
+def test_scope_review_agreement_requires_structured_marker():
+    assert (
+        Engine._scope_review_agreed(
+            "---\nagreement: false\n---\n\nI agree with some points, but the scope is correct."
+        )
+        is False
+    )
+    assert Engine._scope_review_agreed("I agree with some points.") is False
+    assert Engine._scope_review_agreed("agreement: true\n\nAccepted after review.") is True
+
+
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = True
     default_config.approval.require_merge_approval = True
     claude = FakeClaudeAdapter(
         [_plan(plan_id="aaaaaaaa-1111-1111-1111-111111111111"), _plan(plan_id="bbbbbbbb-1111-1111-1111-111111111111")],
         [_review(), _review()],
-        [_pass_adjudication(), _pass_adjudication()],
+        [_codex_approve_review(), _codex_approve_review()],
     )
     codex = FakeCodexAdapter()
     engine = Engine(
@@ -727,7 +706,7 @@ def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     state = engine.approve(state.run_id, "plan")
     assert state.status == "DONE"
     assert state.commit_commands
-    assert codex.adjudication_calls == 1
+    assert codex.review_calls == 1
 
 
 def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_root, default_config):
@@ -738,7 +717,7 @@ def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_
     _init_repo(workspace_root / "frontend")
     _init_repo(workspace_root / "backend")
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -785,7 +764,7 @@ def test_workspace_resume_allows_uncommitted_changes(tmp_path, artifact_root, de
     state.plan_id = plan_ref
     StateManager(artifact_root).save(state)
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -802,41 +781,18 @@ def test_workspace_resume_allows_uncommitted_changes(tmp_path, artifact_root, de
     assert (workspace_root / "frontend" / "dirty.txt").read_text(encoding="utf-8") == "dirty\n"
 
 
-def test_adjudication_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, default_config):
+def test_review_disagreement_can_resolve_to_pass(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
     claude = FakeClaudeAdapter(
         [_plan()],
         [_review(), _review()],
-        [
-            {
-                "adjudication_id": "44444444-4444-4444-4444-444444444444",
-                "verdict": "REWORK",
-                "reasoning": "Try again.",
-                "rework_feedback": "Adjust step 1.",
-            },
-            {
-                "adjudication_id": "55555555-5555-5555-5555-555555555555",
-                "verdict": "REWORK",
-                "reasoning": "Still not enough.",
-                "rework_feedback": "Adjust step 1 again.",
-            },
-        ],
+        [],
     )
     codex = FakeCodexAdapter(
-        adjudications=[
-            {
-                "adjudication_id": "44444444-4444-4444-4444-444444444444",
-                "verdict": "REWORK",
-                "reasoning": "Try again.",
-                "rework_feedback": "Adjust step 1.",
-            },
-            {
-                "adjudication_id": "55555555-5555-5555-5555-555555555555",
-                "verdict": "REWORK",
-                "reasoning": "Still not enough.",
-                "rework_feedback": "Adjust step 1 again.",
-            },
+        reviews=[
+            _codex_request_changes_review(feedback="Adjust step 1."),
+            _codex_request_changes_review(feedback="Adjust step 1 again."),
         ]
     )
     engine = Engine(
@@ -868,7 +824,7 @@ def test_debate_case_a_claude_insists_triggers_fix(tmp_repo, artifact_root, defa
             }
         ],
     )
-    codex = FakeCodexAdapter(adjudications=[_pass_adjudication()])
+    codex = FakeCodexAdapter(reviews=[_codex_approve_review()])
     engine = Engine(
         default_config,
         tmp_repo,
@@ -911,7 +867,7 @@ def test_debate_case_a_claude_convinced_passes(tmp_repo, artifact_root, default_
             }
         ],
     )
-    codex = FakeCodexAdapter(adjudications=[_pass_adjudication()])
+    codex = FakeCodexAdapter(reviews=[_codex_approve_review()])
     engine = Engine(
         default_config,
         tmp_repo,
@@ -946,7 +902,7 @@ def test_debate_tiebreaker_gate_is_removed_in_engine(tmp_repo, artifact_root, de
         engine.approve(state.run_id, "debate_tiebreaker", decision="fix")
 
 
-def test_adjudication_fix_planning_preserves_existing_step_results(
+def test_review_fix_planning_preserves_existing_step_results(
     tmp_repo,
     artifact_root,
     default_config,
@@ -956,17 +912,12 @@ def test_adjudication_fix_planning_preserves_existing_step_results(
     claude = FakeClaudeAdapter(
         [_plan(plan_id="11111111-1111-1111-1111-111111111111"), _plan(plan_id="22222222-1111-1111-1111-111111111111")],
         [_review_with_issue(), _review()],
-        [_pass_adjudication()],
+        [_codex_approve_review()],
     )
     codex = FakeCodexAdapter(
-        adjudications=[
-            {
-                "adjudication_id": "44444444-4444-4444-4444-444444444444",
-                "verdict": "REWORK",
-                "reasoning": "The review issue is real.",
-                "rework_feedback": "Fix the generated content.",
-            },
-            _pass_adjudication(),
+        reviews=[
+            _codex_request_changes_review(feedback="Fix the generated content."),
+            _codex_approve_review(),
         ]
     )
     engine = Engine(
@@ -1001,7 +952,7 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
         [_review_with_issue(), _review()],
         [],
     )
-    codex = FakeCodexAdapter(adjudications=[_rework_adjudication(), _pass_adjudication()])
+    codex = FakeCodexAdapter(reviews=[_codex_request_changes_review(), _codex_approve_review()])
     engine = Engine(
         default_config,
         tmp_repo,
@@ -1044,7 +995,7 @@ def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_c
     state.base_commit = base_commit
     state_mgr.save(state)
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -1063,7 +1014,7 @@ def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_c
 def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
 
     class FlakyCodexAdapter:
         def __init__(self):
@@ -1082,7 +1033,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] in {"Adjudication", "Review"}:
+            if schema["title"] == "Review":
                 return _review()
             self.calls.append(1)
             self.prompts.append(prompt)
@@ -1165,10 +1116,6 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
                 return _plan()
             if title == "Review":
                 return _review()
-            if title == "Review":
-                return _review()
-            if title == "Adjudication":
-                return _pass_adjudication()
             raise AssertionError(f"Unexpected schema title: {title}")
 
     claude = RetryingClaudeAdapter()
@@ -1194,7 +1141,7 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
 def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
 
     class DirtyRetryCodexAdapter:
         def __init__(self):
@@ -1211,7 +1158,7 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] in {"Adjudication", "Review"}:
+            if schema["title"] == "Review":
                 return _review()
             self.calls += 1
             if self.calls == 1:
@@ -1255,7 +1202,7 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
 def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
 
     class DirtyIndexRetryCodexAdapter:
         def __init__(self):
@@ -1272,7 +1219,7 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] in {"Adjudication", "Review"}:
+            if schema["title"] == "Review":
                 return _review()
             self.calls += 1
             if self.calls == 1:
@@ -1353,7 +1300,7 @@ def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
         ):
             raise BlockedOnCLI("auth refresh required", exit_code=1, stderr="login required")
 
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = BlockingCodexAdapter()
     engine = Engine(
         default_config,
@@ -1377,7 +1324,7 @@ def test_resume_paused_re_enters_gate(tmp_repo, artifact_root, default_config):
 def test_resume_paused_without_decision_re_pauses(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = True
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -1400,7 +1347,7 @@ def test_resume_paused_without_decision_re_pauses(tmp_repo, artifact_root, defau
 def test_reset_worktree_failure_raises_engine_error(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
 
     class DirtyRetryCodexAdapter:
         def __init__(self):
@@ -1446,7 +1393,7 @@ def test_scoping_not_actionable_pauses_and_reject_rescopes(tmp_repo, artifact_ro
     claude = FakeClaudeAdapter(
         [_plan()],
         [_review()],
-        [_pass_adjudication()],
+        [_codex_approve_review()],
         scopings=[
             {
                 "actionable": False,
@@ -1490,7 +1437,7 @@ def test_scoping_disabled_skips_directly_to_planning(tmp_repo, artifact_root, de
     default_config.scoping.enabled = False
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
-    claude = FakeClaudeAdapter([_plan()], [_review()], [_pass_adjudication()])
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
     engine = Engine(
         default_config,
@@ -1514,7 +1461,7 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     claude = FakeClaudeAdapter(
         [_plan()],
         [_review()],
-        [_pass_adjudication()],
+        [_codex_approve_review()],
         scopings=[
             {
                 "actionable": True,
@@ -1597,7 +1544,7 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
         tmp_repo,
         artifact_root,
         adapters={
-            "claude": FailingClaudeAdapter([_plan()], [_review()], [_pass_adjudication()]),
+            "claude": FailingClaudeAdapter([_plan()], [_review()], [_codex_approve_review()]),
             "codex": FakeCodexAdapter(),
         },
         workflow=_workflow(),
@@ -1681,7 +1628,7 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
         tmp_repo,
         artifact_root,
         adapters={
-            "claude": FailingClaudeAdapter([_plan()], [_review()], [_pass_adjudication()]),
+            "claude": FailingClaudeAdapter([_plan()], [_review()], [_codex_approve_review()]),
             "codex": FakeCodexAdapter(),
         },
         workflow=_workflow(),

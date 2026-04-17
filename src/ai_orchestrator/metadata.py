@@ -63,7 +63,6 @@ class MetadataStore:
                     current_phase TEXT NOT NULL,
                     plan_id TEXT,
                     review_id TEXT,
-                    adjudication_id TEXT,
                     rework_count INTEGER NOT NULL,
                     replan_count INTEGER NOT NULL,
                     retry_counts_json TEXT NOT NULL,
@@ -106,17 +105,16 @@ class MetadataStore:
                 """
                 INSERT INTO runs (
                     run_id, task, status, current_phase, plan_id, review_id,
-                    adjudication_id, rework_count, replan_count, retry_counts_json,
+                    rework_count, replan_count, retry_counts_json,
                     created_at, updated_at, error, base_commit, worktree_path,
                     worktree_branch
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     task = excluded.task,
                     status = excluded.status,
                     current_phase = excluded.current_phase,
                     plan_id = excluded.plan_id,
                     review_id = excluded.review_id,
-                    adjudication_id = excluded.adjudication_id,
                     rework_count = excluded.rework_count,
                     replan_count = excluded.replan_count,
                     retry_counts_json = excluded.retry_counts_json,
@@ -134,7 +132,6 @@ class MetadataStore:
                     state.current_phase,
                     state.plan_id,
                     state.review_id,
-                    state.adjudication_id,
                     state.rework_count,
                     state.replan_count,
                     json.dumps(state.retry_counts, sort_keys=True),

@@ -79,15 +79,6 @@ class FindingSeverity(str, Enum):
     INFO = "info"
 
 
-class AdjudicationVerdict(str, Enum):
-    """Decision from the adjudication phase."""
-
-    PASS = "PASS"
-    REWORK = "REWORK"
-    REPLAN = "REPLAN"
-    FAIL = "FAIL"
-
-
 class ReviewDebatePhase(str, Enum):
     """Review debate sub-state."""
 
@@ -178,28 +169,12 @@ class Review(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Adjudication artifact (adjudication.schema.json)
-# ---------------------------------------------------------------------------
-
-
-class Adjudication(BaseModel):
-    """Decision on whether an implementation passes review or needs rework."""
-
-    adjudication_id: str
-    verdict: AdjudicationVerdict
-    reasoning: str = Field(min_length=1)
-    rework_feedback: str | None = None
-    replan_feedback: str | None = None
-    failure_reason: str | None = None
-
-
-# ---------------------------------------------------------------------------
 # Debate state (internal)
 # ---------------------------------------------------------------------------
 
 
 class DebateRound(BaseModel):
-    """A recorded round in the adjudication debate."""
+    """A recorded round in the review debate."""
 
     round_number: int = Field(ge=0)
     actor: str
@@ -244,7 +219,6 @@ class RunState(BaseModel):
     step_results: list[str] = Field(default_factory=list)
     commit_commands: list[str] = Field(default_factory=list)
     review_id: str | None = None
-    adjudication_id: str | None = None
     rework_count: int = 0
     replan_count: int = 0
     fix_iteration_count: int = 0
