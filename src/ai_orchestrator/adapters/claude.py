@@ -5,7 +5,7 @@ AGENTS.md.
 
 Output parsing strategy (strict → lenient fallback):
 1. ``json.loads(stdout)`` — strict
-2. Strip ANSI, strip markdown fences, find JSON boundaries — lenient (warns)
+2. Strip ANSI, strip markdown fences, find JSON boundaries — lenient (debug log)
 3. Both fail → ``StepFailure``
 
 Reasoning effort: if configured, passed via flag.  If the flag is unsupported,
@@ -18,14 +18,15 @@ stderr → ``BlockedOnCLI``.  Timeout with no output → ``BlockedOnCLI``.
 from __future__ import annotations
 
 import json
+import logging
 import re
-import warnings
 from pathlib import Path
 from typing import Any
 
 from ..metadata import InvocationRecord
 from .base import BaseAdapter, BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 
+logger = logging.getLogger(__name__)
 
 # Patterns in stderr that suggest auth or interactive prompts.
 _AUTH_PATTERNS: list[re.Pattern[str]] = [
@@ -336,7 +337,7 @@ class ClaudeAdapter(BaseAdapter):
                     "Claude CLI did not return valid JSON",
                     stdout=stdout,
                 )
-            warnings.warn("Claude adapter used lenient JSON parsing", RuntimeWarning)
+            logger.debug("Claude adapter used lenient JSON parsing")
             return parsed, None
 
     @staticmethod
@@ -354,10 +355,7 @@ class ClaudeAdapter(BaseAdapter):
                 except json.JSONDecodeError:
                     lenient = ClaudeAdapter._lenient_parse(result)
                     if lenient is not None:
-                        warnings.warn(
-                            "Claude adapter used lenient JSON parsing on envelope result field",
-                            RuntimeWarning,
-                        )
+                        logger.debug("Claude adapter used lenient JSON parsing on envelope result field")
                         return lenient, session_id
                 else:
                     if isinstance(nested, dict):

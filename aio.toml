@@ -6,7 +6,6 @@ watchdog_timeout = 3600
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "codex"
 scoper = "claude"
 
 [routing.claude]

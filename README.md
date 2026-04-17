@@ -156,8 +156,6 @@ orch logs <run-id> 3
 orch show latest plan
 orch approve latest plan
 orch approve <run-prefix> plan
-orch approve <run-id> debate_tiebreaker --decision fix
-orch approve <run-id> debate_tiebreaker --decision pass
 orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
 orch reject <run-id> plan --full --reason "Do not continue"
 orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
@@ -179,7 +177,7 @@ orch clean --all
 SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
                          ^                    |
                          |                    +-- soft reject
-                         +---- incremental fixes <---- ADJUDICATION(debate) <- REVIEWING(session)
+                         +---- incremental fixes <---- REVIEWING(debate)
                                                           |
                                                           v
                                                        MERGING -> DONE
@@ -187,13 +185,12 @@ SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
 
 Phase summary:
 
-1. Scoping: Claude and Codex debate the task and produce a canonical `scope.md`.
+1. Scoping: Claude and Codex scope independently, then run a bounded 3-6 prompt debate that produces a canonical `scope.md`.
 2. Planning: Claude generates a step-by-step plan and resumes the same session on soft-reject feedback.
 3. Plan approval: you approve, soft-reject with comments, or full-reject and terminate.
 4. Execution: Codex or Claude implements the approved plan in one session.
-5. Review: Claude reviews the resulting diff and preserves the review session for debate.
-6. Adjudication: Codex and Claude debate disagreements. Fix cycles create incremental follow-up plans on top of the existing worktree.
-7. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
+5. Review: Claude reviews the resulting diff, Codex performs an independent cross-check, and Claude Opus/max makes the final call if they disagree.
+6. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
 
 The review phase can also use non-model evidence:
 
@@ -240,7 +237,6 @@ Minimal example:
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "codex"
 scoper = "claude"
 
 [routing.phases.planning]

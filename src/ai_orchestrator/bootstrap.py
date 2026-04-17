@@ -15,7 +15,6 @@ watchdog_timeout = 3600
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "codex"
 scoper = "claude"
 
 [routing.claude]
@@ -79,7 +78,7 @@ DEFAULT_WORKFLOW = """# Default workflow configuration for ai-orchestrator.
 
 name: default
 description: >
-  Full orchestrated run: scope -> plan -> execute -> review -> adjudicate -> merge.
+  Full orchestrated run: scope -> plan -> execute -> review -> merge.
 
 phases:
   scoping:
@@ -100,13 +99,9 @@ phases:
     cli: claude
     retries: 3
 
-  adjudicating:
-    cli: codex
-    retries: 3
-
   merging:
     # Applies changes as a staged diff via git merge --squash; never commits.
-    # No approval gate — triggered automatically after adjudication passes.
+    # No approval gate — triggered automatically after review passes.
 """
 
 GITIGNORE_MARKER = "# ai-orchestrator runtime artifacts"

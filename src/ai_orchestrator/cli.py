@@ -433,11 +433,11 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 @main.command("approve")
 @click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan", "debate_tiebreaker"]))
+@click.argument("gate", type=click.Choice(["scope", "plan"]))
 @click.option("--force", is_flag=True, default=False, help="Reserved for backward compatibility.")
 @click.option(
     "--decision",
-    type=click.Choice(["fix", "pass", "approve_claude", "approve_codex", "override"]),
+    type=click.Choice(["approve_claude", "approve_codex", "override"]),
     default=None,
     help="Gate-specific decision for debate gates.",
 )
@@ -452,10 +452,6 @@ def cmd_approve(
     """Approve a pending gate."""
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
-    if gate == "debate_tiebreaker" and decision not in {"fix", "pass"}:
-        raise click.UsageError(
-            "Gate 'debate_tiebreaker' requires --decision fix or --decision pass."
-        )
     try:
         state = engine.approve(run_id, gate, force=force, decision=decision)
     except EngineError as exc:
@@ -720,8 +716,6 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             gate = "scope"
         elif state.current_phase == "APPROVAL_PLAN":
             gate = "plan"
-        elif state.current_phase == "ADJUDICATING":
-            gate = "debate_tiebreaker"
         else:
             return engine.resume(run_id)
         if gate == "scope":
@@ -748,15 +742,6 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             else:
                 reason = ui.rejection_reason("Rejected in interactive mode")
                 state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
-            continue
-        if gate == "debate_tiebreaker":
-            choice = ui.approval_choice(
-                gate,
-                f"Run {run_id} is paused for a debate tiebreaker.",
-                choices=["fix", "pass"],
-                default="fix",
-            )
-            state = engine.approve(run_id, gate, decision=choice)
             continue
         if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
             state = engine.approve(run_id, gate)

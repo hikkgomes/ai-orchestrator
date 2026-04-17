@@ -173,7 +173,7 @@ def test_run_detach_disables_interactive_default(monkeypatch):
     assert captured["interactive"] is False
 
 
-def test_debate_tiebreaker_approve_requires_decision(monkeypatch):
+def test_debate_tiebreaker_gate_is_removed(monkeypatch):
     monkeypatch.setattr("ai_orchestrator.cli._resolve_run_id_arg", lambda ctx, run_id: run_id)
     monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx: object())
 
@@ -181,7 +181,8 @@ def test_debate_tiebreaker_approve_requires_decision(monkeypatch):
     result = runner.invoke(main, ["approve", "run-1", "debate_tiebreaker"])
 
     assert result.exit_code != 0
-    assert "requires --decision fix or --decision pass" in result.output
+    assert "debate_tiebreaker" in result.output
+    assert "is not one of 'scope', 'plan'" in result.output
 
 
 def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):

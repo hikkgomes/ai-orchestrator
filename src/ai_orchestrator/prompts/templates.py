@@ -137,75 +137,82 @@ def build_scoping_prompt(
 
 
 def build_prescope_claude_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
-    """Build Claude round-0 pre-scope prompt."""
+    """Build Claude round-1 prompt that creates canonical scope.md."""
     return _prescope_prompt(
         actor="Claude",
         raw_task=raw_task,
         repo_summary=repo_summary,
         directory_tree=directory_tree,
+        canonical=True,
     )
 
 
 def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
-    """Build Codex round-0 pre-scope prompt."""
+    """Build Codex round-2 prompt that creates Codex's independent scope file."""
     return _prescope_prompt(
         actor="Codex",
         raw_task=raw_task,
         repo_summary=repo_summary,
         directory_tree=directory_tree,
+        canonical=False,
     )
 
 
-def build_scope_synthesis_prompt(
+def build_scope_compare_codex_prompt(
     claude_scope_md: str,
     codex_scope_md: str,
     raw_task: str,
 ) -> str:
-    """Build Claude prompt to synthesize canonical scope.md."""
+    """Build Codex round-3 prompt to compare both scopes."""
     return (
-        "You are resolving task scope for an automated software orchestrator.\n\n"
-        "Read Claude's and Codex's independent scope notes, then write the canonical\n"
-        "scope.md content. Return ONLY markdown for scope.md.\n\n"
-        "The output MUST start with YAML frontmatter containing these keys:\n"
-        "normalized_task, complexity_tier, actionable, key_files, context.\n"
-        "complexity_tier must be one of simple, moderate, complex, architectural.\n"
-        "actionable must be true or false. key_files must be a YAML list.\n\n"
+        "You are Codex reviewing Claude's canonical scope against your independent\n"
+        "scope notes. Do not edit the canonical scope.md. Return ONLY markdown for\n"
+        "codex-scope.md.\n\n"
+        "Start with YAML frontmatter containing exactly:\n"
+        "agreement: true|false\n\n"
+        "If agreement is true, briefly explain why Claude's scope is safe to send to\n"
+        "planning. If agreement is false, write concise reasoning that identifies\n"
+        "what must change before planning.\n\n"
         "RAW TASK:\n"
         f"{raw_task}\n\n"
-        "CLAUDE PRE-SCOPE:\n"
+        "CLAUDE CANONICAL SCOPE.MD:\n"
         f"{claude_scope_md}\n\n"
-        "CODEX PRE-SCOPE:\n"
+        "YOUR INDEPENDENT CODEX SCOPE:\n"
         f"{codex_scope_md}\n"
     )
 
 
-def build_scope_review_codex_prompt(claude_scope_md: str, scope_md: str) -> str:
-    """Build Codex prompt to review canonical scope.md."""
+def build_scope_respond_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
+    """Build Claude round-4 prompt to respond to Codex reasoning."""
     return (
-        "You are reviewing the canonical scope for an automated software workflow.\n\n"
-        "Codex has the last word on whether the scope is safe to plan from, but must\n"
-        "not edit scope.md. Return ONLY markdown for codex-scope.md.\n\n"
-        "Start with YAML frontmatter containing:\n"
+        "You are Claude responding to Codex's scope disagreement at high reasoning.\n\n"
+        "Read the current canonical scope.md and Codex's reasoning. Return ONLY\n"
+        "markdown. You may either update the canonical scope.md or explain why the\n"
+        "current scope should stand.\n\n"
+        "Start with YAML frontmatter containing these keys:\n"
+        "normalized_task, complexity_tier, actionable, key_files, context,\n"
         "agreement: true|false\n"
-        "If agreement is false, include concise blocking comments under a Comments\n"
-        "heading. If agreement is true, briefly explain why the scope is acceptable.\n\n"
-        "CLAUDE NOTES:\n"
-        f"{claude_scope_md}\n\n"
-        "CANONICAL SCOPE.MD:\n"
-        f"{scope_md}\n"
+        "Set agreement true if you accept Codex's objection and have updated the\n"
+        "scope accordingly. Set agreement false if you still disagree with Codex,\n"
+        "and include your reasoning in the body.\n\n"
+        "CURRENT CANONICAL SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "CODEX REASONING:\n"
+        f"{codex_scope_md}\n"
     )
 
 
 def build_scope_final_codex_prompt(claude_scope_md: str, scope_md: str, codex_scope_md: str) -> str:
-    """Build Codex final xhigh scope assessment prompt."""
+    """Build Codex round-5 prompt for final xhigh scope assessment."""
     return (
-        "You are making the FINAL Codex scope assessment at escalated reasoning.\n\n"
-        "This is the last Codex review before planning. Do not edit scope.md. Return\n"
+        "You are making Codex's final scope assessment at xhigh reasoning.\n\n"
+        "This is the last Codex review before Claude makes the final call if needed.\n"
+        "Do not edit scope.md. Return\n"
         "ONLY markdown for codex-scope.md with YAML frontmatter containing:\n"
         "agreement: true|false\n\n"
         "If agreement is false, explain the remaining concern concisely. If agreement\n"
         "is true, explain why the final scope is safe to plan from.\n\n"
-        "CLAUDE NOTES:\n"
+        "ORIGINAL CLAUDE SCOPE:\n"
         f"{claude_scope_md}\n\n"
         "PREVIOUS CODEX COMMENTS:\n"
         f"{codex_scope_md}\n\n"
@@ -214,26 +221,10 @@ def build_scope_final_codex_prompt(claude_scope_md: str, scope_md: str, codex_sc
     )
 
 
-def build_scope_rebuttal_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
-    """Build Claude prompt to address Codex scope feedback."""
-    return (
-        "You are updating canonical scope.md after Codex review.\n\n"
-        "Read the current scope and Codex comments. Return ONLY the updated markdown\n"
-        "for scope.md. Preserve YAML frontmatter with normalized_task,\n"
-        "complexity_tier, actionable, key_files, and context. If you disagree with\n"
-        "Codex, encode the chosen scope clearly in scope.md and explain the rationale\n"
-        "in the body.\n\n"
-        "CURRENT SCOPE.MD:\n"
-        f"{scope_md}\n\n"
-        "CODEX COMMENTS:\n"
-        f"{codex_scope_md}\n"
-    )
-
-
 def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
-    """Build Claude final max-effort scope decision prompt."""
+    """Build Claude round-6 prompt for final Opus/max scope decision."""
     return (
-        "You are making the FINAL Claude scope decision at maximum effort.\n\n"
+        "You are making the final Claude scope decision with Opus at max effort.\n\n"
         "Read Codex's final assessment and return ONLY the final canonical scope.md.\n"
         "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable,\n"
         "key_files, and context. If Codex still disagrees, decide whether to adjust\n"
@@ -338,23 +329,76 @@ def build_review_prompt(
     )
 
 
-def build_adjudication_prompt(
+def build_review_codex_prompt(
     task_description: str,
-    review_json: str,
+    scope_md: str,
+    plan_json: str,
+    git_diff: str,
     step_results_json: str,
+    review_json: str,
     schema_json: str,
 ) -> str:
-    """Build the adjudication phase prompt."""
+    """Build Codex's independent review prompt inside the REVIEWING phase."""
     return (
-        "You are an adjudication agent. Decide whether this implementation should be merged,\n"
-        "reworked, replanned, or abandoned.\n\n"
+        "You are Codex performing an independent code review inside the single\n"
+        "REVIEWING phase. You can see Claude's review, but you must make your own\n"
+        "assessment from the task, scope, plan, diff, and execution result.\n\n"
         "ORIGINAL TASK:\n"
         f"{task_description}\n\n"
-        "REVIEW:\n"
-        f"{review_json}\n\n"
+        "FINAL SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "PLAN:\n"
+        f"{plan_json}\n\n"
+        "IMPLEMENTATION DIFF:\n"
+        f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
         f"{step_results_json}\n\n"
-        "Produce a JSON adjudication conforming to this schema:\n"
+        "CLAUDE REVIEW REPORT:\n"
+        f"{review_json}\n\n"
+        "Return a review JSON. Use verdict=approve and blocks_merge=false only if\n"
+        "the implementation should proceed to merge. If fixes are needed, include\n"
+        "specific findings and set blocks_merge=true.\n\n"
+        "OUTPUT SCHEMA:\n"
+        f"{schema_json}\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+    )
+
+
+def build_review_final_claude_prompt(
+    task_description: str,
+    scope_md: str,
+    plan_json: str,
+    git_diff: str,
+    step_results_json: str,
+    claude_review_json: str,
+    codex_review_json: str,
+    scenario: str,
+    schema_json: str,
+) -> str:
+    """Build Claude Opus/max final review-debate prompt."""
+    return (
+        "You are Claude Opus making the final decision in a bounded review debate.\n\n"
+        "Decide whether the implementation can pass or must return to planning for\n"
+        "fixes. Return ONLY JSON matching the debate response schema. Use\n"
+        "position=issues_confirmed when fixes are required, or\n"
+        "position=issues_dismissed when the implementation can pass.\n\n"
+        "SCENARIO:\n"
+        f"{scenario}\n\n"
+        "ORIGINAL TASK:\n"
+        f"{task_description}\n\n"
+        "FINAL SCOPE.MD:\n"
+        f"{scope_md}\n\n"
+        "PLAN:\n"
+        f"{plan_json}\n\n"
+        "IMPLEMENTATION DIFF:\n"
+        f"{git_diff}\n\n"
+        "EXECUTION RESULTS:\n"
+        f"{step_results_json}\n\n"
+        "CLAUDE REVIEW REPORT:\n"
+        f"{claude_review_json}\n\n"
+        "CODEX REVIEW REPORT AND PUSHBACK:\n"
+        f"{codex_review_json}\n\n"
+        "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
@@ -375,66 +419,6 @@ def build_retry_prompt(
         "Fix the error and try again. The full original prompt follows.\n\n"
         "---\n\n"
         f"{original_prompt}"
-    )
-
-
-def build_debate_claude_rebuttal_prompt(
-    review: str,
-    adjudication: str,
-    debate_history: str,
-    task: str,
-    diff: str,
-    schema_json: str,
-) -> str:
-    """Build a Claude debate prompt."""
-    return (
-        "You are continuing the SAME review session for adjudication debate.\n\n"
-        "Re-evaluate the disputed implementation issues. Return ONLY JSON matching\n"
-        "the schema. Use position=issues_confirmed if the implementation still needs\n"
-        "fixes, or position=issues_dismissed if the disputed issues should not block.\n\n"
-        "TASK:\n"
-        f"{task}\n\n"
-        "REVIEW:\n"
-        f"{review}\n\n"
-        "CODEX ADJUDICATION OR REBUTTAL:\n"
-        f"{adjudication}\n\n"
-        "DEBATE HISTORY:\n"
-        f"{debate_history}\n\n"
-        "DIFF:\n"
-        f"{diff}\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-    )
-
-
-def build_debate_codex_rebuttal_prompt(
-    adjudication: str,
-    claude_rebuttal: str,
-    debate_history: str,
-    task: str,
-    step_results: str,
-    schema_json: str,
-) -> str:
-    """Build a Codex debate rebuttal prompt."""
-    return (
-        "You are continuing an adjudication debate for an automated workflow.\n\n"
-        "Respond to Claude's argument. Return ONLY JSON matching the schema. Use\n"
-        "position=issues_confirmed if you still believe fixes are required, or\n"
-        "position=issues_dismissed if Claude convinced you the implementation can pass.\n\n"
-        "TASK:\n"
-        f"{task}\n\n"
-        "INITIAL CODEX ADJUDICATION:\n"
-        f"{adjudication}\n\n"
-        "CLAUDE REBUTTAL:\n"
-        f"{claude_rebuttal}\n\n"
-        "DEBATE HISTORY:\n"
-        f"{debate_history}\n\n"
-        "EXECUTION RESULTS:\n"
-        f"{step_results}\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -675,16 +659,39 @@ def _workspace_section(workspace_trees: dict[str, str] | None) -> str:
     )
 
 
-def _prescope_prompt(actor: str, raw_task: str, repo_summary: str, directory_tree: str) -> str:
+def _prescope_prompt(
+    actor: str,
+    raw_task: str,
+    repo_summary: str,
+    directory_tree: str,
+    *,
+    canonical: bool,
+) -> str:
+    if canonical:
+        output_rules = (
+            "Return ONLY markdown for the canonical scope.md.\n\n"
+            "The output MUST start with YAML frontmatter containing these keys:\n"
+            "normalized_task, complexity_tier, actionable, key_files, context.\n"
+            "complexity_tier must be one of simple, moderate, complex, architectural.\n"
+            "actionable must be true or false. key_files must be a YAML list.\n\n"
+            "After the frontmatter, include concise notes on assumptions, risks, and\n"
+            "important boundaries for planning.\n\n"
+        )
+    else:
+        output_rules = (
+            "Return ONLY markdown for your own codex-scope.md. Do not write or imply\n"
+            "you are editing the canonical scope.md.\n\n"
+            "Your markdown should include:\n"
+            "- normalized task\n"
+            "- actionable: true or false\n"
+            "- complexity tier: simple, moderate, complex, or architectural\n"
+            "- key files or areas likely involved\n"
+            "- assumptions and risks\n\n"
+        )
     return (
         f"You are {actor}, independently scoping a user request for an automated\n"
-        "software orchestrator. Do not implement anything. Return ONLY markdown.\n\n"
-        "Your markdown should include:\n"
-        "- normalized task\n"
-        "- actionable: true or false\n"
-        "- complexity tier: simple, moderate, complex, or architectural\n"
-        "- key files or areas likely involved\n"
-        "- assumptions and risks\n\n"
+        "software orchestrator. Do not implement anything.\n\n"
+        f"{output_rules}"
         "RAW TASK:\n"
         f"{raw_task}\n\n"
         "REPOSITORY SUMMARY:\n"

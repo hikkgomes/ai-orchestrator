@@ -121,7 +121,9 @@ class FakeClaudeAdapter:
         if (
             "resolving task scope" in prompt
             or "updating canonical scope.md" in prompt
+            or "responding to Codex's scope disagreement" in prompt
             or "FINAL Claude scope decision" in prompt
+            or "final Claude scope decision" in prompt
         ):
             return TextInvokeResult(
                 _scope_md(self._last_scope or {
@@ -172,6 +174,11 @@ class FakeCodexAdapter:
             if self._adjudications:
                 return InvokeResult(self._adjudications.pop(0))
             return InvokeResult(_pass_adjudication())
+        if schema["title"] == "Review":
+            self.adjudication_calls += 1
+            if self._adjudications:
+                return InvokeResult(_review_from_adjudication(self._adjudications.pop(0)))
+            return InvokeResult(_review())
         if schema["title"] == "DebateResponse":
             if self._debate_responses:
                 return InvokeResult(self._debate_responses.pop(0))
@@ -316,6 +323,41 @@ def _rework_adjudication(*, feedback: str = "Fix step 1."):
         "verdict": "REWORK",
         "reasoning": feedback,
         "rework_feedback": feedback,
+    }
+
+
+def _review_from_adjudication(adjudication: dict) -> dict:
+    if adjudication.get("verdict") == "PASS":
+        return {
+            "review_id": "33333333-3333-3333-3333-333333333333",
+            "verdict": "approve",
+            "score": 9,
+            "findings": [],
+            "summary": str(adjudication.get("reasoning") or "Ship it."),
+            "blocks_merge": False,
+        }
+    feedback = str(
+        adjudication.get("rework_feedback")
+        or adjudication.get("replan_feedback")
+        or adjudication.get("failure_reason")
+        or adjudication.get("reasoning")
+        or "Codex requested fixes."
+    )
+    return {
+        "review_id": "44444444-4444-4444-4444-444444444444",
+        "verdict": "request_changes",
+        "score": 5,
+        "findings": [
+            {
+                "severity": "major",
+                "file": "step-1.txt",
+                "line": 1,
+                "description": feedback,
+                "suggestion": "Address the Codex review finding.",
+            }
+        ],
+        "summary": feedback,
+        "blocks_merge": True,
     }
 
 
@@ -503,7 +545,7 @@ def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_roo
     assert "AI FAILURE CATEGORIES:" in review_prompts[0]
 
 
-def test_adjudication_prompt_uses_normalized_task(tmp_repo, artifact_root, default_config):
+def test_codex_review_prompt_uses_normalized_task(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
     claude = FakeClaudeAdapter(
@@ -531,10 +573,10 @@ def test_adjudication_prompt_uses_normalized_task(tmp_repo, artifact_root, defau
     state = engine.start("raw user wording", "afafafaf-afaf-afaf-afaf-afafafafafaf")
 
     assert state.status == "DONE"
-    adjudication_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "Adjudication"]
-    assert adjudication_prompts
-    assert "ORIGINAL TASK:\nNormalized implementation task" in adjudication_prompts[0]
-    assert "ORIGINAL TASK:\nraw user wording" not in adjudication_prompts[0]
+    codex_review_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "Review"]
+    assert codex_review_prompts
+    assert "ORIGINAL TASK:\nNormalized implementation task" in codex_review_prompts[0]
+    assert "ORIGINAL TASK:\nraw user wording" not in codex_review_prompts[0]
 
 
 def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, default_config):
@@ -589,19 +631,6 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
             if "independently scoping" in prompt:
                 self.scoping_calls += 1
                 return TextInvokeResult("## Claude pre-scope\n\nUse the router notes.", "scope-session-1")
-            if "resolving task scope" in prompt:
-                return TextInvokeResult(
-                    "---\n"
-                    "normalized_task: Implement feature\n"
-                    "complexity_tier: moderate\n"
-                    "actionable: true\n"
-                    "key_files:\n"
-                    "  - router.py\n"
-                    "context: Canonical synthesized scope.\n"
-                    "---\n\n"
-                    "Canonical synthesized scope.",
-                    "scope-session-2",
-                )
             raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
 
     claude = DistinctScopeClaude([_plan()], [_review()], [_pass_adjudication()])
@@ -617,11 +646,11 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
     state = engine.start("Implement feature", "a3a3a3a3-a3a3-a3a3-a3a3-a3a3a3a3a3a3")
 
     assert state.status == "DONE"
-    assert state.session_ids["scoping_claude"] == "scope-session-2"
-    assert claude.text_invocations[1]["resume_session_id"] == "scope-session-1"
+    assert state.session_ids["scoping_claude"] == "scope-session-1"
+    assert len(claude.text_invocations) == 1
     codex_review_prompt = str(codex.text_invocations[1]["prompt"])
-    assert "CLAUDE NOTES:\n## Claude pre-scope" in codex_review_prompt
-    assert "CANONICAL SCOPE.MD:\n---\nnormalized_task: Implement feature" in codex_review_prompt
+    assert "CLAUDE CANONICAL SCOPE.MD:\n## Claude pre-scope" in codex_review_prompt
+    assert "YOUR INDEPENDENT CODEX SCOPE:" in codex_review_prompt
 
 
 def test_scoping_debate_max_rounds_proceeds_without_agreement(
@@ -898,37 +927,23 @@ def test_debate_case_a_claude_convinced_passes(tmp_repo, artifact_root, default_
     assert state.debate_state.final_verdict == "pass"
 
 
-def test_debate_case_b_full_path_to_tiebreaker(tmp_repo, artifact_root, default_config):
+def test_review_disagreement_final_claude_decision_passes(tmp_repo, artifact_root, default_config):
     engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
 
-    assert state.status == "PAUSED"
-    assert state.current_phase == "ADJUDICATING"
+    assert state.status == "DONE"
     assert state.debate_state is not None
-    assert state.debate_state.debate_phase == "USER_TIEBREAKER"
-    assert state.debate_state.disagreement_case == "B"
-    assert len(state.debate_state.rounds) == 4
+    assert state.debate_state.debate_phase == "resolved"
+    assert state.debate_state.disagreement_case == "D: Claude passed the implementation and Codex found blocking issues."
+    assert state.debate_state.final_verdict == "pass"
+    assert len(state.debate_state.rounds) == 3
     assert engine is not None
 
 
-def test_debate_tiebreaker_fix_triggers_planning(tmp_repo, artifact_root, default_config):
-    engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
-    default_config.approval.require_plan_approval = True
-
-    resolved = engine.approve(state.run_id, "debate_tiebreaker", decision="fix")
-
-    assert resolved.status == "PAUSED"
-    assert resolved.current_phase == "APPROVAL_PLAN"
-    assert resolved.fix_iteration_count == 1
-    assert resolved.worktree_path is not None
-
-
-def test_debate_tiebreaker_pass_merges(tmp_repo, artifact_root, default_config):
+def test_debate_tiebreaker_gate_is_removed_in_engine(tmp_repo, artifact_root, default_config):
     engine, state = _run_case_b_to_tiebreaker(tmp_repo, artifact_root, default_config)
 
-    resolved = engine.approve(state.run_id, "debate_tiebreaker", decision="pass")
-
-    assert resolved.status == "DONE"
-    assert resolved.commit_commands
+    with pytest.raises(KeyError):
+        engine.approve(state.run_id, "debate_tiebreaker", decision="fix")
 
 
 def test_adjudication_fix_planning_preserves_existing_step_results(
@@ -949,7 +964,7 @@ def test_adjudication_fix_planning_preserves_existing_step_results(
                 "adjudication_id": "44444444-4444-4444-4444-444444444444",
                 "verdict": "REWORK",
                 "reasoning": "The review issue is real.",
-                "rework_feedback": "Fix step 1.",
+                "rework_feedback": "Fix the generated content.",
             },
             _pass_adjudication(),
         ]
@@ -1000,9 +1015,8 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
     review_invocations = [item for item in claude.invocations if item["title"] == "Review"]
     assert state.status == "DONE"
     assert state.session_ids["reviewing"] == "review-session"
-    assert len(review_invocations) == 2
+    assert len(review_invocations) == 1
     assert review_invocations[0]["resume_session_id"] is None
-    assert review_invocations[1]["resume_session_id"] == "review-session"
 
 
 def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_config):
@@ -1068,8 +1082,8 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "Adjudication":
-                return _pass_adjudication()
+            if schema["title"] in {"Adjudication", "Review"}:
+                return _review()
             self.calls.append(1)
             self.prompts.append(prompt)
             target = working_dir / "step-1.txt"
@@ -1151,6 +1165,8 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
                 return _plan()
             if title == "Review":
                 return _review()
+            if title == "Review":
+                return _review()
             if title == "Adjudication":
                 return _pass_adjudication()
             raise AssertionError(f"Unexpected schema title: {title}")
@@ -1195,8 +1211,8 @@ def test_worktree_reset_before_retry(tmp_repo, artifact_root, default_config):
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "Adjudication":
-                return _pass_adjudication()
+            if schema["title"] in {"Adjudication", "Review"}:
+                return _review()
             self.calls += 1
             if self.calls == 1:
                 (working_dir / "leftover.txt").write_text("stale\n", encoding="utf-8")
@@ -1256,8 +1272,8 @@ def test_worktree_reset_clears_staged_index_changes(tmp_repo, artifact_root, def
             reasoning_effort_override=None,
             model_override=None,
         ):
-            if schema["title"] == "Adjudication":
-                return _pass_adjudication()
+            if schema["title"] in {"Adjudication", "Review"}:
+                return _review()
             self.calls += 1
             if self.calls == 1:
                 (working_dir / "README.md").write_text("staged dirty\n", encoding="utf-8")

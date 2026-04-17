@@ -1,10 +1,10 @@
 # Workflow
 
-> **Design status: UPDATED** as of 2026-04-09.
+> **Design status: UPDATED** as of 2026-04-17.
 
 ## Workflow Phases
 
-Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Planning and review may resume the same vendor model session across refinement/debate turns. All mutating phases operate within a single preserved worktree branch per run.
+Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Planning may resume the same Claude session across refinement turns. Review contains its own bounded Claude/Codex debate. All mutating phases operate within a single preserved worktree branch per run.
 
 `workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
@@ -12,12 +12,11 @@ Every orchestrated run moves through these phases in order. Each phase is a dist
 INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
           ^                    ^                    |
           |                    |                    +-- soft reject
-          |                    +---- incremental fixes <---- ADJUDICATING(debate) <- REVIEWING(session)
+          |                    +---- incremental fixes <---- REVIEWING(debate)
           |
           +---- reject/update task while paused at SCOPING
 
-ADJUDICATING -> PAUSED(debate_tiebreaker)
-ADJUDICATING -> MERGING -> DONE
+REVIEWING(pass) -> MERGING -> DONE
 APPROVAL_PLAN -> TERMINATED on full reject
 ```
 
@@ -34,9 +33,9 @@ APPROVAL_PLAN -> TERMINATED on full reject
 | Input | Raw task + repo summary + shallow directory tree |
 | Output | `scoping/scope-<run>.md` with YAML frontmatter |
 | Worktree | No |
-| Rounds | Fixed debate flow, up to 3 visible rounds with escalation |
+| Rounds | Fixed debate flow, 3-6 prompts with early exit |
 
-Round 0 invokes Claude and Codex in parallel to produce independent pre-scope markdown. Claude then synthesizes canonical `scope.md`. Codex reviews it and either agrees or writes comments. If needed, Claude updates `scope.md`, Codex gives a final escalated assessment, and Claude makes the final scoping call before planning. Codex never edits the canonical file.
+Rounds 1 and 2 run in parallel. Claude Sonnet/medium writes canonical `scope.md`; Codex 5.4/medium writes `codex-scope.md`. Codex then compares both scopes and either agrees or writes reasoning. If needed, Claude Sonnet/high responds, Codex 5.4/xhigh makes a final case, and Claude Opus/max makes the final scope decision. Codex never edits the canonical file.
 
 If the final scope is not actionable, the run pauses at the `SCOPING` gate. The operator can approve to continue anyway or reject with a replacement task, which re-runs scoping.
 
@@ -50,7 +49,7 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 |---|---|
 | Default CLI | `claude -p` |
 | Config key | `routing.planner` |
-| Input | User task description + `scope.md` + repo file listing + any operator/adjudication feedback |
+| Input | User task description + `scope.md` + repo file listing + any operator/review feedback |
 | Output | `plans/plan-<uuid>.json` validated against `plan.schema.json` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
@@ -178,17 +177,17 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 ## Phase 5: REVIEWING
 
-**Purpose:** A second AI reviews the implementation for correctness, style, and completeness.
+**Purpose:** Review the implementation and decide whether it can merge or needs incremental fixes.
 
 | Property | Value |
 |---|---|
-| Default CLI | `claude -p` |
-| Config key | `routing.reviewer` |
-| Input | Original task + plan + execution results + git diff from worktree |
-| Output | `reviews/review-<uuid>.json` validated against `review.schema.json` |
+| Default CLI | `claude -p` for initial review, then `codex exec` for cross-check |
+| Config key | `routing.reviewer` for Claude review defaults; Codex review uses built-in routing |
+| Input | Original task + `scope.md` + plan + execution results + git diff from worktree |
+| Output | `reviews/review-<uuid>.json` plus debate rounds when needed |
 | Worktree | Uses the implementation worktree as working directory for review context |
 | Retries | Up to `max_retries` on schema failure |
-| Session | Fresh review session; session ID is preserved for adjudication debate |
+| Session | Fresh Claude review session; Claude Opus/max may resume it for final disagreement resolution |
 
 **Prompt construction:**
 
@@ -215,28 +214,16 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 
 The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.
 
----
-
-## Phase 6: ADJUDICATING
-
-**Purpose:** Decide whether the implementation passes review or needs incremental fixes, using a Codex/Claude debate when they disagree.
-
-| Property | Value |
-|---|---|
-| Default CLI | `codex exec` |
-| Config key | `routing.adjudicator` |
-| Input | Review JSON + execution results + original task |
-| Output | `adjudications/adj-<uuid>.json` plus `adjudications/debate-round-*.json` |
-| Worktree | No |
-| Retries | Up to `max_retries` on schema failure |
-
-Agreement cases are direct: Claude issues + Codex agrees creates an incremental fix-planning pass; Claude clean + Codex agrees proceeds to merge. Disagreements resume the Claude review session, escalate to Opus/max when needed, and may ask the user for a `debate_tiebreaker` decision.
+Review routing is direct:
+- If both Claude and Codex pass the implementation, the run advances to MERGING.
+- If both find matching blocking issues, the run returns to PLANNING for an incremental fix plan.
+- If they disagree, Codex's review serves as the pushback and Claude Opus/max makes one final decision. There is no user tiebreaker gate.
 
 Fix cycles never discard the worktree. A return to planning means a new incremental plan that sees the original task, `scope.md`, existing execution results, current diff, review issues, and debate transcript.
 
 ---
 
-## Phase 7: MERGING
+## Phase 6: MERGING
 
 **Purpose:** Hand off the final implementation without committing on the user's behalf.
 
@@ -268,18 +255,16 @@ INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXEC
                            │   │          │ (full-reject)    ▼
                            │   │          ▼              REVIEWING
                            │   │       TERMINATED            │
-                           │   └── (soft-reject) ───────┐   ▼
-                           │                            └ ADJUDICATING
-                           │                              (debate tree)
-                           │                                  │
-                           └── (fix needed, preserved worktree)│
+                           │   └── (soft-reject) ───────┐   │
+                           │                            └───┘
+                           └── (fix needed, preserved worktree)
                                                               │ PASS
                                                               ▼
                                                            MERGING ──▶ DONE
 
 Any state ──▶ FAILED         (unrecoverable error)
 Any state ──▶ TERMINATED     (user full-reject)
-Any state ──▶ PAUSED         (approval gate / debate tiebreaker)
+Any state ──▶ PAUSED         (approval gate)
 Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth refresh)
 ```
 
@@ -316,8 +301,8 @@ CLI invocations are still isolated subprocesses, but Claude planning and review
 sessions intentionally preserve transcript continuity:
 
 1. **Planning resume** — initial planning starts a fresh `claude -p` session. Soft-rejects resume that same session with `claude --resume <session-id>`.
-2. **Review resume** — review starts a fresh Claude session. Adjudication debate rounds that need Claude resume that review session, with model and effort escalation when required.
-3. **Codex freshness** — Codex execution and adjudication calls are fresh subprocesses. Session IDs are not reused for Codex.
+2. **Review resume** — review starts a fresh Claude session. The final Claude Opus/max review decision may resume that session when Codex disagrees.
+3. **Codex freshness** — Codex execution and review cross-check calls are fresh subprocesses. Session IDs are not reused for Codex.
 4. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
 5. **Prompt auditability** — prompts are written under `prompts/` for auditability when enabled. They are artifacts, not hidden mutable state.
 6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations. This is intentional: it lets auth and config work normally.

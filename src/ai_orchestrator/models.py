@@ -28,7 +28,6 @@ class WorkflowStatus(str, Enum):
     APPROVAL_PLAN = "APPROVAL_PLAN"
     EXECUTING = "EXECUTING"
     REVIEWING = "REVIEWING"
-    ADJUDICATING = "ADJUDICATING"
     MERGING = "MERGING"
     DONE = "DONE"
     FAILED = "FAILED"
@@ -89,16 +88,16 @@ class AdjudicationVerdict(str, Enum):
     FAIL = "FAIL"
 
 
-class DebatePhase(str, Enum):
-    """Adjudication debate sub-state."""
+class ReviewDebatePhase(str, Enum):
+    """Review debate sub-state."""
 
-    INITIAL_ADJUDICATION = "INITIAL_ADJUDICATION"
-    CASE_A_ESCALATION = "CASE_A_ESCALATION"
-    CASE_B_ROUND1 = "CASE_B_ROUND1"
-    CASE_B_CODEX_REBUTTAL = "CASE_B_CODEX_REBUTTAL"
-    CASE_B_FINAL_CLAUDE = "CASE_B_FINAL_CLAUDE"
-    USER_TIEBREAKER = "USER_TIEBREAKER"
-    RESOLVED = "RESOLVED"
+    CLAUDE_REVIEW = "claude_review"
+    CODEX_REVIEW = "codex_review"
+    ESCALATION = "escalation"
+    RESOLVED = "resolved"
+
+
+DebatePhase = ReviewDebatePhase
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +212,9 @@ class DebateRound(BaseModel):
 
 
 class DebateState(BaseModel):
-    """Persisted debate state for resumable adjudication."""
+    """Persisted debate state for the merged review phase."""
 
-    debate_phase: DebatePhase = DebatePhase.INITIAL_ADJUDICATION
+    debate_phase: ReviewDebatePhase = ReviewDebatePhase.CLAUDE_REVIEW
     disagreement_case: str | None = None
     rounds: list[DebateRound] = Field(default_factory=list)
     final_verdict: str | None = None

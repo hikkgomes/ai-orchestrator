@@ -14,23 +14,21 @@ from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
 from .bootstrap import ensure_runtime_gitignore
 from .config import Config
-from .models import DebatePhase, DebateRound, DebateState, RunState, WorkflowStatus
+from .models import DebateRound, DebateState, ReviewDebatePhase, RunState, WorkflowStatus
 from .parallel import invoke_parallel
 from .prompts.templates import (
-    build_adjudication_prompt,
-    build_debate_claude_rebuttal_prompt,
-    build_debate_codex_rebuttal_prompt,
     build_fix_planning_prompt,
     build_full_execution_prompt_claude,
     build_full_execution_prompt_codex,
     build_planning_prompt,
     build_prescope_claude_prompt,
     build_prescope_codex_prompt,
+    build_review_codex_prompt,
+    build_review_final_claude_prompt,
     build_scope_final_claude_prompt,
     build_scope_final_codex_prompt,
-    build_scope_rebuttal_claude_prompt,
-    build_scope_review_codex_prompt,
-    build_scope_synthesis_prompt,
+    build_scope_compare_codex_prompt,
+    build_scope_respond_claude_prompt,
     build_retry_prompt,
     build_review_prompt,
     collect_file_context,
@@ -44,7 +42,7 @@ from .reviewer import load_config as load_reviewer_config
 from .reviewer import load_rules as load_reviewer_rules
 from .reviewer import run_review_scan
 from .state import StateManager
-from .validator import ValidationError, Validator, load_bundled_schema
+from .validator import load_bundled_schema
 from .workflow import WorkflowDefinition, load_workflow_definition
 from .worktree import WorktreeError, WorktreeManager
 
@@ -83,18 +81,9 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.PAUSED,
     },
     WorkflowStatus.REVIEWING: {
-        WorkflowStatus.ADJUDICATING,
-        WorkflowStatus.FAILED,
-        WorkflowStatus.BLOCKED_ON_CLI,
-    },
-    WorkflowStatus.ADJUDICATING: {
         WorkflowStatus.MERGING,
-        WorkflowStatus.EXECUTING,
         WorkflowStatus.PLANNING,
-        WorkflowStatus.REVIEWING,
-        WorkflowStatus.PAUSED,
         WorkflowStatus.FAILED,
-        WorkflowStatus.TERMINATED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
     WorkflowStatus.MERGING: {
@@ -109,14 +98,12 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
-        WorkflowStatus.ADJUDICATING,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.PLANNING,
         WorkflowStatus.EXECUTING,
         WorkflowStatus.REVIEWING,
-        WorkflowStatus.ADJUDICATING,
     },
     WorkflowStatus.CONFLICT: {WorkflowStatus.MERGING},
 }
@@ -321,9 +308,6 @@ class Engine:
             if status == WorkflowStatus.REVIEWING:
                 state = self._run_review(state)
                 continue
-            if status == WorkflowStatus.ADJUDICATING:
-                state = self._run_adjudication(state)
-                continue
             if status == WorkflowStatus.MERGING:
                 state = self._run_merge(state)
                 continue
@@ -335,9 +319,7 @@ class Engine:
         summary = repo_summary(self._repo_root)
         claude = self._adapter("claude")
         codex = self._adapter("codex")
-        claude_effort = self._resolve_effort_for_phase(state, "scoping", "claude")
-        codex_effort = "high"
-        claude_model = self._resolve_model_for_phase("scoping", "claude", state)
+        claude_model = self._resolve_model_for_phase("scoping", "claude", state) or "claude-sonnet-4-5-20250514"
         codex_model = self._resolve_model_for_phase("scoping", "codex", state)
 
         try:
@@ -351,16 +333,16 @@ class Engine:
                         claude,
                         claude_prompt,
                         self._repo_root,
-                        "Scoping round 0/3 with Claude",
-                        reasoning_effort_override=claude_effort,
+                        self._scoping_message("claude_creates", "Claude is drafting the scope..."),
+                        reasoning_effort_override="medium",
                         model_override=claude_model,
                     ),
                     lambda: self._invoke_adapter_text(
                         codex,
                         codex_prompt,
                         self._repo_root,
-                        "Scoping round 0/3 with Codex",
-                        reasoning_effort_override=codex_effort,
+                        self._scoping_message("codex_creates", "Codex is forming its own opinion..."),
+                        reasoning_effort_override="medium",
                         model_override=codex_model,
                         legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
                     ),
@@ -372,38 +354,20 @@ class Engine:
                 state.session_ids["scoping_claude"] = claude_text_result.session_id
             if codex_text_result.session_id:
                 state.session_ids["scoping_codex"] = codex_text_result.session_id
-            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 0, claude_scope)
-            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 0, codex_scope)
-            state.scoping_round = 0
+            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, claude_scope)
+            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 2, codex_scope)
+            state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, claude_scope)
+            state.scoping_round = 2
             self._state_mgr.save(state)
 
-            prompt = build_scope_synthesis_prompt(claude_scope, codex_scope, state.task)
-            self._artifacts.save_prompt(f"scope-synthesis-{state.run_id[:8]}.md", prompt)
-            scope_result = self._invoke_adapter_text(
-                claude,
-                prompt,
-                self._repo_root,
-                "Scoping synthesis",
-                reasoning_effort_override=claude_effort,
-                model_override=claude_model,
-                resume_session_id=state.session_ids.get("scoping_claude"),
-            )
-            scope_md = scope_result.text
-            if scope_result.session_id:
-                state.session_ids["scoping_claude"] = scope_result.session_id
-            state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, scope_md)
-            state.scoping_round = 1
-            self._state_mgr.save(state)
-
-            prompt = build_scope_review_codex_prompt(claude_scope, scope_md)
-            self._artifacts.save_prompt(f"scope-review-codex-r1-{state.run_id[:8]}.md", prompt)
+            prompt = build_scope_compare_codex_prompt(claude_scope, codex_scope, state.task)
+            self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
             codex_result = self._invoke_adapter_text(
                 codex,
                 prompt,
                 self._repo_root,
-                "Scoping round 1/3 with Codex",
-                reasoning_effort_override=codex_effort,
+                self._scoping_message("codex_compares", "Codex is reviewing Claude's scope..."),
+                reasoning_effort_override="medium",
                 model_override=codex_model,
                 resume_session_id=state.session_ids.get("scoping_codex"),
                 legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
@@ -411,20 +375,21 @@ class Engine:
             codex_scope = codex_result.text
             if codex_result.session_id:
                 state.session_ids["scoping_codex"] = codex_result.session_id
-            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 1, codex_scope)
+            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 3, codex_scope)
             state.scoping_agreed = self._scope_review_agreed(codex_scope)
-            state.scoping_round = 1
+            state.scoping_round = 3
             self._state_mgr.save(state)
 
             if not state.scoping_agreed:
-                prompt = build_scope_rebuttal_claude_prompt(scope_md, codex_scope)
-                self._artifacts.save_prompt(f"scope-rebuttal-claude-r2-{state.run_id[:8]}.md", prompt)
+                scope_md = self._artifacts.read_text(state.scope_md_ref)
+                prompt = build_scope_respond_claude_prompt(scope_md, codex_scope)
+                self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
                     prompt,
                     self._repo_root,
-                    "Scoping round 2/3 with Claude",
-                    reasoning_effort_override=claude_effort,
+                    self._scoping_message("claude_responds", "Claude is considering Codex's feedback..."),
+                    reasoning_effort_override="high",
                     model_override=claude_model,
                     resume_session_id=state.session_ids.get("scoping_claude"),
                 )
@@ -432,18 +397,20 @@ class Engine:
                 if scope_result.session_id:
                     state.session_ids["scoping_claude"] = scope_result.session_id
                 state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 2, scope_md)
-                state.scoping_round = 2
+                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 4, scope_md)
+                state.scoping_agreed = self._scope_review_agreed(scope_md)
+                state.scoping_round = 4
                 self._state_mgr.save(state)
 
-                claude_scope_md = self._artifacts.read_text(state.claude_scope_ref)
-                prompt = build_scope_final_codex_prompt(claude_scope_md, scope_md, codex_scope)
-                self._artifacts.save_prompt(f"scope-final-codex-r3-{state.run_id[:8]}.md", prompt)
+            if not state.scoping_agreed:
+                scope_md = self._artifacts.read_text(state.scope_md_ref)
+                prompt = build_scope_final_codex_prompt(claude_scope, scope_md, codex_scope)
+                self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
                 codex_result = self._invoke_adapter_text(
                     codex,
                     prompt,
                     self._repo_root,
-                    "Scoping round 3/3 with Codex xhigh",
+                    self._scoping_message("codex_final", "Codex is making its final case (xhigh)..."),
                     reasoning_effort_override=self._config.debate.escalated_codex_effort,
                     model_override=codex_model,
                     resume_session_id=state.session_ids.get("scoping_codex"),
@@ -452,30 +419,31 @@ class Engine:
                 codex_scope = codex_result.text
                 if codex_result.session_id:
                     state.session_ids["scoping_codex"] = codex_result.session_id
-                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 3, codex_scope)
+                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 5, codex_scope)
                 state.scoping_agreed = self._scope_review_agreed(codex_scope)
-                state.scoping_round = 3
+                state.scoping_round = 5
                 self._state_mgr.save(state)
 
-                if not state.scoping_agreed:
-                    prompt = build_scope_final_claude_prompt(scope_md, codex_scope)
-                    self._artifacts.save_prompt(f"scope-final-claude-{state.run_id[:8]}.md", prompt)
-                    scope_result = self._invoke_adapter_text(
-                        claude,
-                        prompt,
-                        self._repo_root,
-                        "Finalizing scope with Claude max",
-                        reasoning_effort_override=self._config.debate.escalated_claude_effort,
-                        model_override=self._config.debate.escalated_claude_model or claude_model,
-                        resume_session_id=state.session_ids.get("scoping_claude"),
-                    )
-                    scope_md = scope_result.text
-                    if scope_result.session_id:
-                        state.session_ids["scoping_claude"] = scope_result.session_id
-                    state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                    state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 3, scope_md)
-                    state.scoping_round = 3
-                    self._state_mgr.save(state)
+            if not state.scoping_agreed:
+                scope_md = self._artifacts.read_text(state.scope_md_ref)
+                prompt = build_scope_final_claude_prompt(scope_md, codex_scope)
+                self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
+                scope_result = self._invoke_adapter_text(
+                    claude,
+                    prompt,
+                    self._repo_root,
+                    self._scoping_message("claude_final", "Claude has the final word (Opus max)..."),
+                    reasoning_effort_override=self._config.debate.escalated_claude_effort,
+                    model_override=self._config.debate.escalated_claude_model or claude_model,
+                    resume_session_id=state.session_ids.get("scoping_claude"),
+                )
+                scope_md = scope_result.text
+                if scope_result.session_id:
+                    state.session_ids["scoping_claude"] = scope_result.session_id
+                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
+                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 6, scope_md)
+                state.scoping_round = 6
+                self._state_mgr.save(state)
         except BlockedOnCLI as exc:
             return self._transition(
                 state,
@@ -719,7 +687,7 @@ class Engine:
                 state,
                 retry_key="execution",
                 retries=self._retry_limit("executing"),
-                spinner_label=f"Executing full plan with {worker_name.title()} ({execution_effort})",
+                spinner_label=self._executing_message("Codex is building the implementation..."),
                 invoke=invoke_and_enforce_status,
                 initial_prompt=prompt,
             )
@@ -744,9 +712,11 @@ class Engine:
 
     def _run_review(self, state: RunState) -> RunState:
         schema = load_bundled_schema("review.schema.json")
+        debate_schema = load_bundled_schema("debate_response.schema.json")
         plan = self._require_artifact(state.plan_id)
         git_diff = redact_secret_text(self._implementation_diff(state))
         review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
+        scope_md = self._artifacts.read_text(state.scope_md_ref) if state.scope_md_ref else ""
         try:
             changed_files = self._review_changed_files(state)
         except (EngineError, OSError):
@@ -769,24 +739,20 @@ class Engine:
             reviewer_config=reviewer_config,
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
-        adapter = self._adapter_for_phase("reviewing")
-        cli_name = self._phase_cli("reviewing", config_name="reviewer")
-        review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name)
+        adapter = self._adapter("claude")
+        cli_name = "claude"
+        review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name) or "high"
         review_model = self._resolve_model_for_phase("reviewing", cli_name, state)
-        review_label = self._model_label(review_model, cli_name)
-        review_spinner = f"Reviewing with {review_label} ({review_effort or 'default'})"
-        resume_session_id = (
-            state.session_ids.get("reviewing")
-            if self._config.sessions.enable_review_resume
-            else None
-        )
+        state.session_ids.pop("reviewing", None)
+        state.debate_state = DebateState(debate_phase=ReviewDebatePhase.CLAUDE_REVIEW)
+        self._state_mgr.save(state)
 
         try:
             invoke_result = self._invoke_with_retries(
                 state,
                 retry_key="reviewing",
                 retries=self._retry_limit("reviewing"),
-                spinner_label=review_spinner,
+                spinner_label=self._reviewing_message("claude_reviews", "Claude is reviewing the implementation..."),
                 invoke=lambda current_prompt: self._invoke_adapter_json(
                     adapter,
                     current_prompt,
@@ -794,10 +760,151 @@ class Engine:
                     schema,
                     reasoning_effort_override=review_effort,
                     model_override=review_model,
-                    resume_session_id=resume_session_id,
                 ),
                 initial_prompt=review_prompt,
             )
+
+            claude_review = invoke_result.data
+            if invoke_result.session_id:
+                state.session_ids["reviewing"] = invoke_result.session_id
+            state.review_id = self._artifacts.save_review(state.run_id, claude_review)
+            self._record_debate_round(
+                state,
+                actor="claude",
+                model_used=review_model,
+                effort_used=review_effort,
+                position="issues_confirmed" if self._review_has_issues(claude_review) else "issues_dismissed",
+                reasoning=str(claude_review.get("summary") or ""),
+                issues=self._issues_from_review(claude_review),
+            )
+            if state.debate_state:
+                state.debate_state.debate_phase = ReviewDebatePhase.CODEX_REVIEW
+            self._state_mgr.save(state)
+
+            codex_prompt = build_review_codex_prompt(
+                task_description=state.normalized_task or state.task,
+                scope_md=scope_md,
+                plan_json=json_block(plan),
+                git_diff=git_diff,
+                step_results_json=json_block(self._load_step_results(state)),
+                review_json=json_block(claude_review),
+                schema_json=json_block(schema),
+            )
+            self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
+            codex = self._adapter("codex")
+            codex_model = self._resolve_model_for_phase("reviewing", "codex", state)
+            codex_result = self._invoke_with_retries(
+                state,
+                retry_key="reviewing-codex",
+                retries=self._retry_limit("reviewing"),
+                spinner_label=self._reviewing_message("codex_reviews", "Codex is forming its verdict..."),
+                invoke=lambda current_prompt: self._invoke_adapter_json(
+                    codex,
+                    current_prompt,
+                    review_root,
+                    schema,
+                    reasoning_effort_override="high",
+                    model_override=codex_model,
+                ),
+                initial_prompt=codex_prompt,
+            )
+            codex_review = codex_result.data
+            self._record_debate_round(
+                state,
+                actor="codex",
+                model_used=codex_model,
+                effort_used="high",
+                position="issues_confirmed" if self._review_has_issues(codex_review) else "issues_dismissed",
+                reasoning=str(codex_review.get("summary") or ""),
+                issues=self._issues_from_review(codex_review),
+            )
+
+            claude_has_issues = self._review_has_issues(claude_review)
+            codex_has_issues = self._review_has_issues(codex_review)
+            if claude_has_issues and codex_has_issues and self._review_issues_match(
+                claude_review,
+                codex_review,
+            ):
+                if state.debate_state:
+                    state.debate_state.final_verdict = "fix"
+                    state.debate_state.consolidated_issues = self._issues_from_review(claude_review)
+                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                self._state_mgr.save(state)
+                return self._debate_resolve_fix(state)
+            if not claude_has_issues and not codex_has_issues:
+                if state.debate_state:
+                    state.debate_state.final_verdict = "pass"
+                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                self._state_mgr.save(state)
+                return self._debate_resolve_pass(state)
+
+            scenario = self._review_disagreement_scenario(claude_has_issues, codex_has_issues)
+            if state.debate_state:
+                state.debate_state.disagreement_case = scenario
+                state.debate_state.debate_phase = ReviewDebatePhase.ESCALATION
+            self._state_mgr.save(state)
+            final_prompt = build_review_final_claude_prompt(
+                task_description=state.normalized_task or state.task,
+                scope_md=scope_md,
+                plan_json=json_block(plan),
+                git_diff=git_diff,
+                step_results_json=json_block(self._load_step_results(state)),
+                claude_review_json=json_block(claude_review),
+                codex_review_json=json_block(codex_review),
+                scenario=scenario,
+                schema_json=json_block(debate_schema),
+            )
+            self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
+            final_result = self._invoke_with_retries(
+                state,
+                retry_key="review-final-claude",
+                retries=self._retry_limit("reviewing"),
+                spinner_label=self._reviewing_message("claude_final", "Claude Opus is making the final review call..."),
+                invoke=lambda current_prompt: self._invoke_adapter_json(
+                    self._adapter("claude"),
+                    current_prompt,
+                    review_root,
+                    debate_schema,
+                    reasoning_effort_override=self._config.debate.escalated_claude_effort,
+                    model_override=self._config.debate.escalated_claude_model or review_model,
+                    resume_session_id=(
+                        state.session_ids.get("reviewing")
+                        if self._config.sessions.enable_review_resume
+                        else None
+                    ),
+                ),
+                initial_prompt=final_prompt,
+            )
+            final = final_result.data
+            if final_result.session_id:
+                state.session_ids["reviewing"] = final_result.session_id
+            final_position = str(final.get("position") or "")
+            final_issues = final.get("issues") if isinstance(final.get("issues"), list) else []
+            self._record_debate_round(
+                state,
+                actor="claude",
+                model_used=self._config.debate.escalated_claude_model or review_model,
+                effort_used=self._config.debate.escalated_claude_effort,
+                position=final_position,
+                reasoning=str(final.get("reasoning") or ""),
+                issues=final_issues,
+            )
+            if final_position in {"issues_confirmed", "issues_accepted"}:
+                if state.debate_state:
+                    state.debate_state.final_verdict = "fix"
+                    state.debate_state.consolidated_issues = (
+                        final_issues
+                        or self._issues_from_review(claude_review)
+                        or self._issues_from_review(codex_review)
+                    )
+                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                self._state_mgr.save(state)
+                return self._debate_resolve_fix(state)
+            if state.debate_state:
+                state.debate_state.final_verdict = "pass"
+                state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+            self._state_mgr.save(state)
+            return self._debate_resolve_pass(state)
         except BlockedOnCLI as exc:
             return self._transition(
                 state,
@@ -807,14 +914,6 @@ class Engine:
             )
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
-
-        result = invoke_result.data
-        if invoke_result.session_id:
-            state.session_ids["reviewing"] = invoke_result.session_id
-        state.review_id = self._artifacts.save_review(state.run_id, result)
-        state.error = None
-        self._state_mgr.save(state)
-        return self._transition(state, WorkflowStatus.ADJUDICATING)
 
     def _run_heuristic_scan(
         self,
@@ -893,275 +992,6 @@ class Engine:
             )
         return list(dict.fromkeys(path.strip() for path in result.stdout.splitlines() if path.strip()))
 
-    def _run_adjudication(self, state: RunState) -> RunState:
-        if state.debate_state and state.debate_state.debate_phase == DebatePhase.USER_TIEBREAKER:
-            return self._debate_user_tiebreaker(state)
-        if state.debate_state is None:
-            state.debate_state = DebateState()
-            self._state_mgr.save(state)
-
-        try:
-            phase = DebatePhase(state.debate_state.debate_phase)
-            if phase == DebatePhase.INITIAL_ADJUDICATION:
-                return self._debate_initial_adjudication(state)
-            if phase == DebatePhase.CASE_A_ESCALATION:
-                return self._debate_case_a_escalation(state)
-            if phase == DebatePhase.CASE_B_ROUND1:
-                return self._debate_case_b_round1(state)
-            if phase == DebatePhase.CASE_B_CODEX_REBUTTAL:
-                return self._debate_case_b_codex_rebuttal(state)
-            if phase == DebatePhase.CASE_B_FINAL_CLAUDE:
-                return self._debate_case_b_final_claude(state)
-            if phase == DebatePhase.USER_TIEBREAKER:
-                return self._debate_user_tiebreaker(state)
-            if state.debate_state.final_verdict == "fix":
-                return self._debate_resolve_fix(state)
-            return self._debate_resolve_pass(state)
-        except BlockedOnCLI as exc:
-            return self._transition(
-                state,
-                WorkflowStatus.BLOCKED_ON_CLI,
-                current_phase=WorkflowStatus.ADJUDICATING.value,
-                error=str(exc),
-            )
-        except StepFailure as exc:
-            return self._fail_run(state, self._format_step_failure(exc))
-
-    def _debate_initial_adjudication(self, state: RunState) -> RunState:
-        schema = load_bundled_schema("adjudication.schema.json")
-        validator = Validator(self._repo_root)
-        review = self._require_artifact(state.review_id)
-        task_description = state.normalized_task or state.task
-        prompt = build_adjudication_prompt(
-            task_description=task_description,
-            review_json=json_block(review),
-            step_results_json=json_block(self._load_step_results(state)),
-            schema_json=json_block(schema),
-        )
-        self._artifacts.save_prompt(f"adjudication-{state.run_id[:8]}.md", prompt)
-        adapter = self._adapter_for_phase("adjudicating")
-        cli_name = self._phase_cli("adjudicating", config_name="adjudicator")
-
-        try:
-            invoke_result = self._invoke_with_retries(
-                state,
-                retry_key="adjudicating",
-                retries=self._retry_limit("adjudicating"),
-                spinner_label="Adjudicating result",
-                invoke=lambda current_prompt: InvokeResult(
-                    data=self._validate_adjudication_result(
-                        self._coerce_invoke_result(
-                            self._invoke_adapter_json(
-                                adapter,
-                                current_prompt,
-                                self._repo_root,
-                                schema,
-                                reasoning_effort_override=self._resolve_effort_for_phase(
-                                    state,
-                                    "adjudicating",
-                                    cli_name,
-                                ),
-                                model_override=self._resolve_model_for_phase(
-                                    "adjudicating",
-                                    cli_name,
-                                    state,
-                                ),
-                            )
-                        ).data,
-                        validator,
-                    )
-                ),
-                initial_prompt=prompt,
-            )
-        except BlockedOnCLI as exc:
-            return self._transition(
-                state,
-                WorkflowStatus.BLOCKED_ON_CLI,
-                current_phase=WorkflowStatus.ADJUDICATING.value,
-                error=str(exc),
-            )
-        except StepFailure as exc:
-            return self._fail_run(state, self._format_step_failure(exc))
-
-        result = invoke_result.data
-        state.adjudication_id = self._artifacts.save_adjudication(state.run_id, result)
-        self._artifacts.clear_feedback(state.run_id, "adjudication")
-        review_has_issues = self._review_has_issues(review)
-        codex_has_issues = result.get("verdict") != "PASS"
-        self._record_debate_round(
-            state,
-            actor="codex",
-            model_used=self._resolve_model_for_phase("adjudicating", cli_name, state),
-            effort_used=self._resolve_effort_for_phase(state, "adjudicating", cli_name),
-            position="issues_confirmed" if codex_has_issues else "issues_dismissed",
-            reasoning=str(result.get("reasoning") or ""),
-            issues=self._issues_from_adjudication(result),
-        )
-
-        if review_has_issues and codex_has_issues:
-            state.debate_state.final_verdict = "fix"
-            state.debate_state.consolidated_issues = self._issues_from_review(review) + self._issues_from_adjudication(result)
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_fix(state)
-        if not review_has_issues and not codex_has_issues:
-            state.debate_state.final_verdict = "pass"
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_pass(state)
-        if review_has_issues:
-            state.debate_state.disagreement_case = "A"
-            state.debate_state.debate_phase = DebatePhase.CASE_A_ESCALATION
-        else:
-            state.debate_state.disagreement_case = "B"
-            state.debate_state.debate_phase = DebatePhase.CASE_B_ROUND1
-            state.debate_state.consolidated_issues = self._issues_from_adjudication(result)
-        self._state_mgr.save(state)
-        return self._run_adjudication(state)
-
-    def _debate_case_a_escalation(self, state: RunState) -> RunState:
-        review = self._require_artifact(state.review_id)
-        adjudication = self._require_artifact(state.adjudication_id)
-        response = self._invoke_claude_debate(
-            state,
-            adjudication_text=json_block(adjudication),
-            prompt_label="debate-case-a-claude",
-            model=self._config.debate.escalated_claude_model,
-            effort=self._config.debate.escalated_claude_effort,
-        )
-        issues_confirmed = response["position"] == "issues_confirmed"
-        self._record_debate_round(
-            state,
-            actor="claude",
-            model_used=self._config.debate.escalated_claude_model,
-            effort_used=self._config.debate.escalated_claude_effort,
-            position=response["position"],
-            reasoning=response["reasoning"],
-            issues=response.get("issues", []),
-        )
-        state.debate_state.final_verdict = "fix" if issues_confirmed else "pass"
-        state.debate_state.consolidated_issues = response.get("issues", []) or self._issues_from_review(review)
-        state.debate_state.debate_phase = DebatePhase.RESOLVED
-        self._state_mgr.save(state)
-        return self._debate_resolve_fix(state) if issues_confirmed else self._debate_resolve_pass(state)
-
-    def _debate_case_b_round1(self, state: RunState) -> RunState:
-        adjudication = self._require_artifact(state.adjudication_id)
-        response = self._invoke_claude_debate(
-            state,
-            adjudication_text=json_block(adjudication),
-            prompt_label="debate-case-b-claude",
-            model=self._resolve_model_for_phase("reviewing", "claude", state),
-            effort=self._resolve_effort_for_phase(state, "reviewing", "claude"),
-        )
-        self._record_debate_round(
-            state,
-            actor="claude",
-            model_used=self._resolve_model_for_phase("reviewing", "claude", state),
-            effort_used=self._resolve_effort_for_phase(state, "reviewing", "claude"),
-            position=response["position"],
-            reasoning=response["reasoning"],
-            issues=response.get("issues", []),
-        )
-        if response["position"] in {"issues_confirmed", "issues_accepted"}:
-            state.debate_state.final_verdict = "fix"
-            state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_fix(state)
-        state.debate_state.debate_phase = DebatePhase.CASE_B_CODEX_REBUTTAL
-        self._state_mgr.save(state)
-        return self._run_adjudication(state)
-
-    def _debate_case_b_codex_rebuttal(self, state: RunState) -> RunState:
-        adjudication = self._require_artifact(state.adjudication_id)
-        claude_round = state.debate_state.rounds[-1] if state.debate_state and state.debate_state.rounds else None
-        response = self._invoke_codex_debate(
-            state,
-            adjudication_text=json_block(adjudication),
-            claude_rebuttal=json_block(claude_round.model_dump(mode="json") if claude_round else {}),
-            effort=self._config.debate.escalated_codex_effort,
-        )
-        self._record_debate_round(
-            state,
-            actor="codex",
-            model_used=self._resolve_model_for_phase("adjudicating", "codex", state),
-            effort_used=self._config.debate.escalated_codex_effort,
-            position=response["position"],
-            reasoning=response["reasoning"],
-            issues=response.get("issues", []),
-        )
-        if response["position"] == "issues_dismissed":
-            state.debate_state.final_verdict = "pass"
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_pass(state)
-        state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
-        state.debate_state.debate_phase = DebatePhase.CASE_B_FINAL_CLAUDE
-        self._state_mgr.save(state)
-        return self._run_adjudication(state)
-
-    def _debate_case_b_final_claude(self, state: RunState) -> RunState:
-        adjudication = self._require_artifact(state.adjudication_id)
-        response = self._invoke_claude_debate(
-            state,
-            adjudication_text=json_block(adjudication),
-            prompt_label="debate-case-b-final-claude",
-            model=self._config.debate.escalated_claude_model,
-            effort=self._config.debate.escalated_claude_effort,
-        )
-        self._record_debate_round(
-            state,
-            actor="claude",
-            model_used=self._config.debate.escalated_claude_model,
-            effort_used=self._config.debate.escalated_claude_effort,
-            position=response["position"],
-            reasoning=response["reasoning"],
-            issues=response.get("issues", []),
-        )
-        if response["position"] in {"issues_confirmed", "issues_accepted"}:
-            state.debate_state.final_verdict = "fix"
-            state.debate_state.consolidated_issues = response.get("issues", []) or state.debate_state.consolidated_issues
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_fix(state)
-        state.debate_state.debate_phase = DebatePhase.USER_TIEBREAKER
-        self._state_mgr.save(state)
-        return self._transition(
-            state,
-            WorkflowStatus.PAUSED,
-            current_phase=WorkflowStatus.ADJUDICATING.value,
-            error="Claude and Codex disagree. Awaiting debate tiebreaker decision.",
-        )
-
-    def _debate_user_tiebreaker(self, state: RunState) -> RunState:
-        decision = self._artifacts.consume_approval_decision(state.run_id, "debate_tiebreaker")
-        if decision is None:
-            return self._transition(
-                state,
-                WorkflowStatus.PAUSED,
-                current_phase=WorkflowStatus.ADJUDICATING.value,
-                error="Awaiting debate tiebreaker decision.",
-            )
-        self._artifacts.clear_processed_approval(state.run_id, "debate_tiebreaker")
-        value = str(decision.get("decision") or "")
-        if value == "fix":
-            state.debate_state.final_verdict = "fix"
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_fix(state)
-        if value == "pass":
-            state.debate_state.final_verdict = "pass"
-            state.debate_state.debate_phase = DebatePhase.RESOLVED
-            self._state_mgr.save(state)
-            return self._debate_resolve_pass(state)
-        return self._transition(
-            state,
-            WorkflowStatus.PAUSED,
-            current_phase=WorkflowStatus.ADJUDICATING.value,
-            error="Tiebreaker decision must be 'fix' or 'pass'.",
-        )
-
     def _debate_resolve_fix(self, state: RunState) -> RunState:
         issues = state.debate_state.consolidated_issues if state.debate_state else []
         feedback = "Issues to fix:\n" + json_block(issues)
@@ -1177,88 +1007,6 @@ class Engine:
         state.error = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.MERGING)
-
-    def _invoke_claude_debate(
-        self,
-        state: RunState,
-        *,
-        adjudication_text: str,
-        prompt_label: str,
-        model: str | None,
-        effort: str | None,
-    ) -> dict[str, Any]:
-        schema = load_bundled_schema("debate_response.schema.json")
-        review = self._require_artifact(state.review_id)
-        prompt = build_debate_claude_rebuttal_prompt(
-            review=json_block(review),
-            adjudication=adjudication_text,
-            debate_history=self._debate_history_text(state),
-            task=state.normalized_task or state.task,
-            diff=redact_secret_text(self._implementation_diff(state)),
-            schema_json=json_block(schema),
-        )
-        self._artifacts.save_prompt(f"{prompt_label}-{state.run_id[:8]}.md", prompt)
-        adapter = self._adapter("claude")
-        invoke_result = self._invoke_with_retries(
-            state,
-            retry_key=prompt_label,
-            retries=self._retry_limit("adjudicating"),
-            spinner_label="Claude debate",
-            invoke=lambda current_prompt: self._invoke_adapter_json(
-                adapter,
-                current_prompt,
-                self._repo_root,
-                schema,
-                reasoning_effort_override=effort,
-                model_override=model,
-                resume_session_id=(
-                    state.session_ids.get("reviewing")
-                    if self._config.sessions.enable_review_resume
-                    else None
-                ),
-            ),
-            initial_prompt=prompt,
-        )
-        if invoke_result.session_id:
-            state.session_ids["reviewing"] = invoke_result.session_id
-            self._state_mgr.save(state)
-        return invoke_result.data
-
-    def _invoke_codex_debate(
-        self,
-        state: RunState,
-        *,
-        adjudication_text: str,
-        claude_rebuttal: str,
-        effort: str | None,
-    ) -> dict[str, Any]:
-        schema = load_bundled_schema("debate_response.schema.json")
-        prompt = build_debate_codex_rebuttal_prompt(
-            adjudication=adjudication_text,
-            claude_rebuttal=claude_rebuttal,
-            debate_history=self._debate_history_text(state),
-            task=state.normalized_task or state.task,
-            step_results=json_block(self._load_step_results(state)),
-            schema_json=json_block(schema),
-        )
-        self._artifacts.save_prompt(f"debate-codex-{state.run_id[:8]}.md", prompt)
-        adapter = self._adapter("codex")
-        invoke_result = self._invoke_with_retries(
-            state,
-            retry_key="debate-codex",
-            retries=self._retry_limit("adjudicating"),
-            spinner_label="Codex debate",
-            invoke=lambda current_prompt: self._invoke_adapter_json(
-                adapter,
-                current_prompt,
-                self._repo_root,
-                schema,
-                reasoning_effort_override=effort,
-                model_override=self._resolve_model_for_phase("adjudicating", "codex", state),
-            ),
-            initial_prompt=prompt,
-        )
-        return invoke_result.data
 
     def _record_debate_round(
         self,
@@ -1313,17 +1061,31 @@ class Engine:
         ]
 
     @staticmethod
-    def _issues_from_adjudication(adjudication: dict[str, Any]) -> list[dict[str, Any]]:
-        if adjudication.get("verdict") == "PASS":
-            return []
-        description = (
-            adjudication.get("rework_feedback")
-            or adjudication.get("replan_feedback")
-            or adjudication.get("failure_reason")
-            or adjudication.get("reasoning")
-            or "Adjudicator requested fixes."
-        )
-        return [{"severity": "major", "description": str(description)}]
+    def _review_issues_match(claude_review: dict[str, Any], codex_review: dict[str, Any]) -> bool:
+        claude_signatures = Engine._issue_signatures(claude_review)
+        codex_signatures = Engine._issue_signatures(codex_review)
+        if not claude_signatures or not codex_signatures:
+            return bool(claude_review.get("blocks_merge") and codex_review.get("blocks_merge"))
+        return bool(claude_signatures & codex_signatures)
+
+    @staticmethod
+    def _issue_signatures(review: dict[str, Any]) -> set[tuple[str, str]]:
+        signatures: set[tuple[str, str]] = set()
+        for finding in review.get("findings", []):
+            if not isinstance(finding, dict):
+                continue
+            location = str(finding.get("file") or "").strip()
+            description = " ".join(str(finding.get("description") or "").lower().split())
+            signatures.add((location, description[:120]))
+        return signatures
+
+    @staticmethod
+    def _review_disagreement_scenario(claude_has_issues: bool, codex_has_issues: bool) -> str:
+        if claude_has_issues and codex_has_issues:
+            return "B: Claude and Codex both found issues but disagree on specifics."
+        if claude_has_issues:
+            return "C: Claude found blocking issues and Codex did not."
+        return "D: Claude passed the implementation and Codex found blocking issues."
 
     def _debate_history_text(self, state: RunState) -> str:
         if not state.debate_state or not state.debate_state.rounds:
@@ -1334,7 +1096,7 @@ class Engine:
 
     def _run_merge(self, state: RunState) -> RunState:
         base_branch = self._config.worktree.base_branch
-        task_summary = self._task_summary(state.task)
+        task_summary = self._commit_summary_for_state(state)
 
         if not state.is_workspace:
             try:
@@ -1391,8 +1153,6 @@ class Engine:
         self._artifacts.clear_processed_approval(state.run_id, "merge")
         state.error = None
         self._state_mgr.save(state)
-        if self._ui:
-            self._ui.print_commit_suggestions(commands)
         return self._transition(state, WorkflowStatus.DONE)
 
     def _transition(
@@ -1427,12 +1187,16 @@ class Engine:
     ) -> InvokeResult:
         prompt = initial_prompt
         attempt = 0
+        last_error = "the previous attempt failed"
         while True:
             try:
                 if self._ui is None:
                     result = self._coerce_invoke_result(invoke(prompt))
                 else:
-                    with self._ui.phase_spinner(f"{spinner_label} (attempt {attempt + 1}/{retries})"):
+                    label = spinner_label
+                    if attempt > 0:
+                        label = f"Retrying after: {last_error}"
+                    with self._ui.phase_spinner(label):
                         result = self._coerce_invoke_result(invoke(prompt))
             except BlockedOnCLI:
                 raise
@@ -1444,6 +1208,7 @@ class Engine:
                     raise
                 if on_retry is not None:
                     on_retry()
+                last_error = self._format_step_failure(exc).splitlines()[0][:120]
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
                     error_message=self._format_step_failure(exc),
@@ -1660,7 +1425,6 @@ class Engine:
                 "planning": "planner",
                 "executing": "worker",
                 "reviewing": "reviewer",
-                "adjudicating": "adjudicator",
             }[phase_name],
         )
         return self._adapter(cli_name)
@@ -1727,6 +1491,21 @@ class Engine:
         if len(parts) > 1 and parts[1]:
             return parts[1].title()
         return model
+
+    def _scoping_message(self, key: str, fallback: str) -> str:
+        if self._ui and hasattr(self._ui, "scoping_message"):
+            return self._ui.scoping_message(key)
+        return fallback
+
+    def _reviewing_message(self, key: str, fallback: str) -> str:
+        if self._ui and hasattr(self._ui, "reviewing_message"):
+            return self._ui.reviewing_message(key)
+        return fallback
+
+    def _executing_message(self, fallback: str) -> str:
+        if self._ui and hasattr(self._ui, "executing_message"):
+            return self._ui.executing_message()
+        return fallback
 
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries
@@ -1912,7 +1691,7 @@ class Engine:
         return "\n\n".join(all_diffs)
 
     def _generate_workspace_commands(self, state: RunState) -> list[str]:
-        task_summary = self._task_summary(state.task)
+        task_summary = self._commit_summary_for_state(state)
         base_branch = self._config.worktree.base_branch
         commands: list[str] = []
         if not state.workspace_repos:
@@ -1974,7 +1753,6 @@ class Engine:
         return {
             "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
-            "debate_tiebreaker": WorkflowStatus.ADJUDICATING.value,
         }[gate]
 
     def _workspace_feedback_prefix(self, state: RunState) -> str:
@@ -1986,8 +1764,19 @@ class Engine:
         return f"\n\nWorkspace changes at time of failure:\n{aggregated}\n"
 
     def _task_summary(self, task: str) -> str:
-        summary = " ".join(task.split())
+        first_line = next((line.strip() for line in task.splitlines() if line.strip()), "")
+        summary = " ".join(first_line.lstrip("#").split())
         return summary[:72] if len(summary) > 72 else summary
+
+    def _commit_summary_for_state(self, state: RunState) -> str:
+        if state.normalized_task and state.normalized_task.strip() != state.task.strip():
+            return self._task_summary(state.normalized_task)
+        if state.scope_md_ref:
+            frontmatter = self._parse_scope_frontmatter(self._artifacts.read_text(state.scope_md_ref))
+            normalized = str(frontmatter.get("normalized_task") or "").strip()
+            if normalized:
+                return self._task_summary(normalized)
+        return self._task_summary(state.task)
 
     @staticmethod
     def _extract_stdout_error_messages(stdout: str) -> list[str]:
@@ -2093,16 +1882,3 @@ class Engine:
             lines.extend(["", "## Debate", self._debate_history_text(state) or "<none>"])
         ref = self._artifacts.save_execution_history(state.run_id, "\n".join(lines) + "\n")
         return ref
-
-    @staticmethod
-    def _validate_adjudication_result(
-        result: dict[str, Any],
-        validator: Validator,
-    ) -> dict[str, Any]:
-        try:
-            return validator.validate_adjudication(result)
-        except ValidationError as exc:
-            raise StepFailure(
-                "Adjudication validation failed",
-                validation_error=exc.detail or str(exc),
-            ) from exc

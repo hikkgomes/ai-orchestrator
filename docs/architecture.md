@@ -104,9 +104,7 @@ States:
 | `PLANNING` | Planner CLI invocation in progress |
 | `APPROVAL_PLAN` | Waiting for human to approve/reject the plan |
 | `EXECUTING` | Worker CLI executing the full plan |
-| `REVIEWING` | Reviewer CLI analyzing implementation |
-| `ADJUDICATING` | Adjudicator CLI deciding pass/rework/replan/fail |
-| `APPROVAL_MERGE` | Waiting for human to approve/reject the merge |
+| `REVIEWING` | Claude review, Codex cross-check, and final review decision |
 | `MERGING` | Merging worktree branch into base branch |
 | `DONE` | Run completed successfully |
 | `FAILED` | Unrecoverable error or loop limit exceeded |
@@ -208,7 +206,7 @@ watchdog_timeout = 3600
 planner = "claude"
 worker = "codex"
 reviewer = "claude"
-adjudicator = "codex"
+scoper = "claude"
 
 [routing.claude]
 reasoning_effort = "high"

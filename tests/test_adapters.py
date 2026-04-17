@@ -258,7 +258,7 @@ class TestClaudeAdapter:
         parsed = ClaudeAdapter._lenient_parse("```json\n{\"a\": 1}\n```")
         assert parsed == {"a": 1}
 
-    def test_extract_payload_handles_fenced_result(self):
+    def test_extract_payload_handles_fenced_result(self, caplog):
         envelope = {
             "type": "result",
             "subtype": "success",
@@ -271,14 +271,15 @@ class TestClaudeAdapter:
             ),
         }
 
-        with pytest.warns(RuntimeWarning, match="envelope result field"):
+        with caplog.at_level("DEBUG", logger="ai_orchestrator.adapters.claude"):
             extracted, session_id = ClaudeAdapter._extract_payload(envelope)
 
         assert extracted["normalized_task"] == "Do something"
         assert session_id is None
         assert "type" not in extracted
+        assert "envelope result field" in caplog.text
 
-    def test_extract_payload_handles_fenced_result_with_leading_whitespace(self):
+    def test_extract_payload_handles_fenced_result_with_leading_whitespace(self, caplog):
         envelope = {
             "type": "result",
             "subtype": "success",
@@ -291,14 +292,15 @@ class TestClaudeAdapter:
             ),
         }
 
-        with pytest.warns(RuntimeWarning, match="envelope result field"):
+        with caplog.at_level("DEBUG", logger="ai_orchestrator.adapters.claude"):
             extracted, session_id = ClaudeAdapter._extract_payload(envelope)
 
         assert extracted["normalized_task"] == "Do something"
         assert session_id is None
         assert "type" not in extracted
+        assert "envelope result field" in caplog.text
 
-    def test_parse_stdout_handles_fenced_result_in_envelope(self):
+    def test_parse_stdout_handles_fenced_result_in_envelope(self, caplog):
         envelope = {
             "type": "result",
             "subtype": "success",
@@ -316,12 +318,13 @@ class TestClaudeAdapter:
         }
         adapter = ClaudeAdapter.__new__(ClaudeAdapter)
 
-        with pytest.warns(RuntimeWarning, match="envelope result field"):
+        with caplog.at_level("DEBUG", logger="ai_orchestrator.adapters.claude"):
             parsed, session_id = adapter._parse_stdout(json.dumps(envelope))
 
         assert parsed["normalized_task"] == "Do something"
         assert session_id is None
         assert "type" not in parsed
+        assert "envelope result field" in caplog.text
 
     def test_timeout_terminates_process_before_blocking(
         self,

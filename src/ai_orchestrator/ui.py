@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sys
 import time
 from contextlib import contextmanager
@@ -14,10 +15,8 @@ from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
-    BarColumn,
     Progress,
     SpinnerColumn,
-    TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
 )
@@ -39,7 +38,6 @@ ACTIVE_STATES = {
     WorkflowStatus.PLANNING.value,
     WorkflowStatus.EXECUTING.value,
     WorkflowStatus.REVIEWING.value,
-    WorkflowStatus.ADJUDICATING.value,
     WorkflowStatus.MERGING.value,
     WorkflowStatus.BLOCKED_ON_CLI.value,
     WorkflowStatus.CONFLICT.value,
@@ -61,7 +59,6 @@ _STATUS_STYLES = {
     WorkflowStatus.APPROVAL_PLAN.value: "yellow",
     WorkflowStatus.EXECUTING.value: "magenta",
     WorkflowStatus.REVIEWING.value: "blue",
-    WorkflowStatus.ADJUDICATING.value: "bright_blue",
     WorkflowStatus.MERGING.value: "green",
     WorkflowStatus.DONE.value: "bold green",
     WorkflowStatus.FAILED.value: "bold red",
@@ -70,6 +67,89 @@ _STATUS_STYLES = {
     WorkflowStatus.BLOCKED_ON_CLI.value: "bold yellow",
     WorkflowStatus.CONFLICT.value: "bold red",
 }
+
+_PHASE_SUBTITLES = {
+    WorkflowStatus.SCOPING.value: "Claude and Codex are sizing up the task",
+    WorkflowStatus.PLANNING.value: "Claude is designing the approach",
+    WorkflowStatus.APPROVAL_PLAN.value: "Your turn to review",
+    WorkflowStatus.EXECUTING.value: "Codex is building",
+    WorkflowStatus.REVIEWING.value: "Time for a code review",
+    WorkflowStatus.MERGING.value: "Almost there",
+    WorkflowStatus.DONE.value: "All done",
+}
+
+_SCOPING_MESSAGES = {
+    "claude_creates": [
+        "Claude is drafting the scope...",
+        "Claude is sizing up the task...",
+        "Claude is mapping out the work...",
+    ],
+    "codex_creates": [
+        "Codex is forming its own opinion...",
+        "Codex is doing independent research...",
+        "Codex is building a second perspective...",
+    ],
+    "codex_compares": [
+        "Codex is reviewing Claude's scope...",
+        "Codex is looking for blind spots...",
+        "Codex is cross-checking the scope...",
+    ],
+    "codex_agrees": [
+        "Codex signs off on the scope.",
+        "Codex gives the green light.",
+        "Codex and Claude are aligned.",
+    ],
+    "codex_disagrees": [
+        "Codex pushes back on Claude's scope.",
+        "Codex has a different take...",
+        "Codex spotted some issues.",
+    ],
+    "claude_responds": [
+        "Claude is considering Codex's feedback...",
+        "Claude is defending its position...",
+        "Claude is reviewing the pushback...",
+    ],
+    "codex_final": [
+        "Codex is making its final case (xhigh)...",
+        "Codex digs deeper on the disagreement...",
+        "Codex escalates its reasoning...",
+    ],
+    "claude_final": [
+        "Claude has the final word (Opus max)...",
+        "Claude is making the call...",
+        "Final scope decision by Claude Opus...",
+    ],
+}
+
+_EXECUTING_MESSAGES = [
+    "Codex is building the implementation...",
+    "Codex is writing code...",
+    "Codex is working through the plan...",
+    "Implementation in progress...",
+    "Codex is on it...",
+]
+
+_REVIEWING_MESSAGES = {
+    "claude_reviews": [
+        "Claude is reviewing the implementation...",
+        "Claude is checking the code...",
+        "Claude is running the review pipeline...",
+    ],
+    "codex_reviews": [
+        "Codex is forming its verdict...",
+        "Codex is cross-checking Claude's review...",
+        "Codex is doing an independent assessment...",
+    ],
+    "claude_final": [
+        "Claude Opus is making the final review call...",
+        "Claude Opus is resolving the review debate...",
+        "Claude is making the code review decision...",
+    ],
+}
+
+
+def random_message(pool: list[str]) -> str:
+    return random.choice(pool)
 
 
 class OrchestratorUI:
@@ -107,10 +187,21 @@ class OrchestratorUI:
 
     def phase_banner(self, phase: str, detail: str = "") -> None:
         """Print a visible phase separator."""
-        label = f"--- {phase} ---"
-        if detail:
-            label += f"  ({detail})"
+        subtitle = detail or _PHASE_SUBTITLES.get(phase, "")
+        label = f"--- {phase.title().replace('_', ' ')}"
+        if subtitle:
+            label += f": {subtitle}"
+        label += " ---"
         self.stderr_console.print(f"\n[bold cyan]{label}[/bold cyan]")
+
+    def scoping_message(self, key: str) -> str:
+        return random_message(_SCOPING_MESSAGES.get(key, ["Scoping the task..."]))
+
+    def executing_message(self) -> str:
+        return random_message(_EXECUTING_MESSAGES)
+
+    def reviewing_message(self, key: str) -> str:
+        return random_message(_REVIEWING_MESSAGES.get(key, ["Reviewing the implementation..."]))
 
     def print_plan(
         self,
@@ -159,39 +250,27 @@ class OrchestratorUI:
         log_entries: Iterable[dict[str, Any]] | None = None,
     ) -> RenderableType:
         """Build a status dashboard renderable."""
-        payload_plan = self._coerce_plan(plan) if plan else None
         results = list(step_results or [])
-        logs = list(log_entries or [])
-        total_steps = len(payload_plan.implementation_steps) if payload_plan else max(len(results), 1)
-        completed_steps = min(len(results), total_steps)
+        logs = [
+            entry
+            for entry in list(log_entries or [])
+            if str(entry.get("event", "")) not in {"state_saved"}
+        ]
 
         summary = Table.grid(expand=True)
         summary.add_column(justify="left", ratio=1)
         summary.add_column(justify="left", ratio=2)
         summary.add_row("Run", state.run_id)
-        summary.add_row("Task", self._truncate(state.task, 88))
+        summary.add_row("Task", Text(state.task, overflow="fold"))
         summary.add_row("Phase", state.current_phase)
         summary.add_row("Status", Text(state.status, style=self._status_style(state.status)))
         summary.add_row("Updated", state.updated_at)
-        if state.normalized_task:
-            summary.add_row("Normalized", self._truncate(state.normalized_task, 88))
+        if state.normalized_task and state.normalized_task.strip() != state.task.strip():
+            summary.add_row("Normalized", Text(state.normalized_task, overflow="fold"))
         if state.complexity_tier:
             summary.add_row("Complexity", state.complexity_tier)
         if state.error:
             summary.add_row("Error", Text(self._truncate(state.error, 88), style="bold red"))
-
-        progress = Progress(
-            TextColumn("[bold]Progress[/bold]"),
-            BarColumn(bar_width=None, complete_style="green", finished_style="green"),
-            TaskProgressColumn(),
-            console=self.console,
-            expand=True,
-        )
-        progress.add_task(
-            "steps",
-            total=max(total_steps, 1),
-            completed=completed_steps,
-        )
 
         details = Table(
             box=box.SIMPLE_HEAVY,
@@ -206,7 +285,7 @@ class OrchestratorUI:
             details.add_row(
                 str(result.get("step_number", index)),
                 str(result.get("status", "unknown")),
-                self._truncate(str(result.get("summary", "")), 72),
+                Text(str(result.get("summary", "")), overflow="fold"),
             )
         if not results:
             details.add_row("-", "-", "No execution result yet.")
@@ -228,13 +307,17 @@ class OrchestratorUI:
 
         panels: list[RenderableType] = [
             Panel(summary, title="Run Summary", border_style=self._status_style(state.status)),
-            Panel(progress, title="Execution"),
             Panel(details, title="Execution Results"),
-            Panel(event_table, title="Recent Events"),
         ]
+        if state.status == WorkflowStatus.DONE.value:
+            panels.insert(1, Panel("Complete", title="Execution", border_style="green"))
+        elif state.status in ACTIVE_STATES:
+            panels.insert(1, Panel("In progress", title="Execution", border_style="cyan"))
+        if logs:
+            panels.append(Panel(event_table, title="Recent Events"))
         if state.debate_state and self._enum_value(
             state.debate_state.debate_phase
-        ) != "INITIAL_ADJUDICATION":
+        ) != "claude_review":
             debate = state.debate_state
             debate_table = Table.grid(expand=True)
             debate_table.add_column(justify="left", ratio=1)
@@ -247,15 +330,15 @@ class OrchestratorUI:
                 debate_table.add_row(
                     "Latest",
                     (
-                        f"{latest.actor}: {latest.position} - "
-                        f"{self._truncate(latest.reasoning, 60)}"
+                    f"{latest.actor}: {latest.position} - "
+                    f"{self._truncate(latest.reasoning, 60)}"
                     ),
                 )
             panels.insert(
                 2,
                 Panel(
                     debate_table,
-                    title="Adjudication Debate",
+                    title="Review Debate",
                     border_style="yellow",
                 ),
             )

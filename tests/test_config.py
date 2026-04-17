@@ -19,7 +19,6 @@ class TestLoadConfig:
         assert cfg.orchestrator.max_retries == 3
         assert cfg.orchestrator.watchdog_timeout == 3600
         assert cfg.routing.planner == "claude"
-        assert cfg.routing.adjudicator == "codex"
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
         assert cfg.approval.require_plan_approval is True
@@ -44,7 +43,6 @@ class TestLoadConfig:
             "\n".join(
                 [
                     "[routing]",
-                    'adjudicator = "codex"',
                     "[routing.phases.reviewing]",
                     'reasoning_effort = "max"',
                     "[routing.phases.executing]",

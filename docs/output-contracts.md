@@ -1,6 +1,6 @@
 # Output Contracts
 
-> **Design status: UPDATED** as of 2026-04-09.
+> **Design status: UPDATED** as of 2026-04-17.
 
 Workflow phases exchange JSON artifacts validated against schemas in `schemas/` plus a small set of markdown artifacts with machine-readable frontmatter. This document defines the contracts, their fields, and how they flow between phases.
 
@@ -13,8 +13,7 @@ Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter
 Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
 Phase 4 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
 Phase 5 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
-Phase 6 (Adjudication) → adjudications/adj-<uuid>.json      [adjudication.schema.json]
-Phase 6 debate rounds  → adjudications/debate-round-*.json   [debate_response.schema.json]
+Review debate rounds   → adjudications/debate-round-*.json  [debate_response.schema.json]
 ```
 
 ---
@@ -81,7 +80,7 @@ Produced by the executor once for the full plan. Consumed by the reviewer.
 
 ## Review Contract (`review.schema.json`)
 
-Produced by the reviewer. Consumed by the adjudicator.
+Produced by Claude and Codex during REVIEWING. Consumed by the engine.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -104,9 +103,9 @@ Produced by the reviewer. Consumed by the adjudicator.
 
 ---
 
-## Adjudication Contract (`adjudication.schema.json`)
+## Legacy Adjudication Contract (`adjudication.schema.json`)
 
-Produced by the adjudicator. Consumed by the orchestrator engine.
+Kept for backward compatibility with old runs. New runs do not create adjudication artifacts because Codex's verdict is represented as a review-shaped artifact inside REVIEWING.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -126,7 +125,7 @@ Produced by the adjudicator. Consumed by the orchestrator engine.
 
 ## Debate Response Contract (`debate_response.schema.json`)
 
-Produced by Claude/Codex rebuttal rounds. Consumed by the adjudication debate state machine.
+Produced by Claude final review-debate rounds. Consumed by the merged REVIEWING state machine.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -151,11 +150,11 @@ Internal use only — not produced by AI. Stored in `state/run-<uuid>.json`.
 | `complexity_tier` | string or null | Scoping-derived routing tier |
 | `step_results` | array of string | References to execution result artifacts (legacy field name) |
 | `review_id` | string or null | Reference to current review |
-| `adjudication_id` | string or null | Reference to current adjudication |
+| `adjudication_id` | string or null | Legacy reference to an old adjudication artifact |
 | `fix_iteration_count` | integer | How many incremental fix-planning cycles so far |
 | `session_ids` | object | Vendor session IDs keyed by phase |
 | `scope_md_ref` | string or null | Canonical scope markdown reference |
-| `debate_state` | object or null | Adjudication debate progress |
+| `debate_state` | object or null | Review debate progress |
 | `retry_counts` | object | Per-phase retry counts, plus legacy per-step keys |
 | `created_at` | string (ISO 8601) | When the run started |
 | `updated_at` | string (ISO 8601) | Last state change |
@@ -199,7 +198,7 @@ All artifact files use this pattern:
 ```
 
 Where:
-- `type`: `plan`, `step-<n>`, `review`, `adj`
+- `type`: `plan`, `step-<n>`, `review`, `debate-round`; `adj` is legacy
 - `uuid`: first 8 characters of a UUIDv4
 
 Example: `step-3-a1b2c3d4.json`

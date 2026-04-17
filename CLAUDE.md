@@ -55,11 +55,11 @@ tests/                  # unit + integration tests
 
 ## Canonical workflow states
 
-INIT → SCOPING → PLANNING → APPROVAL_PLAN → EXECUTING → REVIEWING → ADJUDICATING → MERGING → DONE
+INIT → SCOPING → PLANNING → APPROVAL_PLAN → EXECUTING → REVIEWING → MERGING → DONE
 
 Also: FAILED, TERMINATED, PAUSED, BLOCKED_ON_CLI, CONFLICT
 
-SCOPING is a Claude/Codex debate that produces `scope.md`. PLANNING and REVIEWING preserve Claude session IDs for refinement and adjudication debate. ADJUDICATING is a debate tree; fixes return to planning as incremental work on top of the existing worktree.
+SCOPING is a Claude/Codex debate that produces `scope.md`. PLANNING preserves Claude session IDs for refinement. REVIEWING includes Claude review, Codex cross-check, and one Claude Opus/max final decision when they disagree; fixes return to planning as incremental work on top of the existing worktree.
 
 ## Coding standards
 
@@ -96,7 +96,6 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 | `plan.md` | PLANNING (first plan) | `plans/plan-<uuid>.json` |
 | `implement.md` | EXECUTING (full plan) | `results/execution-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
-| `adjudicate.md` | ADJUDICATING | `adjudications/adj-<uuid>.json` |
 | `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<uuid>.json` (new) |
 
 Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired into the current engine:
@@ -127,5 +126,5 @@ as a workflow agent:
 | File | Role | Phase |
 |---|---|---|
 | `implementer.md` | Step executor | EXECUTING |
-| `adjudicator.md` | Adjudicator | ADJUDICATING |
+| `adjudicator.md` | Legacy review cross-checker | REVIEWING |
 | `repairer.md` | Fix executor | EXECUTING (incremental fix loop) |

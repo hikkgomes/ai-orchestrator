@@ -4,7 +4,7 @@
 > CLI: `claude -p` (default); configurable via `routing.reviewer`
 > Output artifact: `reviews/review-<uuid>.json`
 > Schema: `schemas/review.schema.json`
-> State transitions: REVIEWING → ADJUDICATING
+> State transitions: REVIEWING → MERGING or PLANNING
 
 ---
 
@@ -65,8 +65,9 @@ is the primary quality gate and must not be under-resourced.
 - Minor issues are noted as `minor` or `info` findings but do not block merge
 
 **Do NOT escalate to human** from within this phase. Record findings and produce
-the structured verdict. The adjudicator decides whether human intervention is
-needed.
+the structured verdict. The engine compares Claude's review with Codex's
+review-shaped cross-check and uses Claude Opus/max for the final call when they
+disagree.
 
 **Never set `verdict = "reject"` for style-only issues.** `reject` is reserved
 for correctness failures and security issues. Style issues are `minor` or `info`.
@@ -207,6 +208,7 @@ Fix the error and try again. The full original prompt follows.
 
 - Validated review is written to `reviews/review-<uuid>.json`.
 - `review_id` is stored in run state.
-- Engine transitions to ADJUDICATING regardless of verdict. The adjudicator
-  makes the PASS/REWORK/REPLAN/FAIL decision; the reviewer only provides findings.
+- Codex performs an independent review-shaped cross-check inside REVIEWING.
+- If both pass, the engine transitions to MERGING. If blocking issues are
+  accepted, the engine returns to PLANNING for an incremental fix plan.
 - If review schema validation fails after `max_retries`: run transitions to FAILED.

@@ -67,7 +67,6 @@ class RoutingConfig:
     planner: str = "claude"
     worker: str = "codex"
     reviewer: str = "claude"
-    adjudicator: str = "codex"
     scoper: str = "claude"
     claude: ClaudeRoutingConfig = field(default_factory=ClaudeRoutingConfig)
     codex: CodexRoutingConfig = field(default_factory=CodexRoutingConfig)
@@ -103,13 +102,11 @@ def _default_complexity_phase_map(
     planning: str,
     executing: str,
     reviewing: str,
-    adjudicating: str,
 ) -> dict[str, str]:
     return {
         "planning": planning,
         "executing": executing,
         "reviewing": reviewing,
-        "adjudicating": adjudicating,
     }
 
 
@@ -120,7 +117,6 @@ class ComplexityRoutingConfig:
             planning="medium",
             executing="medium",
             reviewing="high",
-            adjudicating="medium",
         )
     )
     moderate: dict[str, str] = field(
@@ -128,7 +124,6 @@ class ComplexityRoutingConfig:
             planning="high",
             executing="high",
             reviewing="high",
-            adjudicating="medium",
         )
     )
     complex: dict[str, str] = field(
@@ -136,7 +131,6 @@ class ComplexityRoutingConfig:
             planning="high",
             executing="xhigh",
             reviewing="high",
-            adjudicating="high",
         )
     )
     architectural: dict[str, str] = field(
@@ -144,7 +138,6 @@ class ComplexityRoutingConfig:
             planning="max",
             executing="xhigh",
             reviewing="high",
-            adjudicating="high",
         )
     )
 
@@ -261,11 +254,17 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
         if "feasibility_checker" in routing:
             deprecated_keys.append("routing.feasibility_checker")
             routing.pop("feasibility_checker", None)
+        if "adjudicator" in routing:
+            deprecated_keys.append("routing.adjudicator")
+            routing.pop("adjudicator", None)
         phases = routing.get("phases")
         if isinstance(phases, dict):
             if "feasibility" in phases:
                 deprecated_keys.append("routing.phases.feasibility")
                 phases.pop("feasibility", None)
+            if "adjudicating" in phases:
+                deprecated_keys.append("routing.phases.adjudicating")
+                phases.pop("adjudicating", None)
             for phase_name, phase_data in phases.items():
                 if isinstance(phase_data, dict) and "max_turns" in phase_data:
                     deprecated_keys.append(f"routing.phases.{phase_name}.max_turns")
@@ -277,6 +276,9 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
             if isinstance(tier_data, dict) and "feasibility" in tier_data:
                 deprecated_keys.append(f"complexity_routing.{tier_name}.feasibility")
                 tier_data.pop("feasibility", None)
+            if isinstance(tier_data, dict) and "adjudicating" in tier_data:
+                deprecated_keys.append(f"complexity_routing.{tier_name}.adjudicating")
+                tier_data.pop("adjudicating", None)
 
     if deprecated_keys:
         warnings.warn(
@@ -353,7 +355,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             _validate_int(f"orchestrator.{key}", orchestrator[key], minimum=1)
 
     routing = _expect_mapping("routing", data.get("routing"))
-    for key in ("planner", "worker", "reviewer", "adjudicator", "scoper"):
+    for key in ("planner", "worker", "reviewer", "scoper"):
         if key in routing:
             _validate_choice(f"routing.{key}", routing[key], {"claude", "codex"})
 
@@ -496,7 +498,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             "planner",
             "worker",
             "reviewer",
-            "adjudicator",
             "scoper",
             "claude",
             "codex",
@@ -507,7 +508,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     _warn_unknown_keys(
         "routing.phases",
         routing_phases,
-        {"scoping", "planning", "executing", "reviewing", "adjudicating"},
+        {"scoping", "planning", "executing", "reviewing"},
     )
     phase_overrides: dict[str, PhaseRoutingOverride] = {}
     for phase_name, phase_data in routing_phases.items():
@@ -546,7 +547,7 @@ def load_config(repo_root: Path | None = None) -> Config:
         _warn_unknown_keys(
             f"complexity_routing.{tier_name}",
             getattr(complexity_routing, tier_name),
-            {"planning", "executing", "reviewing", "adjudicating"},
+            {"planning", "executing", "reviewing"},
         )
 
     config = Config(
@@ -559,7 +560,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             planner=routing_data.get("planner", "claude"),
             worker=routing_data.get("worker", "codex"),
             reviewer=routing_data.get("reviewer", "claude"),
-            adjudicator=routing_data.get("adjudicator", "codex"),
             scoper=routing_data.get("scoper", "claude"),
             claude=_apply_section(
                 ClaudeRoutingConfig,
