@@ -319,8 +319,13 @@ class Engine:
         summary = repo_summary(self._repo_root)
         claude = self._adapter("claude")
         codex = self._adapter("codex")
-        claude_model = self._resolve_model_for_phase("scoping", "claude", state) or "claude-sonnet-4-5-20250514"
-        codex_model = self._resolve_model_for_phase("scoping", "codex", state)
+        claude_model = self._resolve_model_for_phase("scoping", "claude", state) or "claude-sonnet-4-6"
+        codex_model_light = self._config.scoping.codex_model_light or self._resolve_model_for_phase(
+            "scoping",
+            "codex",
+            state,
+        )
+        codex_model = self._config.scoping.codex_model or self._resolve_model_for_phase("scoping", "codex", state)
 
         try:
             claude_prompt = build_prescope_claude_prompt(state.task, summary, directory_tree)
@@ -343,7 +348,7 @@ class Engine:
                         self._repo_root,
                         self._scoping_message("codex_creates", "Codex is forming its own opinion..."),
                         reasoning_effort_override="medium",
-                        model_override=codex_model,
+                        model_override=codex_model_light,
                         legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
                     ),
                 ]
@@ -367,7 +372,7 @@ class Engine:
                 prompt,
                 self._repo_root,
                 self._scoping_message("codex_compares", "Codex is reviewing Claude's scope..."),
-                reasoning_effort_override="medium",
+                reasoning_effort_override="high",
                 model_override=codex_model,
                 resume_session_id=state.session_ids.get("scoping_codex"),
                 legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
@@ -410,8 +415,8 @@ class Engine:
                     codex,
                     prompt,
                     self._repo_root,
-                    self._scoping_message("codex_final", "Codex is making its final case (xhigh)..."),
-                    reasoning_effort_override=self._config.debate.escalated_codex_effort,
+                    self._scoping_message("codex_final", "Codex is making its final case..."),
+                    reasoning_effort_override=self._config.debate.escalated_codex_effort or "high",
                     model_override=codex_model,
                     resume_session_id=state.session_ids.get("scoping_codex"),
                     legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the final scope.",
@@ -432,7 +437,7 @@ class Engine:
                     claude,
                     prompt,
                     self._repo_root,
-                    self._scoping_message("claude_final", "Claude has the final word (Opus max)..."),
+                    self._scoping_message("claude_final", "Claude has the final word (Opus xhigh)..."),
                     reasoning_effort_override=self._config.debate.escalated_claude_effort,
                     model_override=self._config.debate.escalated_claude_model or claude_model,
                     resume_session_id=state.session_ids.get("scoping_claude"),
@@ -785,7 +790,11 @@ class Engine:
             )
             self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
             codex = self._adapter("codex")
-            codex_model = self._resolve_model_for_phase("reviewing", "codex", state)
+            codex_model = self._config.debate.review_codex_model or self._resolve_model_for_phase(
+                "reviewing",
+                "codex",
+                state,
+            )
             codex_result = self._invoke_with_retries(
                 state,
                 retry_key="reviewing-codex",
@@ -848,6 +857,7 @@ class Engine:
                 schema_json=json_block(debate_schema),
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
+            final_effort = self._review_final_effort(state)
             final_result = self._invoke_with_retries(
                 state,
                 retry_key="review-final-claude",
@@ -858,7 +868,7 @@ class Engine:
                     current_prompt,
                     review_root,
                     debate_schema,
-                    reasoning_effort_override=self._config.debate.escalated_claude_effort,
+                    reasoning_effort_override=final_effort,
                     model_override=self._config.debate.escalated_claude_model or review_model,
                     resume_session_id=(
                         state.session_ids.get("reviewing")
@@ -877,7 +887,7 @@ class Engine:
                 state,
                 actor="claude",
                 model_used=self._config.debate.escalated_claude_model or review_model,
-                effort_used=self._config.debate.escalated_claude_effort,
+                effort_used=final_effort,
                 position=final_position,
                 reasoning=str(final.get("reasoning") or ""),
                 issues=final_issues,
@@ -1457,6 +1467,16 @@ class Engine:
                 return tier_map[phase_name]
 
         return getattr(getattr(self._config.routing, cli_name), "reasoning_effort", "") or None
+
+    @staticmethod
+    def _review_final_effort(state: RunState) -> str:
+        return {
+            "simple": "high",
+            "moderate": "high",
+            "complex": "high",
+            "architectural": "xhigh",
+            "extramax": "max",
+        }.get(state.complexity_tier or "moderate", "high")
 
     def _resolve_model_for_phase(
         self,

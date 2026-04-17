@@ -44,7 +44,7 @@ REPOSITORY STRUCTURE:
 ```
 ---
 normalized_task: "..."
-complexity_tier: simple|moderate|complex|architectural
+complexity_tier: simple|moderate|complex|architectural|extramax
 actionable: true|false
 key_files:
   - path/or/area

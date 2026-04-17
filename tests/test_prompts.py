@@ -85,6 +85,7 @@ def test_build_scoping_prompt_renders_complexity_rules():
 
     assert "RAW TASK:\nFix typo in README" in prompt
     assert '"simple": single-file or config change' in prompt
+    assert '"extramax": exceptionally difficult architecture' in prompt
     assert "OUTPUT SCHEMA:" in prompt
 
 
@@ -99,6 +100,7 @@ def test_build_scoping_prompt_includes_required_field_checklist():
     assert "REQUIRED FIELDS" in prompt
     assert '"actionable"' in prompt
     assert '"complexity_tier"' in prompt
+    assert '"extramax"' in prompt
 
 
 def test_build_full_execution_prompt_codex_renders_single_result_path():

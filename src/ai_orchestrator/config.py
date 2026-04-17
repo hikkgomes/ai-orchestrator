@@ -60,6 +60,7 @@ class PhaseRoutingOverride:
     model_moderate: str = ""
     model_complex: str = ""
     model_architectural: str = ""
+    model_extramax: str = ""
 
 
 @dataclass
@@ -82,13 +83,16 @@ class ApprovalConfig:
 @dataclass
 class ScopingConfig:
     enabled: bool = True
+    codex_model_light: str = "gpt-5.4-mini"
+    codex_model: str = "gpt-5.4"
 
 
 @dataclass
 class DebateConfig:
-    escalated_claude_model: str = "claude-opus-4-5-20250514"
-    escalated_claude_effort: str = "max"
-    escalated_codex_effort: str = "xhigh"
+    escalated_claude_model: str = "claude-opus-4-7"
+    escalated_claude_effort: str = "xhigh"
+    escalated_codex_effort: str = "high"
+    review_codex_model: str = "gpt-5.4"
 
 
 @dataclass
@@ -134,6 +138,13 @@ class ComplexityRoutingConfig:
         )
     )
     architectural: dict[str, str] = field(
+        default_factory=lambda: _default_complexity_phase_map(
+            planning="xhigh",
+            executing="high",
+            reviewing="high",
+        )
+    )
+    extramax: dict[str, str] = field(
         default_factory=lambda: _default_complexity_phase_map(
             planning="max",
             executing="xhigh",
@@ -380,6 +391,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
                 "model_moderate",
                 "model_complex",
                 "model_architectural",
+                "model_extramax",
             }:
                 _validate_string(f"routing.phases.{phase_name}.{key}", value)
             elif key == "cli":
@@ -394,9 +406,17 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
+    for key in ("codex_model_light", "codex_model"):
+        if key in scoping:
+            _validate_string(f"scoping.{key}", scoping[key])
 
     debate = _expect_mapping("debate", data.get("debate"))
-    for key in ("escalated_claude_model", "escalated_claude_effort", "escalated_codex_effort"):
+    for key in (
+        "escalated_claude_model",
+        "escalated_claude_effort",
+        "escalated_codex_effort",
+        "review_codex_model",
+    ):
         if key in debate:
             _validate_string(f"debate.{key}", debate[key])
 
@@ -524,6 +544,7 @@ def load_config(repo_root: Path | None = None) -> Config:
                 "model_moderate",
                 "model_complex",
                 "model_architectural",
+                "model_extramax",
             },
         )
         phase_overrides[phase_name] = _apply_section(
@@ -536,14 +557,14 @@ def load_config(repo_root: Path | None = None) -> Config:
     _warn_unknown_keys(
         "complexity_routing",
         complexity_routing_data,
-        {"simple", "moderate", "complex", "architectural"},
+        {"simple", "moderate", "complex", "architectural", "extramax"},
     )
     complexity_routing = _apply_section(
         ComplexityRoutingConfig,
         complexity_routing_data,
         section_name="complexity_routing",
     )
-    for tier_name in ("simple", "moderate", "complex", "architectural"):
+    for tier_name in ("simple", "moderate", "complex", "architectural", "extramax"):
         _warn_unknown_keys(
             f"complexity_routing.{tier_name}",
             getattr(complexity_routing, tier_name),

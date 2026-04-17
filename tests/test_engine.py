@@ -567,6 +567,11 @@ def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, defaul
     assert codex.scoping_calls == 2
     assert state.scoping_agreed is True
     assert state.scope_md_ref is not None
+    assert claude.text_invocations[0]["model_override"] == "claude-sonnet-4-6"
+    assert codex.text_invocations[0]["model_override"] == "gpt-5.4-mini"
+    assert codex.text_invocations[0]["reasoning_effort_override"] == "medium"
+    assert codex.text_invocations[1]["model_override"] == "gpt-5.4"
+    assert codex.text_invocations[1]["reasoning_effort_override"] == "high"
 
 
 def test_scoping_reuses_claude_session_and_passes_prescope_notes(
@@ -639,6 +644,14 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
             model_override=None,
             resume_session_id=None,
         ):
+            self.text_invocations.append(
+                {
+                    "prompt": prompt,
+                    "reasoning_effort_override": reasoning_effort_override,
+                    "model_override": model_override,
+                    "resume_session_id": resume_session_id,
+                }
+            )
             self.scoping_calls += 1
             if "independently scoping" in prompt:
                 return "## Codex pre-scope\n\nThe task is implementable."
@@ -660,6 +673,10 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
     assert codex.scoping_calls == 3
     assert state.scoping_agreed is False
     assert state.scope_md_ref is not None
+    assert codex.text_invocations[2]["model_override"] == "gpt-5.4"
+    assert codex.text_invocations[2]["reasoning_effort_override"] == "high"
+    assert claude.text_invocations[-1]["model_override"] == "claude-opus-4-7"
+    assert claude.text_invocations[-1]["reasoning_effort_override"] == "xhigh"
 
 
 def test_scope_review_agreement_requires_structured_marker():
@@ -892,6 +909,9 @@ def test_review_disagreement_final_claude_decision_passes(tmp_repo, artifact_roo
     assert state.debate_state.disagreement_case == "D: Claude passed the implementation and Codex found blocking issues."
     assert state.debate_state.final_verdict == "pass"
     assert len(state.debate_state.rounds) == 3
+    assert state.debate_state.rounds[1].model_used == "gpt-5.4"
+    assert state.debate_state.rounds[2].model_used == "claude-opus-4-7"
+    assert state.debate_state.rounds[2].effort_used == "high"
     assert engine is not None
 
 
@@ -1486,8 +1506,8 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
     review_call = next(call for call in claude.invocations if call["title"] == "Review")
     execute_call = next(call for call in codex.invocations if call["title"] == "ExecutionResult")
-    assert planning_call["reasoning_effort_override"] == "max"
-    assert execute_call["reasoning_effort_override"] == "xhigh"
+    assert planning_call["reasoning_effort_override"] == "xhigh"
+    assert execute_call["reasoning_effort_override"] == "high"
     assert review_call["reasoning_effort_override"] == "max"
 
 

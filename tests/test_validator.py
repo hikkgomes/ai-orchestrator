@@ -103,6 +103,16 @@ class TestScopingValidation:
         }
         assert v.validate_scoping(scoping)["complexity_tier"] == "simple"
 
+    def test_extramax_scoping_tier_is_valid(self, tmp_path):
+        v = Validator(tmp_path)
+        scoping = {
+            "actionable": True,
+            "normalized_task": "Replace the core architecture",
+            "assumptions": [],
+            "complexity_tier": "extramax",
+        }
+        assert v.validate_scoping(scoping)["complexity_tier"] == "extramax"
+
     def test_missing_actionable_no_blocking_reason_defaults_to_true(self, tmp_path):
         v = Validator(tmp_path)
         result = v.validate_scoping({

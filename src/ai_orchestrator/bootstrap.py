@@ -29,21 +29,32 @@ reasoning_effort = "medium"
 reasoning_effort = "high"
 
 [routing.phases.planning]
-model_simple = "claude-sonnet-4-5-20250514"
-model_moderate = "claude-sonnet-4-5-20250514"
-model_complex = "claude-opus-4-5-20250514"
-model_architectural = "claude-opus-4-5-20250514"
+model_simple = "claude-sonnet-4-6"
+model_moderate = "claude-sonnet-4-6"
+model_complex = "claude-opus-4-7"
+model_architectural = "claude-opus-4-7"
+model_extramax = "claude-opus-4-7"
+
+[routing.phases.executing]
+model_simple = "gpt-5.4-mini"
+model_moderate = "gpt-5.3-codex"
+model_complex = "gpt-5.3-codex"
+model_architectural = "gpt-5.4"
+model_extramax = "gpt-5.4"
 
 [routing.phases.reviewing]
 reasoning_effort = "high"
 
 [scoping]
 enabled = true
+codex_model_light = "gpt-5.4-mini"
+codex_model = "gpt-5.4"
 
 [debate]
-escalated_claude_model = "claude-opus-4-5-20250514"
-escalated_claude_effort = "max"
-escalated_codex_effort = "xhigh"
+escalated_claude_model = "claude-opus-4-7"
+escalated_claude_effort = "xhigh"
+escalated_codex_effort = "high"
+review_codex_model = "gpt-5.4"
 
 [sessions]
 enable_planning_resume = true

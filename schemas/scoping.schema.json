@@ -37,7 +37,8 @@
         "simple",
         "moderate",
         "complex",
-        "architectural"
+        "architectural",
+        "extramax"
       ]
     }
   },

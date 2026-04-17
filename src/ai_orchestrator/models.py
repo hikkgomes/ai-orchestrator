@@ -44,6 +44,7 @@ class ComplexityTier(str, Enum):
     MODERATE = "moderate"
     COMPLEX = "complex"
     ARCHITECTURAL = "architectural"
+    EXTRAMAX = "extramax"
 
 
 class StepStatus(str, Enum):

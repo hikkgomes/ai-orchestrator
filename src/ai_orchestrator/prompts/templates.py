@@ -122,7 +122,8 @@ def build_scoping_prompt(
         '   - "simple": single-file or config change, no architectural impact\n'
         '   - "moderate": multi-file change, clear scope\n'
         '   - "complex": cross-cutting, tricky dependencies, weak test coverage\n'
-        '   - "architectural": system design change, new patterns, ambiguous requirements\n\n'
+        '   - "architectural": system design change, new patterns, ambiguous requirements\n'
+        '   - "extramax": exceptionally difficult architecture or migration work that requires extended context and maximum reasoning\n\n'
         "4. When in doubt: default to actionable = true. Record your uncertainty in\n"
         '   "assumptions". Do not block unless you are certain.\n\n'
         "OUTPUT SCHEMA:\n"
@@ -131,7 +132,7 @@ def build_scoping_prompt(
         '  - "actionable": true or false (never omit - use true if uncertain)\n'
         '  - "normalized_task": string\n'
         '  - "assumptions": array (use [] if none)\n'
-        '  - "complexity_tier": one of "simple", "moderate", "complex", "architectural"\n\n'
+        '  - "complexity_tier": one of "simple", "moderate", "complex", "architectural", "extramax"\n\n'
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
@@ -672,7 +673,7 @@ def _prescope_prompt(
             "Return ONLY markdown for the canonical scope.md.\n\n"
             "The output MUST start with YAML frontmatter containing these keys:\n"
             "normalized_task, complexity_tier, actionable, key_files, context.\n"
-            "complexity_tier must be one of simple, moderate, complex, architectural.\n"
+            "complexity_tier must be one of simple, moderate, complex, architectural, extramax.\n"
             "actionable must be true or false. key_files must be a YAML list.\n\n"
             "After the frontmatter, include concise notes on assumptions, risks, and\n"
             "important boundaries for planning.\n\n"
@@ -684,7 +685,7 @@ def _prescope_prompt(
             "Your markdown should include:\n"
             "- normalized task\n"
             "- actionable: true or false\n"
-            "- complexity tier: simple, moderate, complex, or architectural\n"
+            "- complexity tier: simple, moderate, complex, architectural, or extramax\n"
             "- key files or areas likely involved\n"
             "- assumptions and risks\n\n"
         )

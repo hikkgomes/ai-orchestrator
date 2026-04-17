@@ -26,7 +26,7 @@ Produced by the Claude/Codex scoping debate. Consumed by the planner and engine.
 |---|---|---|---|
 | `actionable` | boolean | yes | Whether the task can proceed |
 | `normalized_task` | string | yes | Normalized task text |
-| `complexity_tier` | enum: simple/moderate/complex/architectural | yes | Task-level routing tier |
+| `complexity_tier` | enum: simple/moderate/complex/architectural/extramax | yes | Task-level routing tier |
 | `key_files` | array of string | yes | Likely relevant files/areas |
 | `context` | string | yes | Assumptions, constraints, or blocking context |
 

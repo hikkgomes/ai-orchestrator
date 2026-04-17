@@ -21,10 +21,18 @@ class TestLoadConfig:
         assert cfg.routing.planner == "claude"
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
+        assert cfg.scoping.codex_model_light == "gpt-5.4-mini"
+        assert cfg.scoping.codex_model == "gpt-5.4"
         assert cfg.approval.require_plan_approval is True
         assert cfg.routing.claude.reasoning_effort == "high"
         assert cfg.routing.codex.reasoning_effort == "medium"
-        assert cfg.complexity_routing.architectural["executing"] == "xhigh"
+        assert cfg.complexity_routing.architectural["planning"] == "xhigh"
+        assert cfg.complexity_routing.architectural["executing"] == "high"
+        assert cfg.complexity_routing.extramax["planning"] == "max"
+        assert cfg.complexity_routing.extramax["executing"] == "xhigh"
+        assert cfg.debate.escalated_claude_model == "claude-opus-4-7"
+        assert cfg.debate.escalated_claude_effort == "xhigh"
+        assert cfg.debate.review_codex_model == "gpt-5.4"
 
     def test_repo_toml_overrides_defaults(self, tmp_path):
         """Repo-level aio.toml values override defaults."""
@@ -48,10 +56,14 @@ class TestLoadConfig:
                     "[routing.phases.executing]",
                     'cli = "claude"',
                     'model = "claude-sonnet"',
+                    'model_extramax = "claude-opus"',
                     "[scoping]",
                     "enabled = false",
+                    'codex_model_light = "gpt-5.4-mini"',
                     "[complexity_routing.simple]",
                     'reviewing = "max"',
+                    "[complexity_routing.extramax]",
+                    'planning = "max"',
                 ]
             )
         )
@@ -61,8 +73,11 @@ class TestLoadConfig:
         assert cfg.routing.phases["reviewing"].reasoning_effort == "max"
         assert cfg.routing.phases["executing"].cli == "claude"
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
+        assert cfg.routing.phases["executing"].model_extramax == "claude-opus"
         assert cfg.scoping.enabled is False
+        assert cfg.scoping.codex_model_light == "gpt-5.4-mini"
         assert cfg.complexity_routing.simple["reviewing"] == "max"
+        assert cfg.complexity_routing.extramax["planning"] == "max"
 
     def test_global_toml_is_merged_before_repo_overrides(self, tmp_path, monkeypatch):
         global_root = tmp_path / "global"
