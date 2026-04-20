@@ -31,6 +31,15 @@ try:  # pragma: no cover - optional dependency fallback for minimal test envs
     import questionary
 except Exception:  # pragma: no cover
     questionary = None
+try:  # pragma: no cover - optional dependency fallback for minimal test envs
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+
+    _prompt_toolkit_available = True
+except Exception:  # pragma: no cover
+    PromptSession = None
+    KeyBindings = None
+    _prompt_toolkit_available = False
 
 
 ACTIVE_STATES = {
@@ -163,6 +172,7 @@ class OrchestratorUI:
     ) -> None:
         self.console = console or Console()
         self.stderr_console = stderr_console or Console(stderr=True)
+        self._last_banner_phase: str | None = None
 
     @contextmanager
     def phase_spinner(self, description: str) -> Generator[None, None, None]:
@@ -183,6 +193,9 @@ class OrchestratorUI:
 
     def phase_transition(self, phase: str) -> None:
         """Emit a persistent phase transition status line."""
+        if phase == self._last_banner_phase:
+            return
+        self._last_banner_phase = phase
         self.phase_banner(phase)
 
     def phase_banner(self, phase: str, detail: str = "") -> None:
@@ -486,6 +499,27 @@ class OrchestratorUI:
 
     def rejection_reason(self, default: str) -> str:
         """Prompt for a rejection reason."""
+        if _prompt_toolkit_available and sys.stdin.isatty():
+            bindings = KeyBindings()
+
+            @bindings.add("enter")
+            def submit(event) -> None:
+                event.current_buffer.validate_and_handle()
+
+            @bindings.add("escape", "enter")
+            def newline(event) -> None:
+                event.current_buffer.insert_text("\n")
+
+            self.stderr_console.print(
+                "[yellow]Enter feedback (Enter to submit, Alt+Enter for new line):[/yellow]"
+            )
+            session = PromptSession(
+                key_bindings=bindings,
+                multiline=True,
+                enable_open_in_editor=True,
+            )
+            response = session.prompt("  > ")
+            return (response or "").strip() or default
         return Prompt.ask("Rejection reason", default=default, console=self.console)
 
     def print_file_updates(self, actions: Iterable[tuple[str, str]]) -> None:

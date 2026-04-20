@@ -11,13 +11,13 @@ Every orchestrated run moves through these phases in order. Each phase is a dist
 ```
 INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
           ^                    ^                    |
-          |                    |                    +-- soft reject
+          |                    |                    +-- request changes
           |                    +---- incremental fixes <---- REVIEWING(debate)
           |
           +---- reject/update task while paused at SCOPING
 
 REVIEWING(pass) -> MERGING -> DONE
-APPROVAL_PLAN -> TERMINATED on full reject
+APPROVAL_PLAN -> TERMINATED on reject and terminate
 ```
 
 ---
@@ -53,7 +53,7 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 | Output | `plans/plan-<uuid>.json` validated against `plan.schema.json` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
-| Session | Fresh on first entry; `claude --resume <session-id>` for soft-reject refinements |
+| Session | Fresh on first entry; `claude --resume <session-id>` for change-request refinements |
 
 **Prompt construction:**
 
@@ -94,8 +94,8 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 Plan approval has three outcomes:
 
 - `orch approve <run-id> plan` proceeds.
-- `orch reject <run-id> plan --reason "..."` soft-rejects and resumes the same planning session with the feedback.
-- `orch reject <run-id> plan --full --reason "..."` writes execution history and transitions to `TERMINATED`.
+- `orch reject <run-id> plan --reason "..."` requests changes and resumes the same planning session with the feedback.
+- `orch reject <run-id> plan --full --reason "..."` writes execution history and terminates the run.
 
 **Skip behavior:** If `require_plan_approval = false`, this phase is skipped and the engine transitions directly to EXECUTING.
 
@@ -252,10 +252,10 @@ The engine does not create worktrees. It inspects each configured repo in place,
 ```
 INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXECUTING
               (debate)     │   ▲          │                  │
-                           │   │          │ (full-reject)    ▼
+                           │   │          │ (reject and terminate)    ▼
                            │   │          ▼              REVIEWING
                            │   │       TERMINATED            │
-                           │   └── (soft-reject) ───────┐   │
+                           │   └── (request changes) ───┐   │
                            │                            └───┘
                            └── (fix needed, preserved worktree)
                                                               │ PASS
@@ -263,7 +263,7 @@ INIT ──▶ SCOPING ──▶ PLANNING ──▶ APPROVAL_PLAN ──▶ EXEC
                                                            MERGING ──▶ DONE
 
 Any state ──▶ FAILED         (unrecoverable error)
-Any state ──▶ TERMINATED     (user full-reject)
+Any state ──▶ TERMINATED     (user reject and terminate)
 Any state ──▶ PAUSED         (approval gate)
 Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth refresh)
 ```

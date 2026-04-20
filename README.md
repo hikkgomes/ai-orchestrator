@@ -176,7 +176,7 @@ orch clean --all
 ```
 SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
                          ^                    |
-                         |                    +-- soft reject
+                         |                    +-- request changes
                          +---- incremental fixes <---- REVIEWING(debate)
                                                           |
                                                           v
@@ -186,8 +186,8 @@ SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
 Phase summary:
 
 1. Scoping: Claude and Codex scope independently, then run a bounded 3-6 prompt debate that produces a canonical `scope.md`.
-2. Planning: Claude generates a step-by-step plan and resumes the same session on soft-reject feedback.
-3. Plan approval: you approve, soft-reject with comments, or full-reject and terminate.
+2. Planning: Claude generates a step-by-step plan and resumes the same session on change-request feedback.
+3. Plan approval: you approve, request changes with comments, or reject and terminate.
 4. Execution: Codex or Claude implements the approved plan in one session.
 5. Review: Claude reviews the resulting diff, Codex performs an independent cross-check, and Claude Opus/max makes the final call if they disagree.
 6. Handoff: `orch` stages the final diff and prints suggested git commands. It does not auto-commit for you.
@@ -277,7 +277,7 @@ Notes:
 
 - Complexity-based effort selection is built in.
 - Per-phase overrides in `[routing.phases.*]` win over complexity defaults.
-- Global rework/replan loop limits have been removed. Plan soft-reject and fix-planning loops are operator-driven.
+- Global rework/replan loop limits have been removed. Plan change-request and fix-planning loops are operator-driven.
 - `watchdog_timeout` is a global hung-process safety net, not a per-phase runtime budget.
 
 ## Repo Files and Runtime Artifacts

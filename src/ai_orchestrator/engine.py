@@ -384,6 +384,18 @@ class Engine:
             state.scoping_agreed = self._scope_review_agreed(codex_scope)
             state.scoping_round = 3
             self._state_mgr.save(state)
+            if self._ui:
+                message_key = "codex_agrees" if state.scoping_agreed else "codex_disagrees"
+                self._ui.info(
+                    self._scoping_message(
+                        message_key,
+                        (
+                            "Codex signs off on the scope."
+                            if state.scoping_agreed
+                            else "Codex pushes back on Claude's scope."
+                        ),
+                    )
+                )
 
             if not state.scoping_agreed:
                 scope_md = self._artifacts.read_text(state.scope_md_ref)
@@ -406,6 +418,11 @@ class Engine:
                 state.scoping_agreed = self._scope_review_agreed(scope_md)
                 state.scoping_round = 4
                 self._state_mgr.save(state)
+                if self._ui:
+                    if state.scoping_agreed:
+                        self._ui.info("Claude accepts Codex's feedback and updates the scope.")
+                    else:
+                        self._ui.info("Claude stands firm; sending reasoning back to Codex.")
 
             if not state.scoping_agreed:
                 scope_md = self._artifacts.read_text(state.scope_md_ref)
@@ -428,6 +445,11 @@ class Engine:
                 state.scoping_agreed = self._scope_review_agreed(codex_scope)
                 state.scoping_round = 5
                 self._state_mgr.save(state)
+                if self._ui:
+                    if state.scoping_agreed:
+                        self._ui.info(self._scoping_message("codex_agrees", "Codex gives the green light."))
+                    else:
+                        self._ui.info("Still no agreement; Claude Opus will make the final call.")
 
             if not state.scoping_agreed:
                 scope_md = self._artifacts.read_text(state.scope_md_ref)
@@ -449,6 +471,8 @@ class Engine:
                 state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 6, scope_md)
                 state.scoping_round = 6
                 self._state_mgr.save(state)
+                if self._ui:
+                    self._ui.info("Claude Opus has made the final scope decision.")
         except BlockedOnCLI as exc:
             return self._transition(
                 state,
@@ -466,6 +490,8 @@ class Engine:
         actionable = self._coerce_bool(frontmatter.get("actionable"), default=True)
         state.error = None
         self._state_mgr.save(state)
+        if self._ui and state.complexity_tier:
+            self._ui.info(f"Complexity assessed as: {state.complexity_tier}")
 
         if actionable:
             return self._transition(state, WorkflowStatus.PLANNING)
@@ -775,6 +801,12 @@ class Engine:
                 reasoning=str(claude_review.get("summary") or ""),
                 issues=self._issues_from_review(claude_review),
             )
+            claude_has_issues = self._review_has_issues(claude_review)
+            if self._ui:
+                if claude_has_issues:
+                    self._ui.info("Claude found issues in the implementation.")
+                else:
+                    self._ui.info("Claude's review came back clean.")
             if state.debate_state:
                 state.debate_state.debate_phase = ReviewDebatePhase.CODEX_REVIEW
             self._state_mgr.save(state)
@@ -821,8 +853,17 @@ class Engine:
                 issues=self._issues_from_review(codex_review),
             )
 
-            claude_has_issues = self._review_has_issues(claude_review)
             codex_has_issues = self._review_has_issues(codex_review)
+            if self._ui:
+                if codex_has_issues:
+                    if claude_has_issues:
+                        self._ui.info("Codex also found issues.")
+                    else:
+                        self._ui.info("Codex disagrees: it found issues Claude missed.")
+                elif claude_has_issues:
+                    self._ui.info("Codex disagrees: it thinks the issues are not real.")
+                else:
+                    self._ui.info("Codex agrees with Claude.")
             if claude_has_issues and codex_has_issues and self._review_issues_match(
                 claude_review,
                 codex_review,
@@ -832,12 +873,16 @@ class Engine:
                     state.debate_state.consolidated_issues = self._issues_from_review(claude_review)
                     state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
                 self._state_mgr.save(state)
+                if self._ui:
+                    self._ui.info("Issues confirmed; sending back for fixes.")
                 return self._debate_resolve_fix(state)
             if not claude_has_issues and not codex_has_issues:
                 if state.debate_state:
                     state.debate_state.final_verdict = "pass"
                     state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
                 self._state_mgr.save(state)
+                if self._ui:
+                    self._ui.info("Implementation approved; moving to merge.")
                 return self._debate_resolve_pass(state)
 
             scenario = self._review_disagreement_scenario(claude_has_issues, codex_has_issues)
@@ -902,11 +947,15 @@ class Engine:
                     )
                     state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
                 self._state_mgr.save(state)
+                if self._ui:
+                    self._ui.info("Issues confirmed; sending back for fixes.")
                 return self._debate_resolve_fix(state)
             if state.debate_state:
                 state.debate_state.final_verdict = "pass"
                 state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
             self._state_mgr.save(state)
+            if self._ui:
+                self._ui.info("Implementation approved; moving to merge.")
             return self._debate_resolve_pass(state)
         except BlockedOnCLI as exc:
             return self._transition(

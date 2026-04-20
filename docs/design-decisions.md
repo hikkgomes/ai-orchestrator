@@ -138,7 +138,7 @@ This document records decisions made during design, including responses to the f
 
 ## DD-10: Remove global rework/replan loop limits
 
-**Decision:** The review quality loop remains, but global `max_rework_loops` and `max_replan_loops` are removed. Fix cycles are worktree-preserving incremental plans, and human soft-reject loops are intentionally unbounded.
+**Decision:** The review quality loop remains, but global `max_rework_loops` and `max_replan_loops` are removed. Fix cycles are worktree-preserving incremental plans, and human change-request loops are intentionally unbounded.
 
 **Context:** Finding 12 suggested cutting to "one planner, one executor, one optional review gate." This would remove the automated quality feedback loop, which is the core differentiator of this tool over a simple script.
 
