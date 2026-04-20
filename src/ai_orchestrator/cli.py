@@ -9,6 +9,10 @@ from pathlib import Path
 from uuid import uuid4
 
 import click
+try:  # pragma: no cover - optional in minimal environments
+    import questionary
+except Exception:  # pragma: no cover
+    questionary = None
 try:  # pragma: no cover - optional in minimal test environments
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
@@ -18,6 +22,7 @@ except ImportError:  # pragma: no cover
     FileHistory = None
     KeyBindings = None
 from rich.console import RenderableType
+from rich.panel import Panel
 
 from . import __version__
 from .artifacts import ArtifactStore
@@ -162,6 +167,114 @@ def _load_plan_artifact(store: ArtifactStore, plan_ref: str) -> dict[str, object
     if plan_ref.endswith(".md"):
         return store.read_text(plan_ref)
     return store.read_json(plan_ref)
+
+
+def _select_choice(prompt: str, choices: list[str], *, default: str | None = None) -> str | None:
+    if questionary is not None and sys.stdin.isatty():
+        return questionary.select(prompt, choices=choices, default=default).ask()
+    click_choices = click.Choice(choices)
+    return click.prompt(prompt, type=click_choices, default=default or choices[0], show_choices=True)
+
+
+def _confirm_choice(prompt: str, *, default: bool = False) -> bool:
+    if questionary is not None and sys.stdin.isatty():
+        result = questionary.confirm(prompt, default=default).ask()
+        return bool(result)
+    return click.confirm(prompt, default=default)
+
+
+def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
+    seen: list[str] = []
+    phase_override = engine._config.routing.phases.get("executing")
+    if phase_override:
+        if phase_override.model and phase_override.model not in seen:
+            seen.append(phase_override.model)
+        for tier_field in (
+            "model_simple",
+            "model_moderate",
+            "model_complex",
+            "model_architectural",
+            "model_extramax",
+        ):
+            model_name = getattr(phase_override, tier_field, "")
+            if model_name and model_name not in seen:
+                seen.append(model_name)
+    default_model = getattr(getattr(engine._config.routing, cli_name), "model", "")
+    if default_model and default_model not in seen:
+        seen.insert(0, default_model)
+    return ["(default)", *seen] if seen else ["(default)"]
+
+
+def _adjust_execution_settings(
+    ui: OrchestratorUI,
+    engine: Engine,
+    state_mgr: StateManager,
+    state: RunState,
+    run_id: str,
+) -> None:
+    ui.stderr_console.print(
+        Panel(
+            "The execution model and reasoning level are tuned for this task's complexity tier. "
+            "Overrides may increase token usage without improving quality, or reduce quality if "
+            "a weaker configuration is selected.",
+            title="Override Warning",
+            border_style="yellow",
+        )
+    )
+
+    what = _select_choice(
+        "What would you like to adjust?",
+        ["Model", "Reasoning level", "Both", "Executor (Claude/Codex)", "Cancel"],
+        default="Cancel",
+    )
+    if not what or what == "Cancel":
+        return
+
+    overrides = dict(state.execution_overrides or {})
+    current_cli = overrides.get("cli") or engine._phase_cli("executing", config_name="worker")
+
+    if what in {"Model", "Both"}:
+        selected_model = _select_choice(
+            "Select model:",
+            _available_models_for_cli(engine, current_cli),
+            default="(default)",
+        )
+        if selected_model:
+            if selected_model == "(default)":
+                overrides.pop("model", None)
+            else:
+                overrides["model"] = selected_model
+
+    if what in {"Reasoning level", "Both"}:
+        selected_effort = _select_choice(
+            "Select reasoning level:",
+            ["medium", "high", "xhigh", "max"],
+            default=(overrides.get("effort") or "high"),
+        )
+        if selected_effort:
+            overrides["effort"] = selected_effort
+
+    if what == "Executor (Claude/Codex)":
+        target_cli = "claude" if current_cli == "codex" else "codex"
+        if _confirm_choice(
+            f"Switch executor from {current_cli} to {target_cli}?",
+            default=False,
+        ):
+            overrides["cli"] = target_cli
+            selected_model = _select_choice(
+                f"Select {target_cli} model:",
+                _available_models_for_cli(engine, target_cli),
+                default="(default)",
+            )
+            if selected_model:
+                if selected_model == "(default)":
+                    overrides.pop("model", None)
+                else:
+                    overrides["model"] = selected_model
+
+    state.execution_overrides = overrides
+    state_mgr.save(state)
+    ui.info(f"Execution settings updated for run {run_id}.")
 
 
 def _start_run(
@@ -737,12 +850,16 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             plan = _load_plan_artifact(ArtifactStore(ctx.obj["artifact_root"]), state.plan_id)
             ui.print_plan(plan, run_id=state.run_id, detailed=True)
         if gate == "plan":
+            ui.print_execution_info(engine.resolve_execution_settings(state))
             choice = ui.approval_choice(
                 gate,
                 f"Run {run_id} is paused at plan approval.",
-                choices=["approve", "soft-reject", "full-reject"],
+                choices=["approve", "soft-reject", "full-reject", "adjust"],
                 default="approve",
             )
+            if choice == "adjust":
+                _adjust_execution_settings(ui, engine, state_mgr, state, run_id)
+                continue
             if choice == "approve":
                 state = engine.approve(run_id, gate)
             else:

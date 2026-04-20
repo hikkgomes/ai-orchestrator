@@ -7,7 +7,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from ai_orchestrator.bootstrap import DEFAULT_WORKFLOW
-from ai_orchestrator.cli import main
+from ai_orchestrator.cli import _available_models_for_cli, main
+from ai_orchestrator.config import Config, PhaseRoutingOverride
 from ai_orchestrator.models import RunState
 from ai_orchestrator.state import StateManager
 
@@ -441,3 +442,23 @@ def test_self_update_pip_user_falls_back_to_pip(monkeypatch):
     assert result.exit_code == 0
     assert calls[0] == ["pipx", "upgrade", "ai-orchestrator"]
     assert calls[1] == [sys.executable, "-m", "pip", "install", "--upgrade", "ai-orchestrator"]
+
+
+def test_available_models_for_cli_collects_default_and_phase_overrides():
+    cfg = Config()
+    cfg.routing.codex.model = "gpt-5.4"
+    cfg.routing.phases["executing"] = PhaseRoutingOverride(
+        model="gpt-5.4-mini",
+        model_simple="gpt-5.4-mini",
+        model_moderate="gpt-5.3-codex",
+        model_complex="gpt-5.4",
+    )
+
+    class StubEngine:
+        _config = cfg
+
+    models = _available_models_for_cli(StubEngine(), "codex")
+    assert models[0] == "(default)"
+    assert "gpt-5.4" in models
+    assert "gpt-5.4-mini" in models
+    assert "gpt-5.3-codex" in models

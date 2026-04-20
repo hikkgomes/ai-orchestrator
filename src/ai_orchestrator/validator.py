@@ -236,6 +236,15 @@ class Validator:
         """
         if "review_id" not in data:
             data = {**data, "review_id": str(uuid4())}
+        if "findings" not in data:
+            data = {**data, "findings": []}
+        if "summary" not in data and data.get("verdict"):
+            data = {**data, "summary": "No summary provided."}
+        if "blocks_merge" not in data and data.get("verdict"):
+            data = {
+                **data,
+                "blocks_merge": data["verdict"] in {"reject", "request_changes"},
+            }
 
         _validate_schema(data, self._get_schema("review.schema.json"))
 
@@ -256,6 +265,13 @@ class Validator:
                     "Blocking reviews require at least one critical or major finding",
                 )
 
+        return data
+
+    def validate_debate_response(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate a debate response artifact."""
+        if "issues" not in data:
+            data = {**data, "issues": []}
+        _validate_schema(data, self._get_schema("debate_response.schema.json"))
         return data
 
     def validate_feasibility(self, data: dict[str, Any]) -> dict[str, Any]:

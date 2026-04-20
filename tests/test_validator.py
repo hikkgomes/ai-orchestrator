@@ -55,6 +55,38 @@ class TestReviewValidation:
         with pytest.raises(ValidationError):
             v.validate_review(review)
 
+    def test_missing_structural_review_fields_are_injected(self, tmp_path):
+        v = Validator(tmp_path)
+        review = {"verdict": "approve", "score": 8}
+
+        validated = v.validate_review(review)
+
+        assert validated["findings"] == []
+        assert validated["summary"] == "No summary provided."
+        assert validated["blocks_merge"] is False
+        assert "review_id" in validated
+
+    def test_missing_verdict_still_fails_review_validation(self, tmp_path):
+        v = Validator(tmp_path)
+        review = {"score": 8}
+        with pytest.raises(ValidationError):
+            v.validate_review(review)
+
+    def test_blocks_merge_defaults_true_for_request_changes(self, tmp_path):
+        v = Validator(tmp_path)
+        review = {
+            "verdict": "request_changes",
+            "score": 7,
+            "findings": [
+                {
+                    "severity": "major",
+                    "description": "Missing required behavior.",
+                }
+            ],
+        }
+        validated = v.validate_review(review)
+        assert validated["blocks_merge"] is True
+
 
 class TestStepResultValidation:
     def test_step_number_must_match(self, tmp_path):
@@ -161,6 +193,23 @@ class TestFeasibilityValidation:
             "summary": "Can proceed.",
         }
         assert v.validate_feasibility(feasibility)["verdict"] == "go_with_warnings"
+
+
+class TestDebateResponseValidation:
+    def test_missing_issues_defaults_to_empty_list(self, tmp_path):
+        v = Validator(tmp_path)
+        response = {
+            "position": "issues_dismissed",
+            "reasoning": "The concerns are not reproducible.",
+        }
+        validated = v.validate_debate_response(response)
+        assert validated["issues"] == []
+
+    def test_missing_reasoning_still_fails(self, tmp_path):
+        v = Validator(tmp_path)
+        response = {"position": "issues_confirmed", "issues": []}
+        with pytest.raises(ValidationError):
+            v.validate_debate_response(response)
 
 # ---------------------------------------------------------------------------
 # Helpers

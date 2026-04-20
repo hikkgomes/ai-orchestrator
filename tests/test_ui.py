@@ -157,3 +157,40 @@ def test_print_scoping_result():
     output = console.export_text()
     assert "Scoping Result" in output
     assert "Fix typo in README" in output
+
+
+def test_approval_choice_panel_omits_options_line(monkeypatch):
+    ui, console, _ = _ui()
+    monkeypatch.setattr("ai_orchestrator.ui.Prompt.ask", lambda *args, **kwargs: "approve")
+
+    choice = ui.approval_choice(
+        "plan",
+        "Run paused at plan approval.",
+        choices=["approve", "soft-reject"],
+        default="approve",
+    )
+
+    assert choice == "approve"
+    output = console.export_text()
+    assert "Run paused at plan approval." in output
+    assert "Options:" not in output
+
+
+def test_print_execution_info_shows_overrides_marker():
+    ui, _, stderr_console = _ui()
+    ui.print_execution_info(
+        {
+            "complexity_tier": "moderate",
+            "cli": "codex",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "has_overrides": True,
+        }
+    )
+
+    output = stderr_console.export_text()
+    assert "Scoping complexity: moderate" in output
+    assert "Executor: Codex" in output
+    assert "Model: gpt-5.4" in output
+    assert "Reasoning: high" in output
+    assert "(overridden)" in output

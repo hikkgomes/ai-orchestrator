@@ -671,10 +671,11 @@ class Engine:
         plan_structured = self._load_plan_structured(state.plan_id)
         plan_text = self._load_plan_text(state.plan_id)
         worktree_dir = self._ensure_worktree(state)
-        worker_name = self._phase_cli("executing", config_name="worker")
-        worker = self._adapter_for_phase("executing")
-        execution_effort = self._resolve_effort_for_phase(state, "executing", worker_name)
-        execution_model = self._resolve_model_for_phase("executing", worker_name, state)
+        overrides = state.execution_overrides or {}
+        worker_name = overrides.get("cli") or self._phase_cli("executing", config_name="worker")
+        worker = self._adapter(worker_name)
+        execution_effort = overrides.get("effort") or self._resolve_effort_for_phase(state, "executing", worker_name)
+        execution_model = overrides.get("model") or self._resolve_model_for_phase("executing", worker_name, state)
         schema = load_bundled_schema("execution_result.schema.json")
 
         key_files = list(
@@ -749,7 +750,11 @@ class Engine:
                 state,
                 retry_key="execution",
                 retries=self._retry_limit("executing"),
-                spinner_label=self._executing_message("Codex is building the implementation..."),
+                spinner_label=self._executing_message(
+                    "Codex is building the implementation..."
+                    if worker_name == "codex"
+                    else "Claude is building the implementation..."
+                ),
                 invoke=invoke_and_enforce_status,
                 initial_prompt=prompt,
             )
@@ -1333,9 +1338,10 @@ class Engine:
                 if on_retry is not None:
                     on_retry()
                 last_error = self._format_step_failure(exc).splitlines()[0][:120]
+                retry_error = self._retry_error_message(retry_key, self._format_step_failure(exc))
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
-                    error_message=self._format_step_failure(exc),
+                    error_message=retry_error,
                 )
                 continue
 
@@ -1681,6 +1687,32 @@ class Engine:
         config_limit = self._config.orchestrator.max_retries
         phase_limit = self._workflow.phase(workflow_phase).retries
         return config_limit or phase_limit
+
+    @staticmethod
+    def _retry_error_message(retry_key: str, error_message: str) -> str:
+        if "is a required property" not in error_message:
+            return error_message
+        guidance = "A required property is missing. Re-read OUTPUT SCHEMA and include every required field."
+        if retry_key in {"reviewing", "reviewing-codex"}:
+            guidance += (
+                " Review responses must include: verdict, score, findings, summary, and blocks_merge "
+                "(review_id is auto-generated if omitted)."
+            )
+        elif retry_key == "review-final-claude":
+            guidance += " Debate responses must include: position, reasoning, and issues."
+        return f"{error_message}\n\n{guidance}"
+
+    def resolve_execution_settings(self, state: RunState) -> dict[str, str | bool | None]:
+        """Return resolved execution settings for display and approval decisions."""
+        overrides = state.execution_overrides or {}
+        worker_name = overrides.get("cli") or self._phase_cli("executing", config_name="worker")
+        return {
+            "cli": worker_name,
+            "model": overrides.get("model") or self._resolve_model_for_phase("executing", worker_name, state),
+            "effort": overrides.get("effort") or self._resolve_effort_for_phase(state, "executing", worker_name),
+            "complexity_tier": state.complexity_tier,
+            "has_overrides": bool(overrides),
+        }
 
     def _ensure_worktree(self, state: RunState) -> Path:
         if state.is_workspace:

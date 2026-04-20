@@ -467,7 +467,7 @@ class OrchestratorUI:
     ) -> str:
         """Prompt the user for a named gate decision."""
         panel = Panel(
-            context + "\n\nOptions: " + ", ".join(choices),
+            context,
             title=f"{gate.title()} Decision",
             border_style="yellow",
         )
@@ -477,6 +477,7 @@ class OrchestratorUI:
                 "approve": "Approve",
                 "soft-reject": "Request changes",
                 "full-reject": "Reject and terminate",
+                "adjust": "Adjust execution settings",
                 "approve-override": "Approve override",
                 "approve-claude": "Approve Claude plan",
                 "approve-codex": "Accept Codex assessment",
@@ -550,6 +551,20 @@ class OrchestratorUI:
 
     def info(self, message: str) -> None:
         self.stderr_console.print(Text(message, style="dim"))
+
+    def print_execution_info(self, settings: dict[str, str | bool | None]) -> None:
+        tier = str(settings.get("complexity_tier") or "unknown")
+        cli = str(settings.get("cli") or "codex").capitalize()
+        model = str(settings.get("model") or "default")
+        effort = str(settings.get("effort") or "default")
+        suffix = " (overridden)" if settings.get("has_overrides") else ""
+        self.stderr_console.print(
+            Text(
+                f"Scoping complexity: {tier} (assessed by Claude + Codex)  |  "
+                f"Executor: {cli}  |  Model: {model}  |  Reasoning: {effort}{suffix}",
+                style="dim",
+            )
+        )
 
     def render_plan_detail(
         self,

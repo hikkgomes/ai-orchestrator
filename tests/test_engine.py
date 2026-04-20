@@ -1639,6 +1639,66 @@ def test_complexity_drives_reasoning_effort_and_phase_override_wins(tmp_repo, ar
     assert review_call["reasoning_effort_override"] == "max"
 
 
+def test_resolve_execution_settings_reflects_overrides(tmp_repo, artifact_root, default_config):
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+    state = RunState(run_id="39393939-3939-3939-3939-393939393939", task="Implement feature")
+    state.complexity_tier = "complex"
+    state.execution_overrides = {
+        "cli": "claude",
+        "model": "claude-opus-4-7",
+        "effort": "max",
+    }
+
+    settings = engine.resolve_execution_settings(state)
+
+    assert settings["cli"] == "claude"
+    assert settings["model"] == "claude-opus-4-7"
+    assert settings["effort"] == "max"
+    assert settings["complexity_tier"] == "complex"
+    assert settings["has_overrides"] is True
+
+
+def test_execution_model_and_effort_overrides_apply(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = True
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "59595959-5959-5959-5959-595959595959")
+    assert state.status == "PAUSED"
+    assert state.current_phase == "APPROVAL_PLAN"
+
+    state.execution_overrides = {"model": "gpt-5.4-mini", "effort": "max"}
+    StateManager(artifact_root).save(state)
+    final = engine.approve(state.run_id, "plan")
+
+    assert final.status == "DONE"
+    execute_call = next(call for call in codex.invocations if call["title"] == "ExecutionResult")
+    assert execute_call["model_override"] == "gpt-5.4-mini"
+    assert execute_call["reasoning_effort_override"] == "max"
+
+
+def test_retry_error_message_adds_required_property_guidance_for_review():
+    message = Engine._retry_error_message("reviewing", "'verdict' is a required property")
+    assert "required property is missing" in message
+    assert "verdict, score, findings, summary, and blocks_merge" in message
+
+
 def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False

@@ -225,6 +225,7 @@ class RunState(BaseModel):
     fix_iteration_count: int = 0
     retry_counts: dict[str, int] = Field(default_factory=dict)
     session_ids: dict[str, str] = Field(default_factory=dict)
+    execution_overrides: dict[str, str] = Field(default_factory=dict)
     scope_md_ref: str | None = None
     claude_scope_ref: str | None = None
     codex_scope_ref: str | None = None
