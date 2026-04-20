@@ -25,6 +25,7 @@ import importlib.resources
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import jsonschema
 
@@ -233,6 +234,9 @@ class Validator:
         ------
         ValidationError
         """
+        if "review_id" not in data:
+            data = {**data, "review_id": str(uuid4())}
+
         _validate_schema(data, self._get_schema("review.schema.json"))
 
         verdict = data["verdict"]
