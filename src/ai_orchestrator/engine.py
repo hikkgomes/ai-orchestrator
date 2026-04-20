@@ -753,7 +753,8 @@ class Engine:
                 spinner_label=self._executing_message(
                     "Codex is building the implementation..."
                     if worker_name == "codex"
-                    else "Claude is building the implementation..."
+                    else "Claude is building the implementation...",
+                    cli=worker_name,
                 ),
                 invoke=invoke_and_enforce_status,
                 initial_prompt=prompt,
@@ -1678,9 +1679,9 @@ class Engine:
             return self._ui.reviewing_message(key)
         return fallback
 
-    def _executing_message(self, fallback: str) -> str:
+    def _executing_message(self, fallback: str, cli: str = "codex") -> str:
         if self._ui and hasattr(self._ui, "executing_message"):
-            return self._ui.executing_message()
+            return self._ui.executing_message(cli)
         return fallback
 
     def _retry_limit(self, workflow_phase: str) -> int:
@@ -1695,11 +1696,14 @@ class Engine:
         guidance = "A required property is missing. Re-read OUTPUT SCHEMA and include every required field."
         if retry_key in {"reviewing", "reviewing-codex"}:
             guidance += (
-                " Review responses must include: verdict, score, findings, summary, and blocks_merge "
-                "(review_id is auto-generated if omitted)."
+                " Review responses must include: verdict and score at minimum "
+                "(review_id, findings, summary, and blocks_merge are auto-generated if omitted)."
             )
         elif retry_key == "review-final-claude":
-            guidance += " Debate responses must include: position, reasoning, and issues."
+            guidance += (
+                " Debate responses must include: position and reasoning at minimum "
+                "(issues defaults to [] if omitted)."
+            )
         return f"{error_message}\n\n{guidance}"
 
     def resolve_execution_settings(self, state: RunState) -> dict[str, str | bool | None]:

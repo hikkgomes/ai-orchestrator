@@ -131,13 +131,22 @@ _SCOPING_MESSAGES = {
     ],
 }
 
-_EXECUTING_MESSAGES = [
-    "Codex is building the implementation...",
-    "Codex is writing code...",
-    "Codex is working through the plan...",
-    "Implementation in progress...",
-    "Codex is on it...",
-]
+_EXECUTING_MESSAGES = {
+    "codex": [
+        "Codex is building the implementation...",
+        "Codex is writing code...",
+        "Codex is working through the plan...",
+        "Implementation in progress...",
+        "Codex is on it...",
+    ],
+    "claude": [
+        "Claude is building the implementation...",
+        "Claude is writing code...",
+        "Claude is working through the plan...",
+        "Implementation in progress...",
+        "Claude is on it...",
+    ],
+}
 
 _REVIEWING_MESSAGES = {
     "claude_reviews": [
@@ -211,8 +220,8 @@ class OrchestratorUI:
     def scoping_message(self, key: str) -> str:
         return random_message(_SCOPING_MESSAGES.get(key, ["Scoping the task..."]))
 
-    def executing_message(self) -> str:
-        return random_message(_EXECUTING_MESSAGES)
+    def executing_message(self, cli: str = "codex") -> str:
+        return random_message(_EXECUTING_MESSAGES.get(cli, ["Implementation in progress..."]))
 
     def reviewing_message(self, key: str) -> str:
         return random_message(_REVIEWING_MESSAGES.get(key, ["Reviewing the implementation..."]))

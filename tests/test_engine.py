@@ -1696,7 +1696,7 @@ def test_execution_model_and_effort_overrides_apply(tmp_repo, artifact_root, def
 def test_retry_error_message_adds_required_property_guidance_for_review():
     message = Engine._retry_error_message("reviewing", "'verdict' is a required property")
     assert "required property is missing" in message
-    assert "verdict, score, findings, summary, and blocks_merge" in message
+    assert "verdict and score at minimum" in message
 
 
 def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_root, default_config):

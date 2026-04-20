@@ -185,8 +185,9 @@ def _confirm_choice(prompt: str, *, default: bool = False) -> bool:
 
 def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
     seen: list[str] = []
+    configured_worker = engine._config.routing.worker
     phase_override = engine._config.routing.phases.get("executing")
-    if phase_override:
+    if phase_override and cli_name == configured_worker:
         if phase_override.model and phase_override.model not in seen:
             seen.append(phase_override.model)
         for tier_field in (
@@ -202,6 +203,28 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
     default_model = getattr(getattr(engine._config.routing, cli_name), "model", "")
     if default_model and default_model not in seen:
         seen.insert(0, default_model)
+
+    if cli_name != configured_worker:
+        phase_cli_map = {"planning": "planner", "reviewing": "reviewer"}
+        for phase_name, routing_field in phase_cli_map.items():
+            phase_settings = engine._config.routing.phases.get(phase_name)
+            phase_cli = phase_settings.cli if phase_settings and phase_settings.cli else getattr(
+                engine._config.routing, routing_field
+            )
+            if phase_cli != cli_name:
+                continue
+            if phase_settings:
+                for tier_field in (
+                    "model",
+                    "model_simple",
+                    "model_moderate",
+                    "model_complex",
+                    "model_architectural",
+                    "model_extramax",
+                ):
+                    model_name = getattr(phase_settings, tier_field, "")
+                    if model_name and model_name not in seen:
+                        seen.append(model_name)
     return ["(default)", *seen] if seen else ["(default)"]
 
 

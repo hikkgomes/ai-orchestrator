@@ -194,3 +194,12 @@ def test_print_execution_info_shows_overrides_marker():
     assert "Model: gpt-5.4" in output
     assert "Reasoning: high" in output
     assert "(overridden)" in output
+
+
+def test_executing_message_respects_cli(monkeypatch):
+    ui, _, _ = _ui()
+    monkeypatch.setattr("ai_orchestrator.ui.random_message", lambda pool: pool[0])
+
+    assert ui.executing_message("codex").startswith("Codex is")
+    assert ui.executing_message("claude").startswith("Claude is")
+    assert ui.executing_message("unknown") == "Implementation in progress..."

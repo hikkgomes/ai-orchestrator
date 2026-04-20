@@ -5,12 +5,14 @@ import sys
 from pathlib import Path
 
 from click.testing import CliRunner
+from rich.console import Console
 
 from ai_orchestrator.bootstrap import DEFAULT_WORKFLOW
-from ai_orchestrator.cli import _available_models_for_cli, main
+from ai_orchestrator.cli import _adjust_execution_settings, _available_models_for_cli, main
 from ai_orchestrator.config import Config, PhaseRoutingOverride
 from ai_orchestrator.models import RunState
 from ai_orchestrator.state import StateManager
+from ai_orchestrator.ui import OrchestratorUI
 
 
 def test_root_help_lists_primary_commands():
@@ -446,19 +448,169 @@ def test_self_update_pip_user_falls_back_to_pip(monkeypatch):
 
 def test_available_models_for_cli_collects_default_and_phase_overrides():
     cfg = Config()
+    cfg.routing.worker = "codex"
     cfg.routing.codex.model = "gpt-5.4"
+    cfg.routing.claude.model = "claude-sonnet-4-6"
     cfg.routing.phases["executing"] = PhaseRoutingOverride(
         model="gpt-5.4-mini",
         model_simple="gpt-5.4-mini",
         model_moderate="gpt-5.3-codex",
         model_complex="gpt-5.4",
     )
+    cfg.routing.phases["planning"] = PhaseRoutingOverride(
+        cli="claude",
+        model="claude-opus-4-7",
+    )
+    cfg.routing.phases["reviewing"] = PhaseRoutingOverride(
+        cli="claude",
+        model_moderate="claude-sonnet-4-6",
+    )
 
     class StubEngine:
         _config = cfg
 
-    models = _available_models_for_cli(StubEngine(), "codex")
-    assert models[0] == "(default)"
-    assert "gpt-5.4" in models
-    assert "gpt-5.4-mini" in models
-    assert "gpt-5.3-codex" in models
+    codex_models = _available_models_for_cli(StubEngine(), "codex")
+    assert codex_models[0] == "(default)"
+    assert "gpt-5.4" in codex_models
+    assert "gpt-5.4-mini" in codex_models
+    assert "gpt-5.3-codex" in codex_models
+    assert "claude-opus-4-7" not in codex_models
+
+    claude_models = _available_models_for_cli(StubEngine(), "claude")
+    assert claude_models[0] == "(default)"
+    assert "claude-sonnet-4-6" in claude_models
+    assert "claude-opus-4-7" in claude_models
+    assert "gpt-5.3-codex" not in claude_models
+
+
+def test_adjust_execution_settings_model_override(monkeypatch):
+    cfg = Config()
+    cfg.routing.worker = "codex"
+    cfg.routing.codex.model = "gpt-5.4"
+
+    class StubEngine:
+        _config = cfg
+
+        @staticmethod
+        def _phase_cli(workflow_phase: str, *, config_name: str) -> str:
+            assert workflow_phase == "executing"
+            assert config_name == "worker"
+            return "codex"
+
+    class StubStateMgr:
+        called = 0
+
+        def save(self, state):
+            self.called += 1
+
+    call_seq = iter(["Model", "gpt-5.4"])
+    monkeypatch.setattr("ai_orchestrator.cli._select_choice", lambda *a, **kw: next(call_seq))
+
+    ui = OrchestratorUI(
+        console=Console(record=True, force_terminal=False),
+        stderr_console=Console(record=True, force_terminal=False),
+    )
+    state = RunState(run_id="run-1", task="task")
+    state_mgr = StubStateMgr()
+    _adjust_execution_settings(ui, StubEngine(), state_mgr, state, "run-1")
+
+    assert state.execution_overrides["model"] == "gpt-5.4"
+    assert state_mgr.called == 1
+
+
+def test_adjust_execution_settings_executor_swap(monkeypatch):
+    cfg = Config()
+    cfg.routing.worker = "codex"
+    cfg.routing.claude.model = "claude-sonnet-4-6"
+
+    class StubEngine:
+        _config = cfg
+
+        @staticmethod
+        def _phase_cli(workflow_phase: str, *, config_name: str) -> str:
+            return "codex"
+
+    class StubStateMgr:
+        called = 0
+
+        def save(self, state):
+            self.called += 1
+
+    call_seq = iter(["Executor (Claude/Codex)", "claude-sonnet-4-6"])
+    monkeypatch.setattr("ai_orchestrator.cli._select_choice", lambda *a, **kw: next(call_seq))
+    monkeypatch.setattr("ai_orchestrator.cli._confirm_choice", lambda *a, **kw: True)
+
+    ui = OrchestratorUI(
+        console=Console(record=True, force_terminal=False),
+        stderr_console=Console(record=True, force_terminal=False),
+    )
+    state = RunState(run_id="run-2", task="task")
+    state_mgr = StubStateMgr()
+    _adjust_execution_settings(ui, StubEngine(), state_mgr, state, "run-2")
+
+    assert state.execution_overrides["cli"] == "claude"
+    assert state.execution_overrides["model"] == "claude-sonnet-4-6"
+    assert state_mgr.called == 1
+
+
+def test_adjust_execution_settings_cancel(monkeypatch):
+    cfg = Config()
+
+    class StubEngine:
+        _config = cfg
+
+        @staticmethod
+        def _phase_cli(workflow_phase: str, *, config_name: str) -> str:
+            return "codex"
+
+    class StubStateMgr:
+        called = 0
+
+        def save(self, state):
+            self.called += 1
+
+    monkeypatch.setattr("ai_orchestrator.cli._select_choice", lambda *a, **kw: "Cancel")
+
+    ui = OrchestratorUI(
+        console=Console(record=True, force_terminal=False),
+        stderr_console=Console(record=True, force_terminal=False),
+    )
+    state = RunState(run_id="run-3", task="task")
+    state_mgr = StubStateMgr()
+    _adjust_execution_settings(ui, StubEngine(), state_mgr, state, "run-3")
+
+    assert state.execution_overrides == {}
+    assert state_mgr.called == 0
+
+
+def test_adjust_execution_settings_both(monkeypatch):
+    cfg = Config()
+    cfg.routing.worker = "codex"
+
+    class StubEngine:
+        _config = cfg
+
+        @staticmethod
+        def _phase_cli(workflow_phase: str, *, config_name: str) -> str:
+            return "codex"
+
+    class StubStateMgr:
+        called = 0
+
+        def save(self, state):
+            self.called += 1
+
+    call_seq = iter(["Both", "gpt-5.3-codex", "xhigh"])
+    monkeypatch.setattr("ai_orchestrator.cli._select_choice", lambda *a, **kw: next(call_seq))
+
+    ui = OrchestratorUI(
+        console=Console(record=True, force_terminal=False),
+        stderr_console=Console(record=True, force_terminal=False),
+    )
+    state = RunState(run_id="run-4", task="task")
+    state_mgr = StubStateMgr()
+    _adjust_execution_settings(ui, StubEngine(), state_mgr, state, "run-4")
+
+    assert state.execution_overrides["model"] == "gpt-5.3-codex"
+    assert state.execution_overrides["effort"] == "xhigh"
+    assert state_mgr.called == 1
