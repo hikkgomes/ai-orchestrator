@@ -66,7 +66,10 @@ Do not emit frontmatter. The orchestrator generates plan metadata when saving.
 
 When present, treat these sections as primary inputs:
 
+- `TASK` (original user task)
+- `SCOPE.MD` (canonical scope from scoping phase)
 - `ORIGINAL PLAN` (prior markdown plan)
+- `EXISTING EXECUTION RESULTS` (step result artifacts from prior execution)
 - `CURRENT DIFF`
 - `ISSUES TO FIX`
 - `DEBATE CONTEXT`

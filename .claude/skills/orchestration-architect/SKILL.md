@@ -1,7 +1,7 @@
 # Skill: orchestration-architect
 
 > Claude Code skill for the PLANNING phase of ai-orchestrator.
-> Typical invocation: `claude -p "<planning prompt>" --allowedTools Read,Grep,Glob --output-format json`
+> Typical invocation: `claude -p --resume <session-id> "<planning prompt>" --allowedTools Read,Grep,Glob --output-format json`
 > Prompt template: `docs/prompts/plan.md`
 
 ---

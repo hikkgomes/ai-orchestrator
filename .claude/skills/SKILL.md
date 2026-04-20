@@ -62,7 +62,9 @@ Produces an incremental fix plan on top of existing worktree changes.
 
 - Execution and review skills receive JSON schemas in the prompt.
 - Planning skills produce markdown plans and are consumed through `invoke_text`.
-- `--output-format json` is passed for structured-output phases.
+- `--output-format json` is always passed. Planning extracts the text body from
+  the JSON envelope (`invoke_text`); other phases parse the structured JSON
+  content (`invoke`).
 - For JSON-output phases, if the CLI returns non-JSON or schema-invalid JSON, the
   orchestrator retries up to `max_retries` times with explicit retry guidance.
 - Reasoning effort is configurable per phase in `aio.toml` under `[routing.claude]`.
