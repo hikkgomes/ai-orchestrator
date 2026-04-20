@@ -63,6 +63,7 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> InvokeResult:
         """Invoke ``claude -p`` and return a validated output dict.
 
@@ -78,6 +79,7 @@ class ClaudeAdapter(BaseAdapter):
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
+            allowed_tools=allowed_tools,
             output_format="json",
         )
         return self._invoke_command(
@@ -99,12 +101,14 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
+            allowed_tools=allowed_tools,
             output_format="json",
         )
         return self._invoke_text_command(
@@ -123,6 +127,7 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
         output_format: str = "json",
     ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME]
@@ -138,6 +143,8 @@ class ClaudeAdapter(BaseAdapter):
             command.extend([self._EFFORT_FLAG, reasoning_effort])
         if resume_session_id:
             command.extend(["--resume", resume_session_id])
+        if allowed_tools:
+            command.extend(["--allowedTools", ",".join(allowed_tools)])
         command.extend(["-p", prompt, "--output-format", output_format])
         return command, model, reasoning_effort
 

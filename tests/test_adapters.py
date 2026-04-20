@@ -237,6 +237,43 @@ class TestClaudeAdapter:
         assert result.session_id == "session-123"
         assert commands[0][commands[0].index("--resume") + 1] == "prior-session"
 
+    def test_invoke_text_includes_allowed_tools_flag(
+        self,
+        tmp_path,
+        artifact_root,
+        default_config,
+        monkeypatch,
+    ):
+        commands = []
+        fake_popen, _ = _fake_popen_factory(
+            [
+                {
+                    "stdout": json.dumps(
+                        {
+                            "type": "result",
+                            "session_id": "session-abc",
+                            "result": "## Plan\n\n## Steps\n- Update file",
+                        }
+                    ),
+                }
+            ],
+            commands,
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        adapter = ClaudeAdapter(default_config, artifact_root)
+        result = adapter.invoke_text(
+            "plan this",
+            tmp_path,
+            30,
+            allowed_tools=["Read", "Grep", "Glob"],
+        )
+
+        assert result.session_id == "session-abc"
+        assert "--allowedTools" in commands[0]
+        allowed_index = commands[0].index("--allowedTools")
+        assert commands[0][allowed_index + 1] == "Read,Grep,Glob"
+
     def test_invoke_classifies_auth_error_as_blocked(
         self,
         tmp_path,

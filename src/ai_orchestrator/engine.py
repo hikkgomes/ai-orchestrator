@@ -7,6 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .adapters.base import BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
 from .adapters.claude import ClaudeAdapter
@@ -32,7 +33,6 @@ from .prompts.templates import (
     build_retry_prompt,
     build_review_prompt,
     collect_file_context,
-    default_planning_files,
     json_block,
     redact_secret_text,
     render_directory_tree,
@@ -319,6 +319,8 @@ class Engine:
         summary = repo_summary(self._repo_root)
         claude = self._adapter("claude")
         codex = self._adapter("codex")
+        scoping_tools_claude = self._phase_allowed_tools("scoping", default=["Read", "Grep", "Glob"])
+        scoping_timeout = self._phase_timeout("scoping")
         claude_model = self._resolve_model_for_phase("scoping", "claude", state) or "claude-sonnet-4-6"
         codex_model_light = self._config.scoping.codex_model_light or self._resolve_model_for_phase(
             "scoping",
@@ -328,7 +330,7 @@ class Engine:
         codex_model = self._config.scoping.codex_model or self._resolve_model_for_phase("scoping", "codex", state)
 
         try:
-            claude_prompt = build_prescope_claude_prompt(state.task, summary, directory_tree)
+            claude_prompt = build_prescope_claude_prompt(state.task)
             codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
             self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
             self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
@@ -341,6 +343,8 @@ class Engine:
                         self._scoping_message("claude_creates", "Claude is drafting the scope..."),
                         reasoning_effort_override="medium",
                         model_override=claude_model,
+                        allowed_tools=scoping_tools_claude,
+                        timeout_seconds=scoping_timeout,
                     ),
                     lambda: self._invoke_adapter_text(
                         codex,
@@ -357,6 +361,8 @@ class Engine:
             codex_scope = codex_text_result.text
             if claude_text_result.session_id:
                 state.session_ids["scoping_claude"] = claude_text_result.session_id
+                if self._config.sessions.enable_unified_session:
+                    state.session_ids["claude_main"] = claude_text_result.session_id
             if codex_text_result.session_id:
                 state.session_ids["scoping_codex"] = codex_text_result.session_id
             state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, claude_scope)
@@ -408,11 +414,19 @@ class Engine:
                     self._scoping_message("claude_responds", "Claude is considering Codex's feedback..."),
                     reasoning_effort_override="high",
                     model_override=claude_model,
-                    resume_session_id=state.session_ids.get("scoping_claude"),
+                    resume_session_id=(
+                        state.session_ids.get("claude_main")
+                        if self._config.sessions.enable_unified_session
+                        else state.session_ids.get("scoping_claude")
+                    ),
+                    allowed_tools=scoping_tools_claude,
+                    timeout_seconds=scoping_timeout,
                 )
                 scope_md = scope_result.text
                 if scope_result.session_id:
                     state.session_ids["scoping_claude"] = scope_result.session_id
+                    if self._config.sessions.enable_unified_session:
+                        state.session_ids["claude_main"] = scope_result.session_id
                 state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
                 state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 4, scope_md)
                 state.scoping_agreed = self._scope_review_agreed(scope_md)
@@ -462,11 +476,19 @@ class Engine:
                     self._scoping_message("claude_final", "Claude has the final word (Opus xhigh)..."),
                     reasoning_effort_override=self._config.debate.escalated_claude_effort,
                     model_override=self._config.debate.escalated_claude_model or claude_model,
-                    resume_session_id=state.session_ids.get("scoping_claude"),
+                    resume_session_id=(
+                        state.session_ids.get("claude_main")
+                        if self._config.sessions.enable_unified_session
+                        else state.session_ids.get("scoping_claude")
+                    ),
+                    allowed_tools=scoping_tools_claude,
+                    timeout_seconds=scoping_timeout,
                 )
                 scope_md = scope_result.text
                 if scope_result.session_id:
                     state.session_ids["scoping_claude"] = scope_result.session_id
+                    if self._config.sessions.enable_unified_session:
+                        state.session_ids["claude_main"] = scope_result.session_id
                 state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
                 state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 6, scope_md)
                 state.scoping_round = 6
@@ -503,7 +525,6 @@ class Engine:
         )
 
     def _run_planning(self, state: RunState) -> RunState:
-        schema = load_bundled_schema("plan.schema.json")
         task_description = state.normalized_task or state.task
         feedback_parts = []
 
@@ -524,12 +545,11 @@ class Engine:
             prompt = build_fix_planning_prompt(
                 task=state.task,
                 scope_md=scope_md,
-                original_plan=json_block(self._artifacts.read_json(state.plan_id)) if state.plan_id else "{}",
+                original_plan=self._load_plan_text(state.plan_id) if state.plan_id else "",
                 step_results=json_block(self._load_step_results(state)),
                 diff=redact_secret_text(self._implementation_diff(state)),
                 issues=planning_feedback or "",
                 debate_context=self._debate_history_text(state),
-                schema_json=json_block(schema),
             )
         else:
             scoped_task = task_description
@@ -540,27 +560,20 @@ class Engine:
                 )
             prompt = build_planning_prompt(
                 task_description=scoped_task,
-                directory_tree=render_directory_tree(self._repo_root),
-                workspace_trees=self._workspace_trees(state, max_depth=2),
-                key_file_contents=collect_file_context(
-                    self._repo_root,
-                    default_planning_files(self._repo_root),
-                )[0],
-                schema_json=json_block(schema),
+                scope_md=scope_md or "<none>",
             )
         self._artifacts.save_prompt(f"planning-{state.run_id[:8]}.md", prompt)
 
         adapter = self._adapter_for_phase("planning")
         cli_name = self._phase_cli("planning", config_name="planner")
-        is_iteration = bool(feedback_parts)
-        if not is_iteration:
-            state.session_ids.pop("planning", None)
-            self._state_mgr.save(state)
-        resume_session_id = (
-            state.session_ids.get("planning")
-            if is_iteration and self._config.sessions.enable_planning_resume
-            else None
-        )
+        planning_tools = self._phase_allowed_tools("planning", default=["Read", "Grep", "Glob"])
+        planning_timeout = self._phase_timeout("planning")
+        resume_session_id: str | None = None
+        if self._config.sessions.enable_planning_resume:
+            if self._config.sessions.enable_unified_session:
+                resume_session_id = state.session_ids.get("claude_main")
+            elif feedback_parts:
+                resume_session_id = state.session_ids.get("planning")
         planning_effort = self._resolve_effort_for_phase(state, "planning", cli_name)
         planning_model = self._resolve_model_for_phase("planning", cli_name, state)
         planning_label = self._model_label(planning_model, cli_name)
@@ -576,14 +589,19 @@ class Engine:
                 retry_key="planning",
                 retries=self._retry_limit("planning"),
                 spinner_label=planning_spinner,
-                invoke=lambda current_prompt: self._invoke_adapter_json(
-                    adapter,
-                    current_prompt,
-                    self._repo_root,
-                    schema,
-                    reasoning_effort_override=planning_effort,
-                    model_override=planning_model,
-                    resume_session_id=resume_session_id,
+                invoke=lambda current_prompt: self._coerce_text_to_invoke_result(
+                    self._invoke_adapter_text(
+                        adapter,
+                        current_prompt,
+                        self._repo_root,
+                        spinner_label="",
+                        reasoning_effort_override=planning_effort,
+                        model_override=planning_model,
+                        resume_session_id=resume_session_id,
+                        allowed_tools=planning_tools,
+                        timeout_seconds=planning_timeout,
+                        with_spinner=False,
+                    )
                 ),
                 initial_prompt=prompt,
                 on_retry=clear_resume_on_retry,
@@ -598,10 +616,20 @@ class Engine:
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
 
-        result = invoke_result.data
+        result_text = str(invoke_result.data.get("text") or "").strip()
+        generated_plan_id = str(uuid4())
+        plan_markdown = (
+            "---\n"
+            f"plan_id: {generated_plan_id}\n"
+            f"task: {state.normalized_task or state.task}\n"
+            "---\n\n"
+            f"{result_text}\n"
+        )
         if invoke_result.session_id:
             state.session_ids["planning"] = invoke_result.session_id
-        state.plan_id = self._artifacts.save_plan(state.run_id, result)
+            if self._config.sessions.enable_unified_session:
+                state.session_ids["claude_main"] = invoke_result.session_id
+        state.plan_id = self._artifacts.save_plan_md(state.run_id, plan_markdown)
         state.review_id = None
         state.debate_state = None
         self._artifacts.clear_feedback(state.run_id, "planning")
@@ -639,7 +667,8 @@ class Engine:
         return self._transition(state, WorkflowStatus.EXECUTING)
 
     def _run_execution(self, state: RunState) -> RunState:
-        plan = self._require_artifact(state.plan_id)
+        plan_structured = self._load_plan_structured(state.plan_id)
+        plan_text = self._load_plan_text(state.plan_id)
         worktree_dir = self._ensure_worktree(state)
         worker_name = self._phase_cli("executing", config_name="worker")
         worker = self._adapter_for_phase("executing")
@@ -647,14 +676,22 @@ class Engine:
         execution_model = self._resolve_model_for_phase("executing", worker_name, state)
         schema = load_bundled_schema("execution_result.schema.json")
 
-        key_files = list(dict.fromkeys(plan.get("key_files", [])))
+        key_files = list(
+            dict.fromkeys(
+                (
+                    plan_structured.get("key_files", [])
+                    if plan_structured
+                    else self._extract_key_files_from_plan_text(plan_text)
+                )
+            )
+        )
         file_contents, _ = collect_file_context(worktree_dir, key_files)
         pending_result_path = str(self._artifacts.pending_execution_result_path(state.run_id))
         self._artifacts.clear_pending_execution_result(state.run_id)
 
         if worker_name == "codex":
             prompt = build_full_execution_prompt_codex(
-                plan_json=json_block(plan),
+                plan_text=plan_text,
                 file_contents=file_contents,
                 result_file_path=pending_result_path,
                 schema_json=json_block(schema),
@@ -662,7 +699,7 @@ class Engine:
             )
         else:
             prompt = build_full_execution_prompt_claude(
-                plan_json=json_block(plan),
+                plan_text=plan_text,
                 file_contents=file_contents,
                 schema_json=json_block(schema),
                 workspace_trees=self._workspace_trees(state, max_depth=2),
@@ -726,7 +763,15 @@ class Engine:
             return self._fail_run(state, self._format_step_failure(exc))
 
         result = invoke_result.data
-        self._commit_worktree_all(state, worktree_dir, self._task_summary(plan.get("task") or state.task))
+        self._commit_worktree_all(
+            state,
+            worktree_dir,
+            self._task_summary(
+                (plan_structured.get("task") if plan_structured else None)
+                or state.normalized_task
+                or state.task
+            ),
+        )
         reference = self._artifacts.save_execution_result(state.run_id, result)
         state.execution_result_ref = reference
         state.step_results = [reference]
@@ -737,7 +782,7 @@ class Engine:
     def _run_review(self, state: RunState) -> RunState:
         schema = load_bundled_schema("review.schema.json")
         debate_schema = load_bundled_schema("debate_response.schema.json")
-        plan = self._require_artifact(state.plan_id)
+        plan_text = self._load_plan_text(state.plan_id)
         git_diff = redact_secret_text(self._implementation_diff(state))
         review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
         scope_md = self._artifacts.read_text(state.scope_md_ref) if state.scope_md_ref else ""
@@ -752,9 +797,11 @@ class Engine:
             reviewer_config=reviewer_config,
         )
         reviewer_rules = self._load_reviewer_rules()
+        review_tools = self._phase_allowed_tools("reviewing", default=["Read", "Grep", "Glob", "Bash"])
+        review_timeout = self._phase_timeout("reviewing")
         review_prompt = build_review_prompt(
             task_description=state.normalized_task or state.task,
-            plan_json=json_block(plan),
+            plan_text=plan_text,
             git_diff=git_diff,
             step_results_json=json_block(self._load_step_results(state)),
             schema_json=json_block(schema),
@@ -784,6 +831,16 @@ class Engine:
                     schema,
                     reasoning_effort_override=review_effort,
                     model_override=review_model,
+                    resume_session_id=(
+                        state.session_ids.get("claude_main")
+                        if (
+                            self._config.sessions.enable_unified_session
+                            and self._config.sessions.enable_review_resume
+                        )
+                        else None
+                    ),
+                    allowed_tools=review_tools,
+                    timeout_seconds=review_timeout,
                 ),
                 initial_prompt=review_prompt,
             )
@@ -791,6 +848,8 @@ class Engine:
             claude_review = invoke_result.data
             if invoke_result.session_id:
                 state.session_ids["reviewing"] = invoke_result.session_id
+                if self._config.sessions.enable_unified_session:
+                    state.session_ids["claude_main"] = invoke_result.session_id
             state.review_id = self._artifacts.save_review(state.run_id, claude_review)
             self._record_debate_round(
                 state,
@@ -814,7 +873,7 @@ class Engine:
             codex_prompt = build_review_codex_prompt(
                 task_description=state.normalized_task or state.task,
                 scope_md=scope_md,
-                plan_json=json_block(plan),
+                plan_text=plan_text,
                 git_diff=git_diff,
                 step_results_json=json_block(self._load_step_results(state)),
                 review_json=json_block(claude_review),
@@ -893,7 +952,7 @@ class Engine:
             final_prompt = build_review_final_claude_prompt(
                 task_description=state.normalized_task or state.task,
                 scope_md=scope_md,
-                plan_json=json_block(plan),
+                plan_text=plan_text,
                 git_diff=git_diff,
                 step_results_json=json_block(self._load_step_results(state)),
                 claude_review_json=json_block(claude_review),
@@ -916,16 +975,27 @@ class Engine:
                     reasoning_effort_override=final_effort,
                     model_override=self._config.debate.escalated_claude_model or review_model,
                     resume_session_id=(
-                        state.session_ids.get("reviewing")
-                        if self._config.sessions.enable_review_resume
-                        else None
+                        state.session_ids.get("claude_main")
+                        if (
+                            self._config.sessions.enable_unified_session
+                            and self._config.sessions.enable_review_resume
+                        )
+                        else (
+                            state.session_ids.get("reviewing")
+                            if self._config.sessions.enable_review_resume
+                            else None
+                        )
                     ),
+                    allowed_tools=review_tools,
+                    timeout_seconds=review_timeout,
                 ),
                 initial_prompt=final_prompt,
             )
             final = final_result.data
             if final_result.session_id:
                 state.session_ids["reviewing"] = final_result.session_id
+                if self._config.sessions.enable_unified_session:
+                    state.session_ids["claude_main"] = final_result.session_id
             final_position = str(final.get("position") or "")
             final_issues = final.get("issues") if isinstance(final.get("issues"), list) else []
             self._record_debate_round(
@@ -1050,7 +1120,6 @@ class Engine:
         feedback += "\n\nDebate transcript:\n" + self._debate_history_text(state)
         self._artifacts.save_feedback(state.run_id, "planning", feedback)
         state.fix_iteration_count += 1
-        state.session_ids.pop("planning", None)
         state.error = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.PLANNING)
@@ -1279,6 +1348,10 @@ class Engine:
             return InvokeResult(data=result)
         raise StepFailure("Adapter returned an unsupported result type")
 
+    @staticmethod
+    def _coerce_text_to_invoke_result(result: TextInvokeResult) -> InvokeResult:
+        return InvokeResult(data={"text": result.text}, session_id=result.session_id)
+
     def _invoke_adapter_text(
         self,
         adapter: Any,
@@ -1289,36 +1362,45 @@ class Engine:
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
+        timeout_seconds: int | None = None,
         legacy_fallback_text: str | None = None,
+        with_spinner: bool = True,
     ) -> TextInvokeResult:
         def invoke() -> TextInvokeResult:
             if hasattr(adapter, "invoke_text"):
-                kwargs = {
+                kwargs: dict[str, Any] = {
                     "reasoning_effort_override": reasoning_effort_override,
                     "model_override": model_override,
-                    "resume_session_id": resume_session_id,
                 }
-                try:
-                    return self._coerce_text_invoke_result(
-                        adapter.invoke_text(
-                            prompt,
-                            working_dir,
-                            self._config.orchestrator.watchdog_timeout,
-                            **kwargs,
+                if resume_session_id is not None:
+                    kwargs["resume_session_id"] = resume_session_id
+                if allowed_tools is not None:
+                    kwargs["allowed_tools"] = allowed_tools
+                timeout = timeout_seconds or self._config.orchestrator.watchdog_timeout
+                while True:
+                    snapshot = dict(kwargs)
+                    try:
+                        return self._coerce_text_invoke_result(
+                            adapter.invoke_text(
+                                prompt,
+                                working_dir,
+                                timeout,
+                                **kwargs,
+                            )
                         )
-                    )
-                except TypeError as exc:
-                    if "resume_session_id" not in str(exc):
-                        raise
-                    kwargs.pop("resume_session_id", None)
-                    return self._coerce_text_invoke_result(
-                        adapter.invoke_text(
-                            prompt,
-                            working_dir,
-                            self._config.orchestrator.watchdog_timeout,
-                            **kwargs,
-                        )
-                    )
+                    except TypeError as exc:
+                        message = str(exc)
+                        removed = False
+                        if "allowed_tools" in message and "allowed_tools" in kwargs:
+                            kwargs.pop("allowed_tools", None)
+                            removed = True
+                        if "resume_session_id" in message and "resume_session_id" in kwargs:
+                            kwargs.pop("resume_session_id", None)
+                            removed = True
+                        if not removed or kwargs == snapshot:
+                            raise
+                        continue
             if legacy_fallback_text is not None:
                 return TextInvokeResult(legacy_fallback_text)
             schema = load_bundled_schema("scoping.schema.json")
@@ -1331,6 +1413,8 @@ class Engine:
                     reasoning_effort_override=reasoning_effort_override,
                     model_override=model_override,
                     resume_session_id=resume_session_id,
+                    allowed_tools=allowed_tools,
+                    timeout_seconds=timeout_seconds,
                 )
             )
             return TextInvokeResult(
@@ -1338,7 +1422,7 @@ class Engine:
                 session_id=result.session_id,
             )
 
-        if self._ui is None:
+        if self._ui is None or not with_spinner:
             return invoke()
         with self._ui.phase_spinner(spinner_label):
             return invoke()
@@ -1367,31 +1451,39 @@ class Engine:
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
+        timeout_seconds: int | None = None,
     ) -> Any:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "reasoning_effort_override": reasoning_effort_override,
             "model_override": model_override,
-            "resume_session_id": resume_session_id,
         }
-        try:
-            return adapter.invoke(
-                prompt,
-                working_dir,
-                self._config.orchestrator.watchdog_timeout,
-                schema,
-                **kwargs,
-            )
-        except TypeError as exc:
-            if "resume_session_id" not in str(exc):
-                raise
-            kwargs.pop("resume_session_id", None)
-            return adapter.invoke(
-                prompt,
-                working_dir,
-                self._config.orchestrator.watchdog_timeout,
-                schema,
-                **kwargs,
-            )
+        if resume_session_id is not None:
+            kwargs["resume_session_id"] = resume_session_id
+        if allowed_tools is not None:
+            kwargs["allowed_tools"] = allowed_tools
+        timeout = timeout_seconds or self._config.orchestrator.watchdog_timeout
+        while True:
+            snapshot = dict(kwargs)
+            try:
+                return adapter.invoke(
+                    prompt,
+                    working_dir,
+                    timeout,
+                    schema,
+                    **kwargs,
+                )
+            except TypeError as exc:
+                message = str(exc)
+                removed = False
+                if "allowed_tools" in message and "allowed_tools" in kwargs:
+                    kwargs.pop("allowed_tools", None)
+                    removed = True
+                if "resume_session_id" in message and "resume_session_id" in kwargs:
+                    kwargs.pop("resume_session_id", None)
+                    removed = True
+                if not removed or kwargs == snapshot:
+                    raise
 
     @staticmethod
     def _scope_md_from_scoping_result(result: dict[str, Any]) -> str:
@@ -1542,6 +1634,21 @@ class Engine:
             if tier_model:
                 return tier_model
         return getattr(getattr(self._config.routing, cli_name), "model", "") or None
+
+    def _phase_allowed_tools(self, phase_name: str, *, default: list[str]) -> list[str] | None:
+        override = self._config.routing.phases.get(phase_name)
+        if override and override.allowed_tools:
+            return list(override.allowed_tools)
+        return list(default)
+
+    def _phase_timeout(self, phase_name: str) -> int:
+        override = self._config.routing.phases.get(phase_name)
+        if override and override.timeout_seconds > 0:
+            return override.timeout_seconds
+        base = self._config.orchestrator.watchdog_timeout
+        if phase_name in {"planning", "reviewing"}:
+            return max(base, 5400)
+        return base
 
     @staticmethod
     def _model_label(model: str | None, cli_name: str) -> str:
@@ -1804,10 +1911,43 @@ class Engine:
             return ["# No changes detected in any workspace repo."]
         return commands
 
-    def _require_artifact(self, reference: str | None) -> dict[str, Any]:
+    def _load_plan_structured(self, reference: str | None) -> dict[str, Any] | None:
         if not reference:
             raise EngineError("Required artifact reference is missing")
-        return self._artifacts.read_json(reference)
+        if reference.endswith(".json"):
+            return self._artifacts.read_json(reference)
+        return None
+
+    def _load_plan_text(self, reference: str | None) -> str:
+        if not reference:
+            raise EngineError("Required artifact reference is missing")
+        if reference.endswith(".md"):
+            return self._artifacts.read_text(reference)
+        return json_block(self._artifacts.read_json(reference))
+
+    @staticmethod
+    def _extract_key_files_from_plan_text(plan_text: str) -> list[str]:
+        lines = plan_text.splitlines()
+        in_key_files = False
+        found: list[str] = []
+        for raw in lines:
+            line = raw.strip()
+            if re.match(r"^##\s+", line):
+                in_key_files = bool(re.match(r"^##\s+Key Files\b", line, flags=re.IGNORECASE))
+                continue
+            if not in_key_files or not line:
+                continue
+            candidate = ""
+            if line.startswith(("-", "*")):
+                candidate = line[1:].strip()
+            elif re.match(r"^\d+\.\s+", line):
+                candidate = re.sub(r"^\d+\.\s+", "", line).strip()
+            if not candidate:
+                continue
+            candidate = candidate.strip("`").split()[0]
+            if candidate and not candidate.startswith("/") and ".." not in Path(candidate).parts:
+                found.append(candidate)
+        return list(dict.fromkeys(found))
 
     def _gate_phase(self, gate: str) -> str:
         return {

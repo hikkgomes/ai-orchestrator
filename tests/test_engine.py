@@ -50,6 +50,7 @@ class FakeClaudeAdapter:
         reasoning_effort_override=None,
         model_override=None,
         resume_session_id=None,
+        allowed_tools=None,
     ):
         self.invocations.append(
             {
@@ -71,9 +72,6 @@ class FakeClaudeAdapter:
                 "assumptions": [],
                 "complexity_tier": "moderate",
             }
-        if title == "Plan":
-            self.planning_calls += 1
-            return InvokeResult(self._plans.pop(0), session_id="planning-session")
         if title == "Review":
             self.review_calls += 1
             return InvokeResult(self._reviews.pop(0), session_id="review-session")
@@ -92,6 +90,7 @@ class FakeClaudeAdapter:
         reasoning_effort_override=None,
         model_override=None,
         resume_session_id=None,
+        allowed_tools=None,
     ):
         self.text_invocations.append(
             {
@@ -99,8 +98,21 @@ class FakeClaudeAdapter:
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
                 "resume_session_id": resume_session_id,
+                "allowed_tools": allowed_tools,
             }
         )
+        if "software planning agent" in prompt and "## Approach" in prompt:
+            self.planning_calls += 1
+            self.invocations.append(
+                {
+                    "title": "Plan",
+                    "prompt": prompt,
+                    "reasoning_effort_override": reasoning_effort_override,
+                    "model_override": model_override,
+                    "resume_session_id": resume_session_id,
+                }
+            )
+            return TextInvokeResult(_plan_markdown(self._plans.pop(0)), session_id="planning-session")
         if "independently scoping" in prompt:
             self.scoping_calls += 1
             if self._scopings:
@@ -154,6 +166,7 @@ class FakeCodexAdapter:
         reasoning_effort_override=None,
         model_override=None,
         resume_session_id=None,
+        allowed_tools=None,
     ):
         self.invocations.append(
             {
@@ -224,6 +237,7 @@ class FakeCodexAdapter:
         reasoning_effort_override=None,
         model_override=None,
         resume_session_id=None,
+        allowed_tools=None,
     ):
         self.text_invocations.append(
             {
@@ -231,6 +245,7 @@ class FakeCodexAdapter:
                 "reasoning_effort_override": reasoning_effort_override,
                 "model_override": model_override,
                 "resume_session_id": resume_session_id,
+                "allowed_tools": allowed_tools,
             }
         )
         self.scoping_calls += 1
@@ -267,6 +282,19 @@ def _plan(*, plan_id: str = "11111111-1111-1111-1111-111111111111"):
         ],
         "key_files": ["README.md"],
     }
+
+
+def _plan_markdown(plan: dict) -> str:
+    steps = "\n".join(f"{idx}. {step}" for idx, step in enumerate(plan["implementation_steps"], start=1))
+    key_files = "\n".join(f"- {path}" for path in plan.get("key_files", [])) or "- README.md"
+    return (
+        "## Approach\n"
+        f"{plan['approach']}\n\n"
+        "## Steps\n"
+        f"{steps}\n\n"
+        "## Key Files\n"
+        f"{key_files}\n"
+    )
 
 
 def _review():
@@ -450,6 +478,8 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
+            resume_session_id=None,
+            allowed_tools=None,
         ):
             result = super().invoke(
                 prompt,
@@ -459,6 +489,8 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
+                resume_session_id=resume_session_id,
+                allowed_tools=allowed_tools,
             )
             if schema["title"] == "ExecutionResult":
                 (working_dir / "step-1.txt").write_text('dummy_key = "changeme"\n', encoding="utf-8")
@@ -592,19 +624,29 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
             reasoning_effort_override=None,
             model_override=None,
             resume_session_id=None,
+            allowed_tools=None,
         ):
-            self.text_invocations.append(
-                {
-                    "prompt": prompt,
-                    "reasoning_effort_override": reasoning_effort_override,
-                    "model_override": model_override,
-                    "resume_session_id": resume_session_id,
-                }
-            )
             if "independently scoping" in prompt:
+                self.text_invocations.append(
+                    {
+                        "prompt": prompt,
+                        "reasoning_effort_override": reasoning_effort_override,
+                        "model_override": model_override,
+                        "resume_session_id": resume_session_id,
+                        "allowed_tools": allowed_tools,
+                    }
+                )
                 self.scoping_calls += 1
                 return TextInvokeResult("## Claude pre-scope\n\nUse the router notes.", "scope-session-1")
-            raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
+            return super().invoke_text(
+                prompt,
+                working_dir,
+                timeout,
+                reasoning_effort_override=reasoning_effort_override,
+                model_override=model_override,
+                resume_session_id=resume_session_id,
+                allowed_tools=allowed_tools,
+            )
 
     claude = DistinctScopeClaude([_plan()], [_review()], [_codex_approve_review()])
     codex = FakeCodexAdapter()
@@ -620,7 +662,7 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
 
     assert state.status == "DONE"
     assert state.session_ids["scoping_claude"] == "scope-session-1"
-    assert len(claude.text_invocations) == 1
+    assert any("independently scoping" in str(item["prompt"]) for item in claude.text_invocations)
     codex_review_prompt = str(codex.text_invocations[1]["prompt"])
     assert "CLAUDE CANONICAL SCOPE.MD:\n## Claude pre-scope" in codex_review_prompt
     assert "YOUR INDEPENDENT CODEX SCOPE:" in codex_review_prompt
@@ -643,6 +685,7 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
             reasoning_effort_override=None,
             model_override=None,
             resume_session_id=None,
+            allowed_tools=None,
         ):
             self.text_invocations.append(
                 {
@@ -650,6 +693,7 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
                     "reasoning_effort_override": reasoning_effort_override,
                     "model_override": model_override,
                     "resume_session_id": resume_session_id,
+                    "allowed_tools": allowed_tools,
                 }
             )
             self.scoping_calls += 1
@@ -675,8 +719,11 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
     assert state.scope_md_ref is not None
     assert codex.text_invocations[2]["model_override"] == "gpt-5.4"
     assert codex.text_invocations[2]["reasoning_effort_override"] == "high"
-    assert claude.text_invocations[-1]["model_override"] == "claude-opus-4-7"
-    assert claude.text_invocations[-1]["reasoning_effort_override"] == "xhigh"
+    assert any(
+        invocation["model_override"] == "claude-opus-4-7"
+        and invocation["reasoning_effort_override"] == "xhigh"
+        for invocation in claude.text_invocations
+    )
 
 
 def test_scope_review_agreement_requires_structured_marker():
@@ -717,7 +764,7 @@ def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     assert state.current_phase == "APPROVAL_PLAN"
     assert claude.planning_calls == 2
     planning_calls = [item for item in claude.invocations if item["title"] == "Plan"]
-    assert planning_calls[0]["resume_session_id"] is None
+    assert planning_calls[0]["resume_session_id"] == "scoping-claude-session"
     assert planning_calls[1]["resume_session_id"] == "planning-session"
 
     state = engine.approve(state.run_id, "plan")
@@ -987,7 +1034,7 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
     assert state.status == "DONE"
     assert state.session_ids["reviewing"] == "review-session"
     assert len(review_invocations) == 1
-    assert review_invocations[0]["resume_session_id"] is None
+    assert review_invocations[0]["resume_session_id"] == "planning-session"
 
 
 def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_config):
@@ -1129,14 +1176,35 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
                     "assumptions": [],
                     "complexity_tier": "moderate",
                 }
-            if title == "Plan":
-                self._plan_attempts += 1
-                if self._plan_attempts == 1:
-                    raise StepFailure("invalid plan", validation_error="missing task context")
-                return _plan()
             if title == "Review":
                 return _review()
             raise AssertionError(f"Unexpected schema title: {title}")
+
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+            allowed_tools=None,
+        ):
+            self.prompts.append(prompt)
+            if "software planning agent" in prompt and "## Approach" in prompt:
+                self._plan_attempts += 1
+                if self._plan_attempts == 1:
+                    raise StepFailure("invalid plan", validation_error="missing task context")
+                return TextInvokeResult(_plan_markdown(_plan()), session_id="planning-session")
+            if "independently scoping" in prompt:
+                return TextInvokeResult(_scope_md({
+                    "actionable": True,
+                    "normalized_task": "Implement feature",
+                    "assumptions": [],
+                    "complexity_tier": "moderate",
+                }))
+            raise AssertionError(f"Unexpected text prompt: {prompt[:80]}")
 
     claude = RetryingClaudeAdapter()
     codex = FakeCodexAdapter()
@@ -1154,7 +1222,7 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
     assert len(claude.prompts) >= 2
     retry_prompt = next(prompt for prompt in claude.prompts if "The full original prompt follows." in prompt)
     assert "TASK:\nImplement feature" in retry_prompt
-    assert "KEY FILE CONTENTS:" in retry_prompt
+    assert "SCOPE:" in retry_prompt
     assert "missing task context" in retry_prompt
 
 

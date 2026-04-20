@@ -154,6 +154,7 @@ class BaseAdapter(ABC):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> InvokeResult:
         """Invoke the CLI with *prompt* and return a validated result wrapper.
 
@@ -175,6 +176,8 @@ class BaseAdapter(ABC):
             Optional phase-specific model override.
         resume_session_id:
             Optional vendor session ID to resume when the CLI supports it.
+        allowed_tools:
+            Optional allowed tool list for CLIs that support agentic tool access.
 
         Returns
         -------
@@ -199,6 +202,7 @@ class BaseAdapter(ABC):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> TextInvokeResult:
         """Invoke the CLI with *prompt* and return raw text output."""
 

@@ -64,6 +64,7 @@ class CodexAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> InvokeResult:
         """Invoke ``codex exec`` and return a validated output dict.
 
@@ -255,6 +256,7 @@ class CodexAdapter(BaseAdapter):
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
         resume_session_id: str | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
             prompt,

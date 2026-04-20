@@ -105,13 +105,14 @@ def test_build_scoping_prompt_includes_required_field_checklist():
 
 def test_build_full_execution_prompt_codex_renders_single_result_path():
     prompt = build_full_execution_prompt_codex(
-        plan_json='{"implementation_steps":["Update endpoint"]}',
+        plan_text="## Steps\n- Update endpoint",
         file_contents="# src/api.py\npass\n",
         result_file_path="/tmp/execution.json",
         schema_json='{"title":"ExecutionResult"}',
     )
 
     assert "Execute the full plan" in prompt
+    assert "PLAN:" in prompt
     assert "write your result JSON to:" in prompt
     assert "/tmp/execution.json" in prompt
 
@@ -119,7 +120,7 @@ def test_build_full_execution_prompt_codex_renders_single_result_path():
 def test_build_review_prompt_renders_optional_reviewer_sections():
     prompt = build_review_prompt(
         task_description="Implement feature",
-        plan_json='{"plan_id":"1"}',
+        plan_text="## Steps\n- Implement feature",
         git_diff="diff --git a/a.py b/a.py",
         step_results_json='[{"step_number":1}]',
         schema_json='{"title":"Review"}',

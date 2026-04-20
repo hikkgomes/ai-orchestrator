@@ -50,33 +50,30 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 | Default CLI | `claude -p` |
 | Config key | `routing.planner` |
 | Input | User task description + `scope.md` + repo file listing + any operator/review feedback |
-| Output | `plans/plan-<uuid>.json` validated against `plan.schema.json` |
+| Output | `plans/plan-<run-prefix>-<hash>.md` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
-| Session | Fresh on first entry; `claude --resume <session-id>` for change-request refinements |
+| Session | Unified Claude session (`claude --resume <session-id>`) shared with scoping/review when enabled |
 
 **Prompt construction:**
 
 ```
-You are a software planning agent. Given the following task and repository context,
-produce a JSON plan conforming to the schema below.
+You are a software planning agent. You have access to Read, Grep, and Glob
+tools to explore the codebase.
 
 TASK:
 {task_description}
 
-REPOSITORY STRUCTURE:
-{directory_tree}
+SCOPE:
+{scope_md}
 
-KEY FILE CONTENTS:
-{key_file_contents}
+Explore the codebase to understand the relevant code, then write an
+implementation plan with sections: Approach, Steps, and Key Files.
 
-OUTPUT SCHEMA:
-{plan.schema.json contents}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+Write ONLY the plan. No preamble and no markdown code fences.
 ```
 
-**Repo context strategy:** Directory tree (truncated at depth 3) for orientation, plus full contents of key files (README, config, entry points). For large repos, the tree is truncated to fit within ~50K chars. The planner's flat `key_files` field guides execution context.
+**Repo context strategy:** Planner explores the repository dynamically with agentic tools instead of relying on a pre-rendered context dump.
 
 ---
 
@@ -109,7 +106,7 @@ Plan approval has three outcomes:
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.worker` |
-| Input | Full plan JSON + contents of `key_files` + repository/workspace context |
+| Input | Full plan text + contents of `key_files` + repository/workspace context |
 | Output | `results/execution-<uuid>.json` validated against `execution_result.schema.json` |
 | Worktree | Yes (single worktree for the entire run, created on execution entry) |
 | Retries | Up to `max_retries` for the full execution session |
@@ -138,8 +135,8 @@ Plan approval has three outcomes:
 You are a software implementation agent. Execute the full plan in this
 single Codex session.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}
@@ -159,8 +156,8 @@ If you cannot write the file, respond with ONLY the raw JSON.
 You are a software implementation agent. Execute the full plan in one
 continuous pass and then return one JSON result.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}
@@ -187,7 +184,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 | Output | `reviews/review-<uuid>.json` plus debate rounds when needed |
 | Worktree | Uses the implementation worktree as working directory for review context |
 | Retries | Up to `max_retries` on schema failure |
-| Session | Fresh Claude review session; Claude Opus/max may resume it for final disagreement resolution |
+| Session | Unified Claude session resumes from scoping/planning when enabled |
 
 **Prompt construction:**
 
@@ -198,7 +195,7 @@ ORIGINAL TASK:
 {task_description}
 
 PLAN:
-{plan_json}
+{plan_text}
 
 IMPLEMENTATION DIFF:
 {git_diff}

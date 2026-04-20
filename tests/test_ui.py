@@ -59,6 +59,18 @@ def test_render_plan_detail_shows_full_approach_and_file_lists():
     assert "orch approve 12345678 plan" in output
 
 
+def test_render_plan_detail_supports_markdown_plan():
+    ui, console, _ = _ui()
+    markdown_plan = "## Approach\nShip safely.\n\n## Steps\n1. Update code\n\n## Key Files\n- src/app.py\n"
+
+    ui.print_plan(markdown_plan, run_id="12345678-0000-0000-0000-000000000000", detailed=True)
+
+    output = console.export_text()
+    assert "Ship safely." in output
+    assert "src/app.py" in output
+    assert "orch approve 12345678 plan" in output
+
+
 def test_render_status_includes_run_metadata():
     ui, console, _ = _ui()
     state = RunState(run_id="run-123", task="Test the status UI")

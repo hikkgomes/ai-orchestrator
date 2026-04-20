@@ -37,10 +37,7 @@ _SECRET_PATTERNS = (
 
 def build_planning_prompt(
     task_description: str,
-    directory_tree: str,
-    key_file_contents: str,
-    schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
+    scope_md: str,
 ) -> str:
     """Build the planning phase prompt.
 
@@ -48,39 +45,31 @@ def build_planning_prompt(
     ----------
     task_description:
         The user's original task string.
-    directory_tree:
-        Repo directory tree (truncated at depth 3, max ~50K chars).
-    key_file_contents:
-        Contents of key files (README, config, entry points).
-    schema_json:
-        JSON-serialised ``plan.schema.json``.
+    scope_md:
+        Canonical scope markdown generated during scoping.
 
     Returns
     -------
     str
         Fully rendered prompt for the planner CLI.
     """
-    workspace_section = _workspace_section(workspace_trees)
     return (
-        "You are a software planning agent. Think like Claude Plan mode: produce a\n"
-        "natural, implementation-ready plan without pretending you know every file\n"
-        "that will change in advance. The plan must still be valid JSON conforming\n"
-        "to the schema below.\n\n"
+        "You are a software planning agent. You have access to Read, Grep, and Glob\n"
+        "tools to explore the codebase.\n\n"
         "TASK:\n"
         f"{task_description}\n\n"
-        "REPOSITORY STRUCTURE:\n"
-        f"{directory_tree}{workspace_section}\n\n"
-        "KEY FILE CONTENTS:\n"
-        f"{key_file_contents}\n\n"
-        "PLAN SHAPE:\n"
-        "- task: concise restatement of the work\n"
-        "- approach: strategy, reasoning, risks, and validation approach\n"
-        "- implementation_steps: ordered plain-language actions, not rigid step objects\n"
-        "- key_files: flat list of likely relevant repository-relative paths\n\n"
-        "Do not include per-step file lists, dependency graphs, or complexity hints.\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        "SCOPE:\n"
+        f"{scope_md}\n\n"
+        "Explore the codebase to understand the relevant code, then write an\n"
+        "implementation plan. Structure your plan with these sections:\n\n"
+        "## Approach\n"
+        "Strategy, reasoning, risks, and validation approach.\n\n"
+        "## Steps\n"
+        "Ordered implementation actions. Be specific and reference files or functions\n"
+        "you found during exploration.\n\n"
+        "## Key Files\n"
+        "List the files that will need changes using a bullet list of repository-relative paths.\n\n"
+        "Write ONLY the plan. No preamble and no markdown code fences.\n"
     )
 
 
@@ -137,13 +126,13 @@ def build_scoping_prompt(
     )
 
 
-def build_prescope_claude_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
+def build_prescope_claude_prompt(raw_task: str) -> str:
     """Build Claude round-1 prompt that creates canonical scope.md."""
     return _prescope_prompt(
         actor="Claude",
         raw_task=raw_task,
-        repo_summary=repo_summary,
-        directory_tree=directory_tree,
+        repo_summary="",
+        directory_tree="",
         canonical=True,
     )
 
@@ -239,7 +228,7 @@ def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
 
 
 def build_full_execution_prompt_codex(
-    plan_json: str,
+    plan_text: str,
     file_contents: str,
     result_file_path: str,
     schema_json: str,
@@ -251,8 +240,8 @@ def build_full_execution_prompt_codex(
         "You are a software implementation agent. Execute the full plan in this\n"
         "single Codex session. Maintain context across all implementation steps and\n"
         "make the smallest correct set of changes.\n\n"
-        "FULL PLAN JSON:\n"
-        f"{plan_json}\n\n"
+        "PLAN:\n"
+        f"{plan_text}\n\n"
         "RELEVANT FILES:\n"
         f"{file_contents}\n\n"
         f"{workspace_section}"
@@ -272,7 +261,7 @@ def build_full_execution_prompt_codex(
 
 
 def build_full_execution_prompt_claude(
-    plan_json: str,
+    plan_text: str,
     file_contents: str,
     schema_json: str,
     workspace_trees: dict[str, str] | None = None,
@@ -282,8 +271,8 @@ def build_full_execution_prompt_claude(
     return (
         "You are a software implementation agent. Execute the full plan in one\n"
         "continuous pass and then return one JSON result.\n\n"
-        "FULL PLAN JSON:\n"
-        f"{plan_json}\n\n"
+        "PLAN:\n"
+        f"{plan_text}\n\n"
         "RELEVANT FILES:\n"
         f"{file_contents}\n\n"
         f"{workspace_section}"
@@ -295,7 +284,7 @@ def build_full_execution_prompt_claude(
 
 def build_review_prompt(
     task_description: str,
-    plan_json: str,
+    plan_text: str,
     git_diff: str,
     step_results_json: str,
     schema_json: str,
@@ -312,7 +301,7 @@ def build_review_prompt(
         "ORIGINAL TASK:\n"
         f"{task_description}\n\n"
         "PLAN:\n"
-        f"{plan_json}\n\n"
+        f"{plan_text}\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
@@ -333,7 +322,7 @@ def build_review_prompt(
 def build_review_codex_prompt(
     task_description: str,
     scope_md: str,
-    plan_json: str,
+    plan_text: str,
     git_diff: str,
     step_results_json: str,
     review_json: str,
@@ -349,7 +338,7 @@ def build_review_codex_prompt(
         "FINAL SCOPE.MD:\n"
         f"{scope_md}\n\n"
         "PLAN:\n"
-        f"{plan_json}\n\n"
+        f"{plan_text}\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
@@ -368,7 +357,7 @@ def build_review_codex_prompt(
 def build_review_final_claude_prompt(
     task_description: str,
     scope_md: str,
-    plan_json: str,
+    plan_text: str,
     git_diff: str,
     step_results_json: str,
     claude_review_json: str,
@@ -390,7 +379,7 @@ def build_review_final_claude_prompt(
         "FINAL SCOPE.MD:\n"
         f"{scope_md}\n\n"
         "PLAN:\n"
-        f"{plan_json}\n\n"
+        f"{plan_text}\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
@@ -431,14 +420,13 @@ def build_fix_planning_prompt(
     diff: str,
     issues: str,
     debate_context: str,
-    schema_json: str,
 ) -> str:
-    """Build a planning prompt for incremental fix steps only."""
+    """Build a planning prompt for incremental fix plans."""
     return (
-        "You are a software planning agent creating an incremental natural fix plan.\n\n"
-        "The worktree already contains implementation changes. Do NOT produce a full\n"
-        "replacement plan. Produce only the smallest follow-up implementation_steps\n"
-        "needed to fix the issues below on top of the existing worktree.\n\n"
+        "You are a software planning agent creating an incremental fix plan.\n\n"
+        "You have access to Read, Grep, and Glob tools to inspect the current repository state.\n"
+        "The worktree already contains implementation changes. Do NOT produce a full replacement plan.\n"
+        "Produce only the smallest follow-up plan needed to fix the issues below on top of existing changes.\n\n"
         "TASK:\n"
         f"{task}\n\n"
         "SCOPE.MD:\n"
@@ -453,9 +441,11 @@ def build_fix_planning_prompt(
         f"{issues}\n\n"
         "DEBATE CONTEXT:\n"
         f"{debate_context}\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        "Write the output using these sections:\n\n"
+        "## Approach\n"
+        "## Steps\n"
+        "## Key Files\n\n"
+        "Write ONLY the plan. No preamble and no markdown code fences.\n"
     )
 
 
@@ -691,14 +681,21 @@ def _prescope_prompt(
         )
     return (
         f"You are {actor}, independently scoping a user request for an automated\n"
-        "software orchestrator. Do not implement anything.\n\n"
+        "software orchestrator. You may use Read, Grep, and Glob to inspect the codebase.\n"
+        "Do not implement anything.\n\n"
         f"{output_rules}"
         "RAW TASK:\n"
         f"{raw_task}\n\n"
-        "REPOSITORY SUMMARY:\n"
-        f"{repo_summary}\n\n"
-        "REPOSITORY STRUCTURE:\n"
-        f"{directory_tree}\n"
+        + (
+            ""
+            if not repo_summary and not directory_tree
+            else (
+                "REPOSITORY SUMMARY:\n"
+                f"{repo_summary}\n\n"
+                "REPOSITORY STRUCTURE:\n"
+                f"{directory_tree}\n"
+            )
+        )
     )
 
 

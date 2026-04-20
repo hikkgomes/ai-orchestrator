@@ -158,6 +158,12 @@ def _load_plan_file(path: str) -> dict[str, object]:
     return data
 
 
+def _load_plan_artifact(store: ArtifactStore, plan_ref: str) -> dict[str, object] | str:
+    if plan_ref.endswith(".md"):
+        return store.read_text(plan_ref)
+    return store.read_json(plan_ref)
+
+
 def _start_run(
     ctx: click.Context,
     task: str,
@@ -546,7 +552,7 @@ def cmd_show(ctx: click.Context, run_id: str, artifact: str) -> None:
         if not state.plan_id:
             raise click.ClickException(f"Run {resolved_run_id} does not have a saved plan yet.")
         ctx.obj["ui"].print_plan(
-            store.read_json(state.plan_id),
+            _load_plan_artifact(store, state.plan_id),
             run_id=resolved_run_id,
             detailed=True,
         )
@@ -728,7 +734,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                     }
                 )
         elif gate == "plan" and state.plan_id:
-            plan = ArtifactStore(ctx.obj["artifact_root"]).read_json(state.plan_id)
+            plan = _load_plan_artifact(ArtifactStore(ctx.obj["artifact_root"]), state.plan_id)
             ui.print_plan(plan, run_id=state.run_id, detailed=True)
         if gate == "plan":
             choice = ui.approval_choice(
@@ -754,7 +760,7 @@ def _render_status(ctx: click.Context, run_id: str) -> RenderableType:
     state_mgr = StateManager(ctx.obj["artifact_root"])
     state = state_mgr.load(run_id)
     store = ArtifactStore(ctx.obj["artifact_root"])
-    plan = store.read_json(state.plan_id) if state.plan_id else None
+    plan = _load_plan_artifact(store, state.plan_id) if state.plan_id else None
     step_results = [store.read_json(reference) for reference in state.step_results]
     log_entries = _load_log_entries(ctx.obj["artifact_root"] / "logs" / f"run-{run_id}.log")
     return ctx.obj["ui"].render_status(state, plan=plan, step_results=step_results, log_entries=log_entries)
@@ -773,10 +779,10 @@ def _render_run_snapshot(ctx: click.Context, run_id: str, *, state=None) -> None
             }
         )
     if state.current_phase == "APPROVAL_PLAN" and state.plan_id:
-        ctx.obj["ui"].print_plan(store.read_json(state.plan_id), run_id=state.run_id)
+        ctx.obj["ui"].print_plan(_load_plan_artifact(store, state.plan_id), run_id=state.run_id)
     ctx.obj["ui"].print_status(
         state,
-        plan=store.read_json(state.plan_id) if state.plan_id else None,
+        plan=_load_plan_artifact(store, state.plan_id) if state.plan_id else None,
         step_results=[store.read_json(reference) for reference in state.step_results],
         log_entries=_load_log_entries(ctx.obj["artifact_root"] / "logs" / f"run-{run_id}.log"),
     )

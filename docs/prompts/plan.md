@@ -2,18 +2,16 @@
 
 > Workflow phase: PLANNING
 > CLI: `claude -p` (default); configurable via `routing.planner`
-> Output artifact: `plans/plan-<uuid>.json`
-> Schema: `schemas/plan.schema.json`
-> State transitions: PLANNING → APPROVAL_PLAN (or EXECUTING if approval skipped)
+> Output artifact: `plans/plan-<run-prefix>-<hash>.md`
+> State transitions: PLANNING -> APPROVAL_PLAN (or EXECUTING if approval is skipped)
 
 ---
 
 ## Purpose
 
-Produce a natural implementation plan, similar to Claude Plan mode. The planner
-describes the overall approach, ordered implementation steps as plain strings,
-and one flat list of likely relevant files. It does not predict exact per-step
-file lists, dependencies, or complexity hints.
+Produce an implementation plan using agentic repository exploration. The planner
+may inspect the codebase with `Read`, `Grep`, and `Glob`, then return a concise
+markdown plan for execution.
 
 ---
 
@@ -21,51 +19,45 @@ file lists, dependencies, or complexity hints.
 
 | Variable | Source | Description |
 |---|---|---|
-| `{task_description}` | run state + `scope.md` | Validated task and canonical scope |
-| `{directory_tree}` | file system | Depth-3 tree of repo root, truncated to 50 000 chars |
-| `{key_file_contents}` | file system | Full contents of README, config, entry points; each file prefixed with its path |
-| `{plan_schema}` | `schemas/plan.schema.json` | Full JSON Schema for the plan artifact |
-| `{planning_feedback}` | human or debate feedback (optional) | Feedback for iterative refinement |
-| `{scope_md}` | scoping artifact | Canonical scope with YAML frontmatter |
+| `{task_description}` | run state + feedback | Validated task and optional planning feedback |
+| `{scope_md}` | scoping artifact | Canonical scope markdown from SCOPING |
 
 ---
 
 ## Scope Constraints
 
-- Plan only what the task requires.
-- Use `approach` for strategy, reasoning, risks, and validation notes.
-- Use `implementation_steps` for ordered natural-language actions.
-- Use `key_files` for a flat list of repository-relative paths likely relevant to execution.
-- Do not include per-step file lists, dependency graphs, or complexity hints.
-- File paths must be relative, must not start with `/`, and must not contain `..` segments.
+- Explore the repository before writing the plan.
+- Write only implementation guidance, no progress narrative.
+- Prefer concrete references to files/functions discovered during exploration.
+- Keep steps ordered and actionable.
+- List key files as repository-relative paths.
 
 ---
 
 ## Template
 
 ```
-You are a software planning agent. Think like Claude Plan mode: produce a
-natural, implementation-ready plan without pretending you know every file
-that will change in advance. The plan must still be valid JSON conforming
-to the schema below.
+You are a software planning agent. You have access to Read, Grep, and Glob
+tools to explore the codebase.
 
 TASK:
 {task_description}
 
-REPOSITORY STRUCTURE:
-{directory_tree}
+SCOPE:
+{scope_md}
 
-KEY FILE CONTENTS:
-{key_file_contents}
+Explore the codebase to understand the relevant code, then write an
+implementation plan. Structure your plan with these sections:
 
-PLAN SHAPE:
-- task: concise restatement of the work
-- approach: strategy, reasoning, risks, and validation approach
-- implementation_steps: ordered plain-language actions, not rigid step objects
-- key_files: flat list of likely relevant repository-relative paths
+## Approach
+Strategy, reasoning, risks, and validation approach.
 
-OUTPUT SCHEMA:
-{plan_schema}
+## Steps
+Ordered implementation actions. Be specific and reference files or functions
+you found during exploration.
 
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+## Key Files
+List the files that will need changes using a bullet list of repository-relative paths.
+
+Write ONLY the plan. No preamble and no markdown code fences.
 ```

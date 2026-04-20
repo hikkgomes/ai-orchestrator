@@ -21,7 +21,7 @@ uncommitted changes, the engine creates one fallback commit.
 
 | Variable | Source | Description |
 |---|---|---|
-| `{plan_json}` | plan artifact | Full natural plan JSON |
+| `{plan_text}` | plan artifact | Full plan text (markdown for new plans, JSON block for legacy plans) |
 | `{file_contents}` | worktree | Contents of all `key_files`, each prefixed with its path |
 | `{result_file_path}` | engine | Absolute path: `.ai-orchestrator/results/pending-execution-<run>.json` |
 | `{execution_result_schema}` | `schemas/execution_result.schema.json` | Full JSON Schema for the result artifact |
@@ -47,8 +47,8 @@ You are a software implementation agent. Execute the full plan in this
 single Codex session. Maintain context across all implementation steps and
 make the smallest correct set of changes.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}
@@ -74,8 +74,8 @@ If you cannot write the file, respond with ONLY the raw JSON. No markdown fences
 You are a software implementation agent. Execute the full plan in one
 continuous pass and then return one JSON result.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}

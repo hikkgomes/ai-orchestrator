@@ -53,6 +53,8 @@ class TestLoadConfig:
                     "[routing]",
                     "[routing.phases.reviewing]",
                     'reasoning_effort = "max"',
+                    'allowed_tools = ["Read", "Grep", "Glob", "Bash"]',
+                    "timeout_seconds = 7200",
                     "[routing.phases.executing]",
                     'cli = "claude"',
                     'model = "claude-sonnet"',
@@ -71,6 +73,8 @@ class TestLoadConfig:
         cfg = load_config(repo_root=tmp_path)
 
         assert cfg.routing.phases["reviewing"].reasoning_effort == "max"
+        assert cfg.routing.phases["reviewing"].allowed_tools == ["Read", "Grep", "Glob", "Bash"]
+        assert cfg.routing.phases["reviewing"].timeout_seconds == 7200
         assert cfg.routing.phases["executing"].cli == "claude"
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
         assert cfg.routing.phases["executing"].model_extramax == "claude-opus"

@@ -13,6 +13,7 @@ from typing import Any, Callable, Generator, Iterable
 from rich import box
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
     Progress,
@@ -218,13 +219,13 @@ class OrchestratorUI:
 
     def print_plan(
         self,
-        plan: Plan | dict[str, Any],
+        plan: Plan | dict[str, Any] | str,
         *,
         run_id: str | None = None,
         detailed: bool = False,
     ) -> None:
         """Render a plan summary table or full detail view."""
-        payload = self._coerce_plan(plan)
+        payload = plan if isinstance(plan, str) else self._coerce_plan(plan)
         renderable = (
             self.render_plan_detail(payload, run_id=run_id)
             if detailed
@@ -240,7 +241,7 @@ class OrchestratorUI:
         self,
         state: RunState,
         *,
-        plan: Plan | dict[str, Any] | None = None,
+        plan: Plan | dict[str, Any] | str | None = None,
         step_results: Iterable[dict[str, Any]] | None = None,
         log_entries: Iterable[dict[str, Any]] | None = None,
     ) -> None:
@@ -258,7 +259,7 @@ class OrchestratorUI:
         self,
         state: RunState,
         *,
-        plan: Plan | dict[str, Any] | None = None,
+        plan: Plan | dict[str, Any] | str | None = None,
         step_results: Iterable[dict[str, Any]] | None = None,
         log_entries: Iterable[dict[str, Any]] | None = None,
     ) -> RenderableType:
@@ -552,11 +553,24 @@ class OrchestratorUI:
 
     def render_plan_detail(
         self,
-        plan: Plan | dict[str, Any],
+        plan: Plan | dict[str, Any] | str,
         *,
         run_id: str | None = None,
     ) -> RenderableType:
         """Render the full plan without truncation."""
+        if isinstance(plan, str):
+            sections: list[RenderableType] = [Markdown(plan)]
+            if run_id:
+                short_id = run_id[:8]
+                sections.append(
+                    Text(
+                        f"Approve with `orch approve {short_id} plan` or reject with "
+                        f"`orch reject {short_id} plan --reason ...`",
+                        style="dim",
+                    )
+                )
+            return Panel(Group(*sections), title="Implementation Plan", border_style="cyan")
+
         payload = self._coerce_plan(plan)
         steps = "\n".join(
             f"{index}. {step}" for index, step in enumerate(payload.implementation_steps, start=1)
@@ -585,7 +599,19 @@ class OrchestratorUI:
 
         return Panel(Group(*sections), title="Implementation Plan", border_style="cyan")
 
-    def _render_plan(self, plan: Plan, *, run_id: str | None = None) -> RenderableType:
+    def _render_plan(self, plan: Plan | str, *, run_id: str | None = None) -> RenderableType:
+        if isinstance(plan, str):
+            body: list[RenderableType] = [
+                Markdown(plan),
+            ]
+            if run_id:
+                body.append(Text(f"Run `orch show {run_id[:8]} plan` to view the full plan.", style="dim"))
+            return Panel(
+                Group(*body),
+                title="Implementation Plan",
+                border_style="cyan",
+            )
+
         steps = Table(box=box.ROUNDED, expand=True, header_style="bold cyan")
         steps.add_column("#", width=4, justify="right")
         steps.add_column("Implementation Step")

@@ -41,6 +41,9 @@ class ArtifactStore:
     def save_plan(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("plans", f"plan-{run_id[:8]}", payload)
 
+    def save_plan_md(self, run_id: str, content: str) -> str:
+        return self._write_versioned_text("plans", f"plan-{run_id[:8]}", content, ext=".md")
+
     def save_feasibility(self, run_id: str, payload: dict[str, Any]) -> str:
         return self._write_versioned_json("feasibility", f"feasibility-{run_id[:8]}", payload)
 

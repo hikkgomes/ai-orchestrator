@@ -56,6 +56,8 @@ class PhaseRoutingOverride:
     cli: str = ""
     reasoning_effort: str = ""
     model: str = ""
+    allowed_tools: list[str] = field(default_factory=list)
+    timeout_seconds: int = 0
     model_simple: str = ""
     model_moderate: str = ""
     model_complex: str = ""
@@ -97,6 +99,7 @@ class DebateConfig:
 
 @dataclass
 class SessionConfig:
+    enable_unified_session: bool = True
     enable_planning_resume: bool = True
     enable_review_resume: bool = True
 
@@ -394,6 +397,10 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
                 "model_extramax",
             }:
                 _validate_string(f"routing.phases.{phase_name}.{key}", value)
+            elif key == "allowed_tools":
+                _validate_string_list(f"routing.phases.{phase_name}.allowed_tools", value)
+            elif key == "timeout_seconds":
+                _validate_int(f"routing.phases.{phase_name}.timeout_seconds", value, minimum=1)
             elif key == "cli":
                 _validate_string(f"routing.phases.{phase_name}.cli", value)
                 if value:
@@ -421,7 +428,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             _validate_string(f"debate.{key}", debate[key])
 
     sessions = _expect_mapping("sessions", data.get("sessions"))
-    for key in ("enable_planning_resume", "enable_review_resume"):
+    for key in ("enable_unified_session", "enable_planning_resume", "enable_review_resume"):
         if key in sessions:
             _validate_bool(f"sessions.{key}", sessions[key])
 
@@ -540,6 +547,8 @@ def load_config(repo_root: Path | None = None) -> Config:
                 "cli",
                 "reasoning_effort",
                 "model",
+                "allowed_tools",
+                "timeout_seconds",
                 "model_simple",
                 "model_moderate",
                 "model_complex",

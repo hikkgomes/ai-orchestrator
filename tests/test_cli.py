@@ -219,6 +219,48 @@ def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):
     assert "orch approve 12345678 plan" in result.output
 
 
+def test_show_latest_plan_renders_markdown_plan(tmp_path, monkeypatch):
+    repo_root = tmp_path
+    artifact_root = repo_root / ".ai-orchestrator"
+    (artifact_root / "state").mkdir(parents=True)
+    (artifact_root / "plans").mkdir(parents=True)
+    mgr = StateManager(artifact_root)
+    plan_path = artifact_root / "plans" / "plan-12345678.md"
+    plan_path.write_text(
+        "\n".join(
+            [
+                "---",
+                "plan_id: plan-1",
+                "task: Inspect markdown plan",
+                "---",
+                "",
+                "## Approach",
+                "Use markdown planning output.",
+                "",
+                "## Steps",
+                "1. Read files",
+                "",
+                "## Key Files",
+                "- src/ai_orchestrator/cli.py",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state = RunState(run_id="12345678-0000-0000-0000-000000000000", task="Inspect plan")
+    state.plan_id = "plans/plan-12345678.md"
+    mgr.save(state)
+
+    monkeypatch.chdir(repo_root)
+    runner = CliRunner()
+    result = runner.invoke(main, ["show", "latest", "plan"])
+
+    assert result.exit_code == 0
+    assert "Use markdown planning output." in result.output
+    assert "src/ai_orchestrator/cli.py" in result.output
+    assert "orch approve 12345678 plan" in result.output
+
+
 def test_review_install_and_analyze_commands_manage_config_files():
     runner = CliRunner()
     with runner.isolated_filesystem():
