@@ -32,7 +32,7 @@ is best-effort metadata.
 | Variable | Source | Description |
 |---|---|---|
 | `{task_description}` | run state | Normalized task description |
-| `{plan_json}` | `plans/plan-<uuid>.json` | Final executed plan |
+| `{plan_text}` | `plans/plan-<run-prefix>-<hash>.md` | Final executed plan |
 | `{step_results_json}` | `results/` | Array of all step result JSONs for this run |
 | `{review_json}` | `reviews/review-<uuid>.json` | Final review JSON |
 | `{review_json}` | `reviews/review-<uuid>.json` | Final review JSON (verdict = approve) |
@@ -150,7 +150,7 @@ TASK:
 RUN ID: {run_id}
 
 PLAN:
-{plan_json}
+{plan_text}
 
 EXECUTION RESULTS:
 {step_results_json}

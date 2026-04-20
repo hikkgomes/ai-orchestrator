@@ -191,6 +191,45 @@ class TestClaudeAdapter:
         assert any(part == "--effort" for part in commands[0])
         assert all(part != "--effort" for part in commands[1])
 
+    def test_invoke_retries_without_allowed_tools_on_unsupported_flag(
+        self,
+        tmp_path,
+        artifact_root,
+        default_config,
+        monkeypatch,
+    ):
+        schema = _schema("review.schema.json")
+        commands = []
+        fake_popen, _ = _fake_popen_factory(
+            [
+                {
+                    "stderr": "error: unknown option '--allowedTools'",
+                    "returncode": 1,
+                },
+                {
+                    "stdout": json.dumps(
+                        {
+                            "review_id": "00000000-0000-0000-0000-000000000000",
+                            "verdict": "approve",
+                            "score": 8,
+                            "findings": [],
+                            "summary": "ok",
+                            "blocks_merge": False,
+                        }
+                    ),
+                },
+            ],
+            commands,
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        adapter = ClaudeAdapter(default_config, artifact_root)
+        result = adapter.invoke("review this", tmp_path, 30, schema, allowed_tools=["Read", "Grep", "Glob"])
+
+        assert result.data["verdict"] == "approve"
+        assert "--allowedTools" in commands[0]
+        assert "--allowedTools" not in commands[1]
+
     def test_invoke_extracts_session_id_and_builds_resume_command(
         self,
         tmp_path,
@@ -273,6 +312,46 @@ class TestClaudeAdapter:
         assert "--allowedTools" in commands[0]
         allowed_index = commands[0].index("--allowedTools")
         assert commands[0][allowed_index + 1] == "Read,Grep,Glob"
+
+    def test_invoke_text_retries_without_allowed_tools_on_unsupported_flag(
+        self,
+        tmp_path,
+        artifact_root,
+        default_config,
+        monkeypatch,
+    ):
+        commands = []
+        fake_popen, _ = _fake_popen_factory(
+            [
+                {
+                    "stderr": "error: unknown option '--allowedTools'",
+                    "returncode": 1,
+                },
+                {
+                    "stdout": json.dumps(
+                        {
+                            "type": "result",
+                            "session_id": "session-xyz",
+                            "result": "## Approach\n\nDo work.",
+                        }
+                    ),
+                },
+            ],
+            commands,
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        adapter = ClaudeAdapter(default_config, artifact_root)
+        result = adapter.invoke_text(
+            "plan this",
+            tmp_path,
+            30,
+            allowed_tools=["Read", "Grep", "Glob"],
+        )
+
+        assert result.session_id == "session-xyz"
+        assert "--allowedTools" in commands[0]
+        assert "--allowedTools" not in commands[1]
 
     def test_invoke_classifies_auth_error_as_blocked(
         self,

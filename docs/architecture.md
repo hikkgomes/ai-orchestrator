@@ -9,11 +9,11 @@
 ## Core Principles
 
 1. **CLI-only AI access** — no API keys, no SDKs, no HTTP calls to model providers.
-2. **Fresh subprocess per step** — every CLI invocation is a new subprocess. No transcript carry-over between invocations. Note: vendor CLIs may retain their own local state (auth, caches, project metadata) in the user's home directory; the orchestrator does not sandbox this.
+2. **Fresh subprocess per step** — every CLI invocation is a new subprocess. Claude phases may intentionally resume one unified session (`claude_main`) across scoping, planning, and reviewing via `--resume`. Codex invocations are always fresh. Note: vendor CLIs may retain their own local state (auth, caches, project metadata) in the user's home directory; the orchestrator does not sandbox this.
 3. **Disk-artifact communication** — steps exchange data through JSON files in `.ai-orchestrator/`, never through stdout chaining.
 4. **Resumable orchestrator state** — the orchestrator persists its own state to disk so it can crash and resume.
 5. **Single worktree per run** — all mutating steps execute in one ephemeral git worktree branch per run, in sequence. The main branch is never touched until merge.
-6. **Structured outputs** — every step emits JSON validated against a schema before the orchestrator advances. Application-level validation supplements schema checks for invariants like dependency ordering and path normalization.
+6. **Structured outputs** — planning emits markdown; other AI outputs emit JSON validated against schemas before the orchestrator advances. Application-level validation supplements schema checks for invariants like path normalization and diff correspondence.
 7. **Human approval gates** — configurable points where the orchestrator blocks until a human approves.
 8. **Fail closed on unknowns** — unsupported CLI versions, unexpected exit codes, and unrecognized output formats cause deterministic failures, not silent degradation.
 
@@ -37,7 +37,7 @@
 │       │              │                                        │
 │       ▼              ▼                                        │
 │  ┌──────────┐  ┌──────────┐                                  │
-│  │claude -p │  │codex exec│   (subprocess, fresh each time)  │
+│  │claude -p │  │codex exec│   (subprocess; Claude may resume) │
 │  └──────────┘  └──────────┘                                  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -54,7 +54,7 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── scoping/
 │   └── scope-<run>.md            # canonical scope with YAML frontmatter
 ├── plans/
-│   └── plan-<uuid>.json         # validated against plan.schema.json
+│   └── plan-<prefix>-<hash>.md  # markdown plan with YAML frontmatter
 ├── results/
 │   └── execution-<uuid>.json    # validated against execution_result.schema.json
 ├── reviews/
@@ -214,6 +214,7 @@ reasoning_effort = "high"
 enabled = true
 
 [sessions]
+enable_unified_session = true
 enable_planning_resume = true
 enable_review_resume = true
 

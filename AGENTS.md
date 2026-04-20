@@ -219,7 +219,10 @@ Max retries configurable via `orchestrator.max_retries` (default: 3).
 
 ## Timeout Strategy
 
-All CLI invocations use a single global watchdog timeout from `orchestrator.watchdog_timeout` (default: 3600 seconds). This watchdog exists only as a safety net for genuinely hung subprocesses; normal phase completion is governed by the vendor CLI exiting when its work is done, so long-running but healthy planning or execution work is not cut off by per-phase limits.
+All invocations use `orchestrator.watchdog_timeout` as a global safety net.
+Planning and reviewing default to 5400 seconds (90 minutes) unless explicitly
+overridden in `routing.phases.<phase>.timeout_seconds`. This allows longer
+agentic exploration while still protecting against genuinely hung subprocesses.
 
 **Termination sequence:**
 - macOS/Linux: SIGTERM, wait 10s, SIGKILL if still alive
@@ -236,13 +239,13 @@ complete template, variable table, escalation policy, scope constraints, and
 retry prompt for its phase. The orchestrator renders these via f-string
 substitution before each CLI invocation.
 
-| Prompt file | Phase | CLI | Output schema |
+| Prompt file | Phase | CLI | Output contract |
 |---|---|---|---|
 | `docs/prompts/scope.md` | SCOPING | `claude -p` + `codex exec` | `scope.md` with YAML frontmatter |
-| `docs/prompts/plan.md` | PLANNING | `claude -p` | `plan.schema.json` |
+| `docs/prompts/plan.md` | PLANNING | `claude -p` | Markdown plan (`plans/plan-<run-prefix>-<hash>.md`) |
 | `docs/prompts/implement.md` | EXECUTING | `codex exec` or `claude -p` | `execution_result.schema.json` |
 | `docs/prompts/review.md` | REVIEWING | `claude -p` | `review.schema.json` |
-| `docs/prompts/fix-plan.md` | PLANNING (replan) | `claude -p` | `plan.schema.json` |
+| `docs/prompts/fix-plan.md` | PLANNING (replan) | `claude -p` | Markdown plan (`plans/plan-<run-prefix>-<hash>.md`) |
 
 Deferred prompt drafts are kept under `docs/prompts/deferred/` and are not invoked by the current engine:
 
@@ -280,22 +283,23 @@ Prompts are constructed using Python f-strings. Each phase has a template:
 ### Planning prompt
 
 ```
-You are a software planning agent. Given the following task and repository context,
-produce a JSON plan conforming to the schema below.
+You are a software planning agent. You have access to Read, Grep, and Glob
+tools to explore the codebase.
 
 TASK:
 {task_description}
 
-REPOSITORY STRUCTURE:
-{directory_tree}
+SCOPE:
+{scope_md}
 
-KEY FILE CONTENTS:
-{key_file_contents}
+Explore the codebase to understand the relevant code, then write an
+implementation plan. Structure your plan with these sections:
 
-OUTPUT SCHEMA:
-{plan.schema.json contents}
+## Approach
+## Steps
+## Key Files
 
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+Write ONLY the plan. No preamble and no markdown code fences.
 ```
 
 ### Execution prompt (Codex)
@@ -304,8 +308,8 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 You are a software implementation agent. Execute the full plan in this
 single Codex session.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}
@@ -325,8 +329,8 @@ If you cannot write the file, respond with ONLY the raw JSON. No markdown fences
 You are a software implementation agent. Execute the full plan in one
 continuous pass and then return one JSON result.
 
-FULL PLAN JSON:
-{plan_json}
+PLAN:
+{plan_text}
 
 RELEVANT FILES:
 {file_contents}
@@ -346,7 +350,7 @@ ORIGINAL TASK:
 {task_description}
 
 PLAN:
-{plan_json}
+{plan_text}
 
 IMPLEMENTATION DIFF:
 {git_diff}

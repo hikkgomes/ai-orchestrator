@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from textwrap import dedent
 
 import pytest
 
@@ -737,6 +738,37 @@ def test_scope_review_agreement_requires_structured_marker():
     assert Engine._scope_review_agreed("agreement: true\n\nAccepted after review.") is True
 
 
+def test_extract_key_files_from_plan_text():
+    text = dedent(
+        """\
+        ## Approach
+        Some approach text.
+
+        ## Steps
+        1. Do something
+
+        ## Key Files
+        - src/main.py
+        - `src/utils.py`
+        * tests/test_main.py
+        1. src/config.py
+        2. /absolute/path.py
+        3. ../../escape/path.py
+        4. src/main.py
+
+        ## Other Section
+        - not/a/key/file.py
+        """
+    )
+
+    result = Engine._extract_key_files_from_plan_text(text)
+    assert result == ["src/main.py", "src/utils.py", "tests/test_main.py", "src/config.py"]
+
+    assert Engine._extract_key_files_from_plan_text("## Key Files\n\n## Steps\n1. x\n") == []
+    assert Engine._extract_key_files_from_plan_text("## Approach\n- src/main.py\n") == []
+    assert Engine._extract_key_files_from_plan_text("## Key Files\n- src/a.py\n- src/a.py\n") == ["src/a.py"]
+
+
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = True
     default_config.approval.require_merge_approval = True
@@ -769,6 +801,34 @@ def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
 
     state = engine.approve(state.run_id, "plan")
     assert state.status == "DONE"
+
+
+def test_unified_session_disabled_does_not_set_claude_main_or_resume_across_phases(
+    tmp_repo, artifact_root, default_config
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    default_config.sessions.enable_unified_session = False
+    default_config.sessions.enable_planning_resume = True
+    default_config.sessions.enable_review_resume = True
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "c1c1c1c1-c1c1-c1c1-c1c1-c1c1c1c1c1c1")
+
+    assert state.status == "DONE"
+    planning_call = next(call for call in claude.invocations if call["title"] == "Plan")
+    review_call = next(call for call in claude.invocations if call["title"] == "Review")
+    assert planning_call["resume_session_id"] is None
+    assert review_call["resume_session_id"] is None
+    assert "claude_main" not in state.session_ids
     assert state.commit_commands
     assert codex.review_calls == 1
 
@@ -1593,6 +1653,7 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
             reasoning_effort_override=None,
             model_override=None,
             resume_session_id=None,
+            allowed_tools=None,
         ):
             raise StepFailure(
                 "Claude CLI exited with a non-zero status",
@@ -1610,6 +1671,8 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
+            resume_session_id=None,
+            allowed_tools=None,
         ):
             if schema["title"] == "TaskDefinition":
                 raise StepFailure(
@@ -1625,6 +1688,8 @@ def test_step_failure_stderr_surfaces_in_failed_run_error(tmp_repo, artifact_roo
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
+                resume_session_id=resume_session_id,
+                allowed_tools=allowed_tools,
             )
 
     engine = Engine(
@@ -1663,6 +1728,7 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
             reasoning_effort_override=None,
             model_override=None,
             resume_session_id=None,
+            allowed_tools=None,
         ):
             raise StepFailure(
                 "Claude CLI exited with a non-zero status",
@@ -1687,6 +1753,8 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
             step_number=None,
             reasoning_effort_override=None,
             model_override=None,
+            resume_session_id=None,
+            allowed_tools=None,
         ):
             if schema["title"] == "TaskDefinition":
                 raise StepFailure(
@@ -1709,6 +1777,8 @@ def test_step_failure_stdout_json_errors_surface_in_failed_run_error(
                 step_number=step_number,
                 reasoning_effort_override=reasoning_effort_override,
                 model_override=model_override,
+                resume_session_id=resume_session_id,
+                allowed_tools=allowed_tools,
             )
 
     engine = Engine(

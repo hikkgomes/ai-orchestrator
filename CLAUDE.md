@@ -9,9 +9,9 @@ A local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`code
 ## Key architecture rules
 
 - **No API calls** — all AI interaction is via `claude -p` and `codex exec` subprocesses.
-- **Fresh subprocess per invocation** — every CLI call is a new subprocess. Planning and review may explicitly resume the same Claude session with `--resume` when the workflow requires iterative continuity.
+- **Fresh subprocess per invocation** — every CLI call is a new subprocess. Claude phases can explicitly resume one unified `claude_main` session with `--resume` across scoping, planning, and reviewing.
 - **Disk artifacts only** — steps communicate through JSON files in `.ai-orchestrator/`, never through stdout chaining.
-- **Schema + application validation** — every AI output is validated against a JSON schema in `schemas/` and then against application-level invariants before the orchestrator acts on it.
+- **Schema + application validation** — planning output is markdown. All other AI outputs are validated against JSON schemas in `schemas/`, then checked against application-level invariants before the orchestrator acts on them.
 - **Single preserved worktree per run** — all mutating steps execute sequentially in one worktree branch. Fix cycles build on existing changes instead of discarding the worktree.
 - **Resumable state** — orchestrator state is persisted to `.ai-orchestrator/state/run-<uuid>.json` after every phase change.
 - **Fail closed** — unsupported CLI versions, unrecognized output, and unexpected failures cause deterministic errors, not silent degradation.
@@ -59,7 +59,7 @@ INIT → SCOPING → PLANNING → APPROVAL_PLAN → EXECUTING → REVIEWING → 
 
 Also: FAILED, TERMINATED, PAUSED, BLOCKED_ON_CLI, CONFLICT
 
-SCOPING is a Claude/Codex debate that produces `scope.md`. PLANNING preserves Claude session IDs for refinement. REVIEWING includes Claude review, Codex cross-check, and one Claude Opus/max final decision when they disagree; fixes return to planning as incremental work on top of the existing worktree.
+SCOPING is a Claude/Codex debate that produces `scope.md`. Claude can carry a unified session from scoping into planning and review. REVIEWING includes Claude review, Codex cross-check, and one Claude Opus/max final decision when they disagree; fixes return to planning as incremental work on top of the existing worktree.
 
 ## Coding standards
 
@@ -93,10 +93,10 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 | File | Phase | Produces |
 |---|---|---|
 | `scope.md` | SCOPING | transient scoping result |
-| `plan.md` | PLANNING (first plan) | `plans/plan-<uuid>.json` |
+| `plan.md` | PLANNING (first plan) | `plans/plan-<prefix>-<hash>.md` |
 | `implement.md` | EXECUTING (full plan) | `results/execution-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
-| `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<uuid>.json` (new) |
+| `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<prefix>-<hash>.md` (new) |
 
 Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired into the current engine:
 

@@ -32,7 +32,7 @@ findings with `critical` or `major` severity.
 | Variable | Source | Description |
 |---|---|---|
 | `{task_description}` | run state | Normalized task description |
-| `{plan_json}` | `plans/plan-<uuid>.json` | Full plan JSON |
+| `{plan_text}` | `plans/plan-<run-prefix>-<hash>.md` | Full plan markdown |
 | `{git_diff}` | worktree | Output of `git diff <base_commit>...aio/run-<uuid>`, truncated to 80 000 chars |
 | `{step_results_json}` | `results/` | Array of execution result JSONs for this run |
 | `{heuristic_scan_section}` | reviewer scanner | Optional regex-based findings for changed files |
@@ -103,7 +103,7 @@ ORIGINAL TASK:
 {task_description}
 
 PLAN:
-{plan_json}
+{plan_text}
 
 IMPLEMENTATION DIFF:
 {git_diff}

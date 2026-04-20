@@ -10,7 +10,7 @@ Workflow phases exchange JSON artifacts validated against schemas in `schemas/` 
 
 ```
 Phase 1 (Scoping)      → scoping/scope-<run>.md              [YAML frontmatter]
-Phase 2 (Planning)     → plans/plan-<uuid>.json             [plan.schema.json]
+Phase 2 (Planning)     → plans/plan-<prefix>-<hash>.md      [markdown]
 Phase 4 (Execution)    → results/execution-<uuid>.json      [execution_result.schema.json]
 Phase 5 (Review)       → reviews/review-<uuid>.json         [review.schema.json]
 Review debate rounds   → reviews/debate-round-*.json        [debate_response.schema.json]
@@ -32,24 +32,29 @@ Produced by the Claude/Codex scoping debate. Consumed by the planner and engine.
 
 ---
 
-## Plan Contract (`plan.schema.json`)
+## Plan Contract (Markdown)
 
 Produced by the planner. Consumed by the executor and reviewer.
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `plan_id` | string (uuid) | yes | Unique identifier |
-| `task` | string | yes | Original task description |
-| `approach` | string | yes | Reasoning, strategy, risks, and validation approach |
-| `implementation_steps` | array of string | yes | Ordered natural-language implementation steps |
-| `key_files` | array of string | yes | Flat list of likely relevant repository-relative paths |
+Artifact shape:
 
-**Schema validation rules:**
-- `implementation_steps` must have at least 1 element
-- File paths must not start with `..` or `/`
+1. YAML frontmatter:
+   - `plan_id` (UUID, generated server-side by the orchestrator)
+   - `task` (single-line task string)
+2. Markdown body with these sections:
+   - `## Approach`
+   - `## Steps`
+   - `## Key Files`
 
-**Application-level validation (in `validator.py`):**
-- All file paths are normalized and verified to stay within the repo root (reject paths containing `..` anywhere, e.g. `a/../../b`)
+The orchestrator parses `## Key Files` to build execution context. Paths are
+validated in application code before use:
+
+- Absolute paths are rejected
+- Paths containing `..` segments are rejected
+- Duplicate file paths are de-duplicated
+
+`schemas/plan.schema.json` is retained only for legacy compatibility with older
+JSON plan artifacts and is not used for new markdown plans.
 
 ---
 
@@ -155,9 +160,12 @@ Internal use only — stored in `.ai-orchestrator/metadata.sqlite3`.
 
 ## Prompt-to-Schema Enforcement
 
-Every prompt sent to a CLI includes:
+For JSON-output phases, every prompt sent to a CLI includes:
 1. The full JSON schema for the expected output
 2. An explicit instruction: "Respond with ONLY valid JSON. No markdown fences. No commentary."
+
+Planning and fix-planning are exceptions: they request markdown plans and do
+not embed `plan.schema.json`.
 
 If the CLI returns non-JSON or schema-invalid JSON:
 1. The raw output is logged (if `logging.retain_raw_output` is enabled)
@@ -170,16 +178,22 @@ If the CLI returns non-JSON or schema-invalid JSON:
 
 ## File Naming Convention
 
-All artifact files use this pattern:
+Most artifact files use this pattern:
 
 ```
 <type>-<uuid>.json
 ```
 
 Where:
-- `type`: `plan`, `step-<n>`, `review`, `debate-round`; `adj` is legacy
+- `type`: `step-<n>`, `review`, `debate-round`; `adj` is legacy
 - `uuid`: first 8 characters of a UUIDv4
 
 Example: `step-3-a1b2c3d4.json`
+
+Plan artifacts are the exception:
+
+```
+plan-<run-prefix>-<hash>.md
+```
 
 This ensures uniqueness across retries and incremental fix cycles. Old artifacts from failed attempts are preserved for debugging (not overwritten).

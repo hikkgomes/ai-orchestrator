@@ -618,10 +618,11 @@ class Engine:
 
         result_text = str(invoke_result.data.get("text") or "").strip()
         generated_plan_id = str(uuid4())
+        frontmatter_task = json.dumps((state.normalized_task or state.task).replace("\n", " "))
         plan_markdown = (
             "---\n"
             f"plan_id: {generated_plan_id}\n"
-            f"task: {state.normalized_task or state.task}\n"
+            f"task: {frontmatter_task}\n"
             "---\n\n"
             f"{result_text}\n"
         )
@@ -814,9 +815,16 @@ class Engine:
         cli_name = "claude"
         review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name) or "high"
         review_model = self._resolve_model_for_phase("reviewing", cli_name, state)
+        review_resume_session_id: str | None = None
+        if self._config.sessions.enable_unified_session and self._config.sessions.enable_review_resume:
+            review_resume_session_id = state.session_ids.get("claude_main")
         state.session_ids.pop("reviewing", None)
         state.debate_state = DebateState(debate_phase=ReviewDebatePhase.CLAUDE_REVIEW)
         self._state_mgr.save(state)
+
+        def clear_review_resume_on_retry() -> None:
+            nonlocal review_resume_session_id
+            review_resume_session_id = None
 
         try:
             invoke_result = self._invoke_with_retries(
@@ -831,18 +839,12 @@ class Engine:
                     schema,
                     reasoning_effort_override=review_effort,
                     model_override=review_model,
-                    resume_session_id=(
-                        state.session_ids.get("claude_main")
-                        if (
-                            self._config.sessions.enable_unified_session
-                            and self._config.sessions.enable_review_resume
-                        )
-                        else None
-                    ),
+                    resume_session_id=review_resume_session_id,
                     allowed_tools=review_tools,
                     timeout_seconds=review_timeout,
                 ),
                 initial_prompt=review_prompt,
+                on_retry=clear_review_resume_on_retry,
             )
 
             claude_review = invoke_result.data
@@ -962,6 +964,17 @@ class Engine:
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
             final_effort = self._review_final_effort(state)
+            final_review_resume_session_id: str | None = None
+            if self._config.sessions.enable_review_resume:
+                if self._config.sessions.enable_unified_session:
+                    final_review_resume_session_id = state.session_ids.get("claude_main")
+                else:
+                    final_review_resume_session_id = state.session_ids.get("reviewing")
+
+            def clear_final_review_resume_on_retry() -> None:
+                nonlocal final_review_resume_session_id
+                final_review_resume_session_id = None
+
             final_result = self._invoke_with_retries(
                 state,
                 retry_key="review-final-claude",
@@ -974,22 +987,12 @@ class Engine:
                     debate_schema,
                     reasoning_effort_override=final_effort,
                     model_override=self._config.debate.escalated_claude_model or review_model,
-                    resume_session_id=(
-                        state.session_ids.get("claude_main")
-                        if (
-                            self._config.sessions.enable_unified_session
-                            and self._config.sessions.enable_review_resume
-                        )
-                        else (
-                            state.session_ids.get("reviewing")
-                            if self._config.sessions.enable_review_resume
-                            else None
-                        )
-                    ),
+                    resume_session_id=final_review_resume_session_id,
                     allowed_tools=review_tools,
                     timeout_seconds=review_timeout,
                 ),
                 initial_prompt=final_prompt,
+                on_retry=clear_final_review_resume_on_retry,
             )
             final = final_result.data
             if final_result.session_id:

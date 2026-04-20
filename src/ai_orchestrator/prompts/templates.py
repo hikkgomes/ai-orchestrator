@@ -524,21 +524,6 @@ def collect_file_context(
     return "\n".join(chunks).strip(), skipped
 
 
-def default_planning_files(repo_root: Path) -> list[str]:
-    """Return a small set of high-signal files for the planning prompt."""
-    candidates = [
-        "README.md",
-        "aio.toml",
-        "AGENTS.md",
-        "workflows/default.yaml",
-        "docs/architecture.md",
-        "docs/workflow.md",
-        "src/ai_orchestrator/cli.py",
-        "src/ai_orchestrator/engine.py",
-    ]
-    return [candidate for candidate in candidates if (repo_root / candidate).exists()]
-
-
 def repo_summary(repo_root: Path) -> str:
     """Return the first non-empty README line, or a fallback marker."""
     for name in ("README.md", "README.rst", "README.txt", "README"):

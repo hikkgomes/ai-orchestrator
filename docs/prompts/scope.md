@@ -16,6 +16,10 @@ before planning begins. Scoping is a bounded Claude/Codex debate:
 4. If needed, Claude updates `scope.md`, Codex gives a final escalated
    assessment, and Claude makes the final scoping call.
 
+Claude scoping rounds can use agentic tools (`Read`, `Grep`, `Glob`) to inspect
+the repository directly. The provided directory tree is a lightweight starting
+map, not the full context source.
+
 The canonical scope must include YAML frontmatter fields:
 `normalized_task`, `complexity_tier`, `actionable`, `key_files`, and `context`.
 
@@ -35,7 +39,7 @@ RAW TASK:
 REPOSITORY SUMMARY:
 {repo_summary}
 
-REPOSITORY STRUCTURE:
+REPOSITORY STRUCTURE (orientation only; use Read/Grep/Glob for details):
 {directory_tree}
 ```
 

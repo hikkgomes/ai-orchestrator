@@ -50,9 +50,9 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-4: Fresh subprocess with explicit session resumption
+## DD-4: Fresh subprocess with unified Claude session continuity
 
-**Decision:** The orchestrator still launches a fresh subprocess for every vendor CLI call, but planning and review may explicitly resume the same Claude session when the workflow needs iterative refinement or debate continuity.
+**Decision:** The orchestrator still launches a fresh subprocess for every vendor CLI call, and Claude phases intentionally share one unified session (`claude_main`) across scoping, planning, and reviewing via `--resume`.
 
 **Context:** Feasibility Finding 3 correctly noted that vendor CLIs read persistent state from `HOME` (auth, caches, project metadata). A "fresh subprocess" is not the same as a "fresh model session."
 
@@ -60,9 +60,9 @@ This document records decisions made during design, including responses to the f
 1. Launch each CLI with a per-run HOME sandbox — would break auth, impractical
 2. Overstate isolation claims — misleading
 3. Downgrade the claim to "fresh subprocess invocation" and document what persists — honest
-4. Fresh subprocess plus explicit `--resume` only for phases that benefit from continuity — preserves process isolation while giving planning/review useful memory
+4. Fresh subprocess plus explicit `--resume` across scoping/planning/reviewing — preserves process isolation while carrying forward debate and planning context
 
-**Decision rationale:** Option 4. Process isolation and environment filtering remain intact. Session continuity is now intentional state, captured in `RunState.session_ids`, and scoped to planning/review refinement loops.
+**Decision rationale:** Option 4. Process isolation and environment filtering remain intact. Session continuity is intentional state, captured in `RunState.session_ids`, and preserved across fix loops so review feedback carries into replanning.
 
 ---
 
@@ -132,7 +132,7 @@ This document records decisions made during design, including responses to the f
 
 **Context:** Real runs showed that one subprocess per step wastes tokens and loses useful implementation context. The original design also supported parallel execution of independent steps, which adds merge complexity, error handling complexity, and requires multiple worktrees.
 
-**Decision rationale:** A single Codex session can reason across the whole plan, commit after logical chunks, and produce one execution result artifact. The plan schema no longer includes `depends_on`; ordering is represented by natural-language `implementation_steps`.
+**Decision rationale:** A single Codex session can reason across the whole plan, commit after logical chunks, and produce one execution result artifact. Ordering is represented in the markdown plan `## Steps` section.
 
 ---
 
@@ -244,18 +244,18 @@ This document records decisions made during design, including responses to the f
 
 ---
 
-## DD-22: Replace per-phase timeouts with a single watchdog
+## DD-22: Watchdog baseline with agentic phase timeout overrides
 
-**Decision:** Remove per-phase timeout settings and use one global `orchestrator.watchdog_timeout` safety net for all adapter invocations.
+**Decision:** Keep a global `orchestrator.watchdog_timeout` safety net, and support per-phase timeout overrides. Planning and reviewing default to 5400 seconds (90 minutes) to accommodate tool-driven exploration.
 
-**Context:** Claude Code and Codex already manage their own execution lifecycle. The extra per-phase orchestrator timeouts were redundant and caused false failures, especially on legitimate long-running planning or execution work that exceeded an arbitrary phase budget.
+**Context:** Agentic planning/review can legitimately run much longer than non-agentic phases. A single short global timeout caused false failures during healthy long-running tool use.
 
 **Alternatives considered:**
-1. Keep per-phase timeouts — brittle, duplicates vendor CLI lifecycle control, caused false `BLOCKED_ON_CLI` outcomes
-2. Remove orchestrator timeouts entirely — avoids false positives but leaves no protection against genuinely hung subprocesses
-3. Use one long watchdog timeout for every phase — preserves a hang safety net without constraining healthy work
+1. Keep one short timeout for all phases — caused false failures on planning/review
+2. Remove orchestrator timeouts entirely — no protection against genuinely hung subprocesses
+3. Keep a global watchdog and allow phase-specific overrides/defaults — balanced
 
-**Decision rationale:** Option 3. A single watchdog is the correct boundary for the orchestrator: it protects against stuck processes while letting the underlying CLI decide when a normal task is complete.
+**Decision rationale:** Option 3. The global watchdog remains a hang safety net, while agentic phases get realistic time budgets without penalizing other phases.
 
 ---
 

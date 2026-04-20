@@ -4,7 +4,7 @@
 
 ## Workflow Phases
 
-Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Planning may resume the same Claude session across refinement turns. Review contains its own bounded Claude/Codex debate. All mutating phases operate within a single preserved worktree branch per run.
+Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Claude phases can share one unified `claude_main` session across scoping, planning, and reviewing when enabled. Review contains its own bounded Claude/Codex debate. All mutating phases operate within a single preserved worktree branch per run.
 
 `workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
@@ -49,7 +49,7 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 |---|---|
 | Default CLI | `claude -p` |
 | Config key | `routing.planner` |
-| Input | User task description + `scope.md` + repo file listing + any operator/review feedback |
+| Input | User task description + `scope.md` + any operator/review feedback |
 | Output | `plans/plan-<run-prefix>-<hash>.md` |
 | Worktree | No (read-only phase) |
 | Retries | Up to `max_retries` on schema/validation failure |
@@ -74,6 +74,8 @@ Write ONLY the plan. No preamble and no markdown code fences.
 ```
 
 **Repo context strategy:** Planner explores the repository dynamically with agentic tools instead of relying on a pre-rendered context dump.
+
+**Timeout default:** Planning and reviewing use an extended default timeout of 5400 seconds (90 minutes) to allow tool-driven exploration. Other phases keep the global `orchestrator.watchdog_timeout` unless explicitly overridden.
 
 ---
 
@@ -106,7 +108,7 @@ Plan approval has three outcomes:
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.worker` |
-| Input | Full plan text + contents of `key_files` + repository/workspace context |
+| Input | Full plan text + key files extracted from the markdown plan + repository/workspace context |
 | Output | `results/execution-<uuid>.json` validated against `execution_result.schema.json` |
 | Worktree | Yes (single worktree for the entire run, created on execution entry) |
 | Retries | Up to `max_retries` for the full execution session |
@@ -120,7 +122,7 @@ Plan approval has three outcomes:
 
 **Execution sequence:**
 
-1. Read relevant files from the worktree using the flat `key_files` list from the plan
+1. Read relevant files from the worktree using paths parsed from the plan's `## Key Files` section
 2. Render prompt with the full plan, file contents, and output schema
 3. Invoke CLI adapter with `working_dir` set to the worktree
 4. Capture output: for Codex, check result file first, then stdout, then git-diff-only fallback
@@ -168,7 +170,7 @@ OUTPUT SCHEMA:
 Respond with ONLY valid JSON. No markdown fences. No commentary.
 ```
 
-**Relevant file selection:** The plan provides one flat `key_files` list. The orchestrator reads those files from the worktree and includes them in the prompt. If total content exceeds 100K chars, files are prioritized by plan relevance and truncated.
+**Relevant file selection:** The orchestrator parses the plan's markdown `## Key Files` section, reads those files from the worktree, and includes them in the prompt. If total content exceeds 100K chars, files are prioritized by plan relevance and truncated.
 
 ---
 
@@ -294,15 +296,15 @@ A workspace root is a directory without its own `.git/` that contains one or mor
 
 ## Session Continuity
 
-CLI invocations are still isolated subprocesses, but Claude planning and review
-sessions intentionally preserve transcript continuity:
+CLI invocations are still isolated subprocesses, but Claude can intentionally
+resume one unified session across phases:
 
-1. **Planning resume** — initial planning starts a fresh `claude -p` session. Soft-rejects resume that same session with `claude --resume <session-id>`.
-2. **Review resume** — review starts a fresh Claude session. The final Claude Opus/max review decision may resume that session when Codex disagrees.
-3. **Codex freshness** — Codex execution and review cross-check calls are fresh subprocesses. Session IDs are not reused for Codex.
-4. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
-5. **Prompt auditability** — prompts are written under `prompts/` for auditability when enabled. They are artifacts, not hidden mutable state.
-6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations. This is intentional: it lets auth and config work normally.
+1. **Unified Claude session** — scoping starts a Claude session and stores it as `session_ids["claude_main"]`. Planning and reviewing resume that same session when enabled.
+2. **Fix loops keep continuity** — when review sends work back to planning, `claude_main` is preserved so replanning keeps scoping context, previous plan context, and review feedback.
+3. **Compaction behavior** — long sessions rely on vendor-side auto-compaction; recent review/fix context remains available when the session is resumed.
+4. **Codex freshness** — Codex execution and review cross-check calls are always fresh subprocesses. Session IDs are not reused for Codex.
+5. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
+6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations.
 
 ---
 
