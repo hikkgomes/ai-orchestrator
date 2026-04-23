@@ -196,22 +196,12 @@ class ClaudeAdapter(BaseAdapter):
                     allow_effort_retry=False,
                 )
             if self._is_unsupported_tools_flag(stderr):
-                retry_command = list(command)
-                try:
-                    flag_index = retry_command.index("--allowedTools")
-                    del retry_command[flag_index : flag_index + 2]
-                except ValueError:
-                    pass
-                else:
-                    return self._invoke_command(
-                        retry_command,
-                        working_dir,
-                        timeout,
-                        schema,
-                        model=model,
-                        reasoning_effort=reasoning_effort,
-                        allow_effort_retry=allow_effort_retry,
-                    )
+                raise BlockedOnCLI(
+                    "Claude CLI does not support --allowedTools; "
+                    "upgrade to a version that supports tool restrictions",
+                    exit_code=exit_code,
+                    stderr=stderr,
+                )
             if self._is_auth_error(stderr):
                 raise BlockedOnCLI(
                     "Claude CLI requires interactive action",
@@ -303,21 +293,12 @@ class ClaudeAdapter(BaseAdapter):
                     allow_effort_retry=False,
                 )
             if self._is_unsupported_tools_flag(stderr):
-                retry_command = list(command)
-                try:
-                    flag_index = retry_command.index("--allowedTools")
-                    del retry_command[flag_index : flag_index + 2]
-                except ValueError:
-                    pass
-                else:
-                    return self._invoke_text_command(
-                        retry_command,
-                        working_dir,
-                        timeout,
-                        model=model,
-                        reasoning_effort=reasoning_effort,
-                        allow_effort_retry=allow_effort_retry,
-                    )
+                raise BlockedOnCLI(
+                    "Claude CLI does not support --allowedTools; "
+                    "upgrade to a version that supports tool restrictions",
+                    exit_code=exit_code,
+                    stderr=stderr,
+                )
             if self._is_auth_error(stderr):
                 raise BlockedOnCLI(
                     "Claude CLI requires interactive action",
