@@ -509,7 +509,8 @@ class TestCodexAdapter:
 
         command, _, _ = adapter._build_command("hello", resume_session_id="thread-123")
 
-        assert command[:4] == ["codex", "exec", "resume", "thread-123"]
+        assert command[:5] == ["codex", "exec", "resume", "--skip-git-repo-check", "thread-123"]
+        assert "--sandbox" not in command
         assert "--json" in command
         assert command[-1] == "hello"
 

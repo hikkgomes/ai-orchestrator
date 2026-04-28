@@ -131,7 +131,8 @@ Output: JSON parsed from stdout (strict, then lenient fallback)
 #### CodexAdapter
 
 ```
-Invocation: codex exec [resume <thread-id>] --skip-git-repo-check --sandbox workspace-write --json "<prompt>"
+Invocation: codex exec --skip-git-repo-check --sandbox workspace-write --json "<prompt>"
+Resume invocation: codex exec resume --skip-git-repo-check <thread-id> --json "<prompt>"
 Working dir: worktree path
 Timeout: global watchdog timeout
 Output: thread id from JSONL; files_changed from git diff; metadata from result file or JSONL/stdout fallback

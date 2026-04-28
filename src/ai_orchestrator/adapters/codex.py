@@ -348,15 +348,10 @@ class CodexAdapter(BaseAdapter):
             "exec",
         ]
         if resume_session_id:
-            command.extend(["resume", resume_session_id])
-        command.extend(
-            [
-                "--skip-git-repo-check",
-                "--sandbox",
-                "workspace-write",
-                "--json",
-            ]
-        )
+            command.extend(["resume", "--skip-git-repo-check", resume_session_id])
+        else:
+            command.extend(["--skip-git-repo-check", "--sandbox", "workspace-write"])
+        command.append("--json")
         model = model_override or getattr(self._config.routing.codex, "model", "") or None
         reasoning_effort = (
             reasoning_effort_override
