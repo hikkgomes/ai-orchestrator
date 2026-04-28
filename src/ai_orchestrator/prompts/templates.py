@@ -179,7 +179,7 @@ def build_review_prompt(
         f"{heuristic_section}"
         f"{categories_section}"
         f"{repo_context_section}"
-        "Before writing the final JSON, invoke the repository-local AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
+        "Before writing the final JSON, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
         "If it does not exist or cannot run, continue with the provided diff and heuristic scan.\n\n"
         "Produce a JSON review conforming to this schema:\n"
         f"{schema_json}\n\n"
@@ -195,6 +195,7 @@ def build_review_codex_prompt(
     """Build Codex's independent review prompt inside the REVIEWING phase."""
     return (
         "The following task was implemented in my codebase and reviewed by Claude. Perform an independent review of both the implementation and Claude's review.\n"
+        "Additionally, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "CLAUDE REVIEW REPORT:\n"
