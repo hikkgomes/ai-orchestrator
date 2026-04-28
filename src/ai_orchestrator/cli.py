@@ -885,9 +885,11 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 continue
             if choice == "approve":
                 state = engine.approve(run_id, gate)
+            elif choice == "full-reject":
+                state = engine.reject(run_id, gate, "Plan rejected by user", full=True)
             else:
                 reason = ui.rejection_reason("Rejected in interactive mode")
-                state = engine.reject(run_id, gate, reason, full=choice == "full-reject")
+                state = engine.reject(run_id, gate, reason, full=False)
             continue
         if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
             state = engine.approve(run_id, gate)
