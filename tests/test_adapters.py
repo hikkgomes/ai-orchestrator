@@ -504,6 +504,15 @@ class TestCodexAdapter:
         ]
         assert commands[0][7] == 'model_reasoning_effort="medium"'
 
+    def test_build_command_uses_codex_resume_thread(self, artifact_root, default_config):
+        adapter = CodexAdapter(default_config, artifact_root)
+
+        command, _, _ = adapter._build_command("hello", resume_session_id="thread-123")
+
+        assert command[:4] == ["codex", "exec", "resume", "thread-123"]
+        assert "--json" in command
+        assert command[-1] == "hello"
+
     def test_invoke_falls_back_to_stdout_jsonl(
         self,
         tmp_repo,
@@ -612,3 +621,12 @@ class TestCodexAdapter:
             }
         )
         assert CodexAdapter._scan_stdout_for_json(stdout) == payload
+
+    def test_scan_stdout_for_json_ignores_jsonl_events_without_agent_message(self):
+        stdout = '\n'.join(
+            [
+                '{"type":"thread.started","thread_id":"thread-123"}',
+                '{"type":"turn.completed","usage":{"input_tokens":1}}',
+            ]
+        )
+        assert CodexAdapter._scan_stdout_for_json(stdout) is None

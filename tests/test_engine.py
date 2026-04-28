@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from textwrap import dedent
 
 import pytest
 
@@ -698,7 +697,7 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
                 }
             )
             self.scoping_calls += 1
-            if "independently scoping" in prompt:
+            if "Scope the request" in prompt:
                 return "## Codex pre-scope\n\nThe task is implementable."
             return "---\nagreement: false\n---\n\nStill disagreeing.\n"
 
@@ -736,37 +735,6 @@ def test_scope_review_agreement_requires_structured_marker():
     )
     assert Engine._scope_review_agreed("I agree with some points.") is False
     assert Engine._scope_review_agreed("agreement: true\n\nAccepted after review.") is True
-
-
-def test_extract_key_files_from_plan_text():
-    text = dedent(
-        """\
-        ## Approach
-        Some approach text.
-
-        ## Steps
-        1. Do something
-
-        ## Key Files
-        - src/main.py
-        - `src/utils.py`
-        * tests/test_main.py
-        1. src/config.py
-        2. /absolute/path.py
-        3. ../../escape/path.py
-        4. src/main.py
-
-        ## Other Section
-        - not/a/key/file.py
-        """
-    )
-
-    result = Engine._extract_key_files_from_plan_text(text)
-    assert result == ["src/main.py", "src/utils.py", "tests/test_main.py", "src/config.py"]
-
-    assert Engine._extract_key_files_from_plan_text("## Key Files\n\n## Steps\n1. x\n") == []
-    assert Engine._extract_key_files_from_plan_text("## Approach\n- src/main.py\n") == []
-    assert Engine._extract_key_files_from_plan_text("## Key Files\n- src/a.py\n- src/a.py\n") == ["src/a.py"]
 
 
 def test_engine_approval_flow(tmp_repo, artifact_root, default_config):
@@ -1096,6 +1064,52 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
     assert state.session_ids["reviewing"] == "review-session"
     assert len(review_invocations) == 1
     assert review_invocations[0]["resume_session_id"] == "planning-session"
+
+
+def test_codex_review_resumes_scoping_thread(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+
+    class SessionCodex(FakeCodexAdapter):
+        def invoke_text(
+            self,
+            prompt,
+            working_dir,
+            timeout,
+            *,
+            reasoning_effort_override=None,
+            model_override=None,
+            resume_session_id=None,
+            allowed_tools=None,
+        ):
+            result = super().invoke_text(
+                prompt,
+                working_dir,
+                timeout,
+                reasoning_effort_override=reasoning_effort_override,
+                model_override=model_override,
+                resume_session_id=resume_session_id,
+                allowed_tools=allowed_tools,
+            )
+            return TextInvokeResult(result.text, session_id="codex-scope-thread")
+
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = SessionCodex()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    state = engine.start("Implement feature", "abab1212-abab-1212-abab-1212abab1212")
+
+    codex_review_invocations = [item for item in codex.invocations if item["title"] == "Review"]
+    assert state.status == "DONE"
+    assert codex_review_invocations
+    assert codex_review_invocations[0]["resume_session_id"] == "codex-scope-thread"
+    assert state.session_ids["scoping_codex"] == "codex-review-session"
 
 
 def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_config):

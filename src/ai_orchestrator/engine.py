@@ -402,8 +402,7 @@ class Engine:
                 )
 
             if not state.scoping_agreed:
-                scope_md = self._artifacts.read_text(state.scope_md_ref)
-                prompt = build_scope_respond_claude_prompt(scope_md, codex_scope)
+                prompt = build_scope_respond_claude_prompt(codex_scope)
                 self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
@@ -463,8 +462,7 @@ class Engine:
                         self._ui.info("Still no agreement; Claude Opus will make the final call.")
 
             if not state.scoping_agreed:
-                scope_md = self._artifacts.read_text(state.scope_md_ref)
-                prompt = build_scope_final_claude_prompt(scope_md, codex_scope)
+                prompt = build_scope_final_claude_prompt(codex_scope)
                 self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
@@ -1772,14 +1770,6 @@ class Engine:
     def _load_step_results(self, state: RunState) -> list[dict[str, Any]]:
         return [self._artifacts.read_json(reference) for reference in state.step_results]
 
-    def _workspace_trees(self, state: RunState, *, max_depth: int) -> dict[str, str] | None:
-        if not state.is_workspace:
-            return None
-        return {
-            repo: render_directory_tree(self._repo_root / repo, max_depth=max_depth)
-            for repo in state.workspace_repos
-        }
-
     def _reset_workspace_repos(self, state: RunState) -> None:
         for repo in state.workspace_repos:
             repo_path = self._repo_root / repo
@@ -1898,43 +1888,12 @@ class Engine:
             return ["# No changes detected in any workspace repo."]
         return commands
 
-    def _load_plan_structured(self, reference: str | None) -> dict[str, Any] | None:
-        if not reference:
-            raise EngineError("Required artifact reference is missing")
-        if reference.endswith(".json"):
-            return self._artifacts.read_json(reference)
-        return None
-
     def _load_plan_text(self, reference: str | None) -> str:
         if not reference:
             raise EngineError("Required artifact reference is missing")
         if reference.endswith(".md"):
             return self._artifacts.read_text(reference)
         return json_block(self._artifacts.read_json(reference))
-
-    @staticmethod
-    def _extract_key_files_from_plan_text(plan_text: str) -> list[str]:
-        lines = plan_text.splitlines()
-        in_key_files = False
-        found: list[str] = []
-        for raw in lines:
-            line = raw.strip()
-            if re.match(r"^##\s+", line):
-                in_key_files = bool(re.match(r"^##\s+Key Files\b", line, flags=re.IGNORECASE))
-                continue
-            if not in_key_files or not line:
-                continue
-            candidate = ""
-            if line.startswith(("-", "*")):
-                candidate = line[1:].strip()
-            elif re.match(r"^\d+\.\s+", line):
-                candidate = re.sub(r"^\d+\.\s+", "", line).strip()
-            if not candidate:
-                continue
-            candidate = candidate.strip("`").split()[0]
-            if candidate and not candidate.startswith("/") and ".." not in Path(candidate).parts:
-                found.append(candidate)
-        return list(dict.fromkeys(found))
 
     def _gate_phase(self, gate: str) -> str:
         return {

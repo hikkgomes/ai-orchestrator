@@ -447,6 +447,7 @@ class CodexAdapter(BaseAdapter):
                 return parsed_jsonl
 
         candidates: list[dict[str, Any]] = []
+        saw_jsonl_event = False
         for line in reversed(stripped.splitlines()):
             line = line.strip()
             if not line:
@@ -455,8 +456,14 @@ class CodexAdapter(BaseAdapter):
                 parsed = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(parsed, dict) and "type" in parsed:
+                saw_jsonl_event = True
+                continue
             if isinstance(parsed, dict):
                 candidates.append(parsed)
+
+        if saw_jsonl_event and not candidates:
+            return None
 
         decoder = json.JSONDecoder()
         last_dict: dict[str, Any] | None = None
@@ -467,7 +474,7 @@ class CodexAdapter(BaseAdapter):
                 parsed, _ = decoder.raw_decode(stripped[start:])
             except json.JSONDecodeError:
                 continue
-            if isinstance(parsed, dict):
+            if isinstance(parsed, dict) and "type" not in parsed:
                 last_dict = parsed
                 candidates.append(parsed)
 

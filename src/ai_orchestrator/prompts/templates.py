@@ -88,7 +88,7 @@ def build_scope_compare_codex_prompt(
         "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
         "Start with YAML frontmatter containing exactly:\n"
         "agreement: true|false\n\n"
-        "For the it to be true, either your initial scope must fully align with Claude's scope or you must be convinced by Claude's reasoning that their scope is absolutely correct.\n"
+        "For it to be true, either your initial scope must fully align with Claude's scope or you must be convinced by Claude's reasoning that their scope is absolutely correct.\n"
         "If you have any disagreements, notes, concerns or pushbacks, write concise reasoning that identifies what must change.\n\n"
         "CLAUDE CANONICAL SCOPE.MD:\n"
         f"{claude_scope_md}\n\n"
@@ -96,7 +96,7 @@ def build_scope_compare_codex_prompt(
     )
 
 
-def build_scope_respond_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
+def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
     """Build Claude round-4 prompt to respond to Codex reasoning."""
     return (
         "Codex's scope and reasoning are ready. Review it against your independent scope.\n"
@@ -106,7 +106,7 @@ def build_scope_respond_claude_prompt(scope_md: str, codex_scope_md: str) -> str
         "agreement: true|false\n"
         "Set agreement true if you accept Codex's objection and have updated the canonical scope.md\n"
         "Set agreement false if you have any pushbacks to Codex and include your reasoning in the body.\n\n"
-        "This must be a fundamented decision, so if you don't have a good reasoning to continue disagreeing with Codex, you should just update the canonical scope.md to align with Codex's scope and set agreement to true.\n\n"
+        "This must be a well-founded decision, so if you don't have a good reasoning to continue disagreeing with Codex, you should just update the canonical scope.md to align with Codex's scope and set agreement to true.\n\n"
         "CODEX REASONING:\n"
         f"{codex_scope_md}\n"
         "Remember: You need to reach full agreement with Codex before proceeding to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
@@ -120,14 +120,14 @@ def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
         "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
         "Start with YAML frontmatter containing exactly:\n"
         "agreement: true|false\n\n"
-        "This must be a fundamented decision, so if you don't have a good reasoning to continue disagreeing with Claude, you should give in and set agreement to true.\n\n"
+        "This must be a well-founded decision, so if you don't have a good reasoning to continue disagreeing with Claude, you should give in and set agreement to true.\n\n"
         "CLAUDE CANONICAL SCOPE.MD:\n"
         f"{claude_scope_md}\n\n"
         "Remember: You need to reach full agreement with Claude before we proceed to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
     )
 
 
-def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
+def build_scope_final_claude_prompt(codex_scope_md: str) -> str:
     """Build Claude round-6 prompt for final Opus/max scope decision."""
     return (
         "Codex still disagrees with your scope and you are going to make the final decision on the scope. Read their assessment, review its updated reasoning and return ONLY the final canonical scope.md.\n"

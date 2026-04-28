@@ -100,7 +100,7 @@ Plan approval has three outcomes:
 |---|---|
 | Default CLI | `codex exec` |
 | Config key | `routing.worker` |
-| Input | Full plan text + key files extracted from the markdown plan + repository/workspace context |
+| Input | Full plan text + result file path + output schema |
 | Output | `results/execution-<uuid>.json` validated against `execution_result.schema.json` |
 | Worktree | Yes (single worktree for the entire run, created on execution entry) |
 | Retries | Up to `max_retries` for the full execution session |
@@ -108,18 +108,18 @@ Plan approval has three outcomes:
 **Worktree lifecycle:**
 
 1. On execution entry: create worktree `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`. Record the base commit SHA.
-2. Codex executes the full plan in one session and may commit after logical chunks.
-3. If the worker leaves uncommitted changes, the engine creates one fallback commit.
+2. Codex executes the full plan in one session and leaves changes uncommitted for review.
+3. The engine commits outstanding changes after a successful execution result.
 4. If an execution attempt fails and is retried, the engine resets the worktree before re-invoking the worker.
 
 **Execution sequence:**
 
-1. Read relevant files from the worktree using paths parsed from the plan's `## Key Files` section
-2. Render prompt with the full plan, file contents, and output schema
+1. Resolve the pending execution result path
+2. Render prompt with the full plan, result file path, and output schema
 3. Invoke CLI adapter with `working_dir` set to the worktree
 4. Capture output: for Codex, check result file first, then stdout, then git-diff-only fallback
 5. Validate result (schema + application-level)
-6. Commit any outstanding changes in the worktree: `git add -A && git commit -m "aio: <task summary>"`
+6. Commit outstanding changes in the worktree using the run task summary
 7. Write validated result to `results/`
 8. Advance to review
 
@@ -268,7 +268,7 @@ resume one unified session across phases:
 1. **Unified Claude session** — scoping starts a Claude session and stores it as `session_ids["claude_main"]`. Planning and reviewing resume that same session when enabled.
 2. **Fix loops keep continuity** — when review sends work back to planning, `claude_main` is preserved so replanning keeps scoping context, previous plan context, and review feedback.
 3. **Compaction behavior** — long sessions rely on vendor-side auto-compaction; recent review/fix context remains available when the session is resumed.
-4. **Codex freshness** — Codex execution and review cross-check calls are always fresh subprocesses. Session IDs are not reused for Codex.
+4. **Codex thread continuity** — Codex scoping rounds and the Codex review cross-check resume the captured `scoping_codex` thread when available. Codex execution calls are fresh subprocesses.
 5. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
 6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations.
 
@@ -280,6 +280,6 @@ resume one unified session across phases:
 |---|---|---|
 | Orchestrator events | `logs/run-<uuid>.log` | Always retained |
 | CLI stdout/stderr | `logs/claude-<uuid>.log` / `logs/codex-<uuid>.log` | Opt-in (`logging.retain_raw_output`) |
-| Prompts | `prompts/step-<n>.md` | Opt-in (`logging.retain_prompts`) |
+| Prompts | `prompts/<phase>-<run>.md` | Opt-in (`logging.retain_prompts`) |
 
 Logs are never deleted automatically. `orch clean` removes them for completed runs only.
