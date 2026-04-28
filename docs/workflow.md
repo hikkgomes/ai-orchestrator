@@ -58,19 +58,11 @@ If the final scope is not actionable, the run pauses at the `SCOPING` gate. The 
 **Prompt construction:**
 
 ```
-You are a software planning agent. You have access to Read, Grep, and Glob
-tools to explore the codebase.
-
-TASK:
+Plan for the implementation of the task below:
 {task_description}
 
 SCOPE:
 {scope_md}
-
-Explore the codebase to understand the relevant code, then write an
-implementation plan with sections: Approach, Steps, and Key Files.
-
-Write ONLY the plan. No preamble and no markdown code fences.
 ```
 
 **Repo context strategy:** Planner explores the repository dynamically with agentic tools instead of relying on a pre-rendered context dump.
@@ -131,17 +123,15 @@ Plan approval has three outcomes:
 7. Write validated result to `results/`
 8. Advance to review
 
-**Prompt construction (Codex):**
+**Prompt construction:**
 
 ```
-You are a software implementation agent. Execute the full plan in this
-single Codex session.
-
-PLAN:
 {plan_text}
 
-RELEVANT FILES:
-{file_contents}
+FULLY IMPLEMENT THE PLAN ABOVE
+- Do not commit or push any changes yet. Leave them for reviewing.
+- Update the documentation accordingly if needed.
+- If no changes are needed, explain that in the result summary.
 
 After making changes, write your result JSON to:
 {result_file_path}
@@ -152,25 +142,7 @@ The JSON must conform to this schema:
 If you cannot write the file, respond with ONLY the raw JSON.
 ```
 
-**Prompt construction (Claude):**
-
-```
-You are a software implementation agent. Execute the full plan in one
-continuous pass and then return one JSON result.
-
-PLAN:
-{plan_text}
-
-RELEVANT FILES:
-{file_contents}
-
-OUTPUT SCHEMA:
-{execution_result.schema.json contents}
-
-Respond with ONLY valid JSON. No markdown fences. No commentary.
-```
-
-**Relevant file selection:** The orchestrator parses the plan's markdown `## Key Files` section, reads those files from the worktree, and includes them in the prompt. If total content exceeds 100K chars, files are prioritized by plan relevance and truncated.
+**Repo context strategy:** The executor inspects the worktree directly. The prompt does not include `file_contents` or workspace directory trees.
 
 ---
 
@@ -191,13 +163,7 @@ Respond with ONLY valid JSON. No markdown fences. No commentary.
 **Prompt construction:**
 
 ```
-You are a code review agent. Review the following implementation.
-
-ORIGINAL TASK:
-{task_description}
-
-PLAN:
-{plan_text}
+Review the plan implementation.
 
 IMPLEMENTATION DIFF:
 {git_diff}
@@ -208,7 +174,7 @@ EXECUTION RESULTS:
 Produce a JSON review conforming to this schema:
 {review.schema.json contents}
 
-Respond with ONLY valid JSON. No markdown fences. No commentary.
+Codex is going to review your work afterwards.
 ```
 
 The git diff is obtained by `git diff <base_commit>...aio/run-<uuid>`.

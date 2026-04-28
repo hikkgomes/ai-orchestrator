@@ -160,12 +160,13 @@ Internal use only — stored in `.ai-orchestrator/metadata.sqlite3`.
 
 ## Prompt-to-Schema Enforcement
 
-For JSON-output phases, every prompt sent to a CLI includes:
-1. The full JSON schema for the expected output
-2. An explicit instruction: "Respond with ONLY valid JSON. No markdown fences. No commentary."
+JSON-output phases validate parsed CLI output against the expected schema, but
+not every prompt embeds the full schema or repeats a JSON-only instruction.
+Claude JSON phases rely on `--output-format json`; Codex JSON phases rely on
+prompt instructions plus result-file or JSONL stdout parsing.
 
-Planning and fix-planning are exceptions: they request markdown plans and do
-not embed `plan.schema.json`.
+Planning and fix-planning produce markdown plans, not JSON, and do not embed
+`plan.schema.json`.
 
 If the CLI returns non-JSON or schema-invalid JSON:
 1. The raw output is logged (if `logging.retain_raw_output` is enabled)

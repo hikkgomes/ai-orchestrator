@@ -4,12 +4,12 @@
 
 ## Overview
 
-**ai-orchestrator** is a local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`codex exec`) as stateless worker processes. The orchestrator is a Python package with a rich terminal UI. It never calls any API directly — all AI interaction happens through locally installed, pre-authenticated CLIs.
+**ai-orchestrator** is a local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`codex exec`) as subprocess worker processes. The orchestrator is a Python package with a rich terminal UI. It never calls any API directly — all AI interaction happens through locally installed, pre-authenticated CLIs.
 
 ## Core Principles
 
 1. **CLI-only AI access** — no API keys, no SDKs, no HTTP calls to model providers.
-2. **Fresh subprocess per step** — every CLI invocation is a new subprocess. Claude phases may intentionally resume one unified session (`claude_main`) across scoping, planning, and reviewing via `--resume`. Codex invocations are always fresh. Note: vendor CLIs may retain their own local state (auth, caches, project metadata) in the user's home directory; the orchestrator does not sandbox this.
+2. **Fresh subprocess per invocation, resumable vendor sessions** — every CLI call is a new subprocess. Claude phases may intentionally resume one unified session (`claude_main`) across scoping, planning, and reviewing via `--resume`. Codex runs with `--json`, captures the emitted `thread_id`, and can resume that thread for later Codex rounds. Note: vendor CLIs may retain their own local state (auth, caches, project metadata) in the user's home directory; the orchestrator does not sandbox this.
 3. **Disk-artifact communication** — steps exchange data through JSON files in `.ai-orchestrator/`, never through stdout chaining.
 4. **Resumable orchestrator state** — the orchestrator persists its own state to disk so it can crash and resume.
 5. **Single worktree per run** — all mutating steps execute in one ephemeral git worktree branch per run, in sequence. The main branch is never touched until merge.
@@ -63,7 +63,7 @@ All orchestrator state lives under `.ai-orchestrator/` at the repo root:
 ├── worktrees/
 │   └── run-<uuid>/              # single git worktree per run
 ├── prompts/
-│   └── step-<n>.md              # rendered prompt sent to CLI (opt-in retention)
+│   └── <phase>-<run>.md         # rendered prompt sent to CLI (opt-in retention)
 └── logs/
     ├── run-<uuid>.log           # orchestrator events
     ├── claude-<uuid>.log        # raw stdout/stderr from claude -p (opt-in)
@@ -131,10 +131,10 @@ Output: JSON parsed from stdout (strict, then lenient fallback)
 #### CodexAdapter
 
 ```
-Invocation: codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"
+Invocation: codex exec [resume <thread-id>] --skip-git-repo-check --sandbox workspace-write --json "<prompt>"
 Working dir: worktree path
 Timeout: global watchdog timeout
-Output: files_changed from git diff; metadata from result file or stdout (best-effort)
+Output: thread id from JSONL; files_changed from git diff; metadata from result file or JSONL/stdout fallback
 ```
 
 Both adapters:
@@ -149,7 +149,7 @@ Both adapters:
 
 **Claude adapter (primary):** Parse `--output-format json` stdout. Try `json.loads(stdout)` first. On failure, strip markdown fences and find JSON boundaries (lenient mode). Log a warning on lenient success.
 
-**Codex adapter (primary):** After `codex exec` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`. Execution reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to scanning stdout from the end for a JSON object. If both fail during execution, construct a minimal result from git diff alone.
+**Codex adapter (primary):** After `codex exec --json` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`. Execution reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to `item.completed` JSONL agent-message content and then legacy stdout JSON scanning. If both fail during execution, construct a minimal result from git diff alone.
 
 ### 4. Schema Validator
 

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
-    build_full_execution_prompt_codex,
+    build_full_execution_prompt,
     build_review_prompt,
-    build_scoping_prompt,
     build_retry_prompt,
     collect_file_context,
     redact_secret_text,
@@ -75,52 +74,21 @@ def test_retry_prompt_includes_original_context():
     assert original_prompt in prompt
 
 
-def test_build_scoping_prompt_renders_complexity_rules():
-    prompt = build_scoping_prompt(
-        raw_task="Fix typo in README",
-        repo_summary="CLI orchestrator",
-        directory_tree="repo\n  README.md",
-        schema_json='{"title":"TaskDefinition"}',
-    )
-
-    assert "RAW TASK:\nFix typo in README" in prompt
-    assert '"simple": single-file or config change' in prompt
-    assert '"extramax": exceptionally difficult architecture' in prompt
-    assert "OUTPUT SCHEMA:" in prompt
-
-
-def test_build_scoping_prompt_includes_required_field_checklist():
-    prompt = build_scoping_prompt(
-        raw_task="Fix header",
-        repo_summary="A website repo",
-        directory_tree="src/",
-        schema_json="{}",
-    )
-
-    assert "REQUIRED FIELDS" in prompt
-    assert '"actionable"' in prompt
-    assert '"complexity_tier"' in prompt
-    assert '"extramax"' in prompt
-
-
-def test_build_full_execution_prompt_codex_renders_single_result_path():
-    prompt = build_full_execution_prompt_codex(
+def test_build_full_execution_prompt_renders_single_result_path():
+    prompt = build_full_execution_prompt(
         plan_text="## Steps\n- Update endpoint",
-        file_contents="# src/api.py\npass\n",
         result_file_path="/tmp/execution.json",
         schema_json='{"title":"ExecutionResult"}',
     )
 
-    assert "Execute the full plan" in prompt
-    assert "PLAN:" in prompt
+    assert "FULLY IMPLEMENT THE PLAN ABOVE" in prompt
     assert "write your result JSON to:" in prompt
     assert "/tmp/execution.json" in prompt
+    assert "src/api.py" not in prompt
 
 
 def test_build_review_prompt_renders_optional_reviewer_sections():
     prompt = build_review_prompt(
-        task_description="Implement feature",
-        plan_text="## Steps\n- Implement feature",
         git_diff="diff --git a/a.py b/a.py",
         step_results_json='[{"step_number":1}]',
         schema_json='{"title":"Review"}',

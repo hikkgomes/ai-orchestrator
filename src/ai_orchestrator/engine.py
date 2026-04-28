@@ -19,8 +19,7 @@ from .models import DebateRound, DebateState, ReviewDebatePhase, RunState, Workf
 from .parallel import invoke_parallel
 from .prompts.templates import (
     build_fix_planning_prompt,
-    build_full_execution_prompt_claude,
-    build_full_execution_prompt_codex,
+    build_full_execution_prompt,
     build_planning_prompt,
     build_prescope_claude_prompt,
     build_prescope_codex_prompt,
@@ -32,7 +31,6 @@ from .prompts.templates import (
     build_scope_respond_claude_prompt,
     build_retry_prompt,
     build_review_prompt,
-    collect_file_context,
     json_block,
     redact_secret_text,
     render_directory_tree,
@@ -371,7 +369,7 @@ class Engine:
             state.scoping_round = 2
             self._state_mgr.save(state)
 
-            prompt = build_scope_compare_codex_prompt(claude_scope, codex_scope, state.task)
+            prompt = build_scope_compare_codex_prompt(claude_scope)
             self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
             codex_result = self._invoke_adapter_text(
                 codex,
@@ -439,8 +437,7 @@ class Engine:
                         self._ui.info("Claude stands firm; sending reasoning back to Codex.")
 
             if not state.scoping_agreed:
-                scope_md = self._artifacts.read_text(state.scope_md_ref)
-                prompt = build_scope_final_codex_prompt(claude_scope, scope_md, codex_scope)
+                prompt = build_scope_final_codex_prompt(claude_scope)
                 self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
                 codex_result = self._invoke_adapter_text(
                     codex,
@@ -543,23 +540,11 @@ class Engine:
         is_fix_planning = state.fix_iteration_count > 0 and bool(planning_feedback)
         if is_fix_planning:
             prompt = build_fix_planning_prompt(
-                task=state.task,
-                scope_md=scope_md,
-                original_plan=self._load_plan_text(state.plan_id) if state.plan_id else "",
-                step_results=json_block(self._load_step_results(state)),
-                diff=redact_secret_text(self._implementation_diff(state)),
                 issues=planning_feedback or "",
-                debate_context=self._debate_history_text(state),
             )
         else:
-            scoped_task = task_description
-            if scope_md:
-                scoped_task = (
-                    f"{task_description}\n\nSCOPE.MD:\n{scope_md}\n\n"
-                    f"ORIGINAL USER PROMPT:\n{state.task}"
-                )
             prompt = build_planning_prompt(
-                task_description=scoped_task,
+                task_description=task_description,
                 scope_md=scope_md or "<none>",
             )
         self._artifacts.save_prompt(f"planning-{state.run_id[:8]}.md", prompt)
@@ -668,7 +653,6 @@ class Engine:
         return self._transition(state, WorkflowStatus.EXECUTING)
 
     def _run_execution(self, state: RunState) -> RunState:
-        plan_structured = self._load_plan_structured(state.plan_id)
         plan_text = self._load_plan_text(state.plan_id)
         worktree_dir = self._ensure_worktree(state)
         overrides = state.execution_overrides or {}
@@ -678,34 +662,14 @@ class Engine:
         execution_model = overrides.get("model") or self._resolve_model_for_phase("executing", worker_name, state)
         schema = load_bundled_schema("execution_result.schema.json")
 
-        key_files = list(
-            dict.fromkeys(
-                (
-                    plan_structured.get("key_files", [])
-                    if plan_structured
-                    else self._extract_key_files_from_plan_text(plan_text)
-                )
-            )
-        )
-        file_contents, _ = collect_file_context(worktree_dir, key_files)
         pending_result_path = str(self._artifacts.pending_execution_result_path(state.run_id))
         self._artifacts.clear_pending_execution_result(state.run_id)
 
-        if worker_name == "codex":
-            prompt = build_full_execution_prompt_codex(
-                plan_text=plan_text,
-                file_contents=file_contents,
-                result_file_path=pending_result_path,
-                schema_json=json_block(schema),
-                workspace_trees=self._workspace_trees(state, max_depth=2),
-            )
-        else:
-            prompt = build_full_execution_prompt_claude(
-                plan_text=plan_text,
-                file_contents=file_contents,
-                schema_json=json_block(schema),
-                workspace_trees=self._workspace_trees(state, max_depth=2),
-            )
+        prompt = build_full_execution_prompt(
+            plan_text=plan_text,
+            result_file_path=pending_result_path,
+            schema_json=json_block(schema),
+        )
 
         def invoke(current_prompt: str) -> Any:
             return self._invoke_adapter_json(
@@ -773,11 +737,7 @@ class Engine:
         self._commit_worktree_all(
             state,
             worktree_dir,
-            self._task_summary(
-                (plan_structured.get("task") if plan_structured else None)
-                or state.normalized_task
-                or state.task
-            ),
+            self._task_summary(state.normalized_task or state.task),
         )
         reference = self._artifacts.save_execution_result(state.run_id, result)
         state.execution_result_ref = reference
@@ -789,10 +749,8 @@ class Engine:
     def _run_review(self, state: RunState) -> RunState:
         schema = load_bundled_schema("review.schema.json")
         debate_schema = load_bundled_schema("debate_response.schema.json")
-        plan_text = self._load_plan_text(state.plan_id)
         git_diff = redact_secret_text(self._implementation_diff(state))
         review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
-        scope_md = self._artifacts.read_text(state.scope_md_ref) if state.scope_md_ref else ""
         try:
             changed_files = self._review_changed_files(state)
         except (EngineError, OSError):
@@ -807,8 +765,6 @@ class Engine:
         review_tools = self._phase_allowed_tools("reviewing", default=["Read", "Grep", "Glob", "Bash"])
         review_timeout = self._phase_timeout("reviewing")
         review_prompt = build_review_prompt(
-            task_description=state.normalized_task or state.task,
-            plan_text=plan_text,
             git_diff=git_diff,
             step_results_json=json_block(self._load_step_results(state)),
             schema_json=json_block(schema),
@@ -879,11 +835,7 @@ class Engine:
             self._state_mgr.save(state)
 
             codex_prompt = build_review_codex_prompt(
-                task_description=state.normalized_task or state.task,
-                scope_md=scope_md,
-                plan_text=plan_text,
                 git_diff=git_diff,
-                step_results_json=json_block(self._load_step_results(state)),
                 review_json=json_block(claude_review),
                 schema_json=json_block(schema),
             )
@@ -906,10 +858,13 @@ class Engine:
                     schema,
                     reasoning_effort_override="high",
                     model_override=codex_model,
+                    resume_session_id=state.session_ids.get("scoping_codex"),
                 ),
                 initial_prompt=codex_prompt,
             )
             codex_review = codex_result.data
+            if codex_result.session_id:
+                state.session_ids["scoping_codex"] = codex_result.session_id
             self._record_debate_round(
                 state,
                 actor="codex",
@@ -958,14 +913,7 @@ class Engine:
                 state.debate_state.debate_phase = ReviewDebatePhase.ESCALATION
             self._state_mgr.save(state)
             final_prompt = build_review_final_claude_prompt(
-                task_description=state.normalized_task or state.task,
-                scope_md=scope_md,
-                plan_text=plan_text,
-                git_diff=git_diff,
-                step_results_json=json_block(self._load_step_results(state)),
-                claude_review_json=json_block(claude_review),
                 codex_review_json=json_block(codex_review),
-                scenario=scenario,
                 schema_json=json_block(debate_schema),
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)

@@ -8,9 +8,7 @@ Usage::
 
     prompt = build_planning_prompt(
         task_description="Add login form validation",
-        directory_tree="src/\n  main.py\n",
-        key_file_contents="# main.py\n...",
-        schema_json=json.dumps(plan_schema),
+        scope_md="...",
     )
     result = claude_adapter.invoke(prompt, ...)
 """
@@ -61,63 +59,9 @@ def build_planning_prompt(
     )
 
 
-def build_scoping_prompt(
-    raw_task: str,
-    repo_summary: str,
-    directory_tree: str,
-    schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
-) -> str:
-    """Build the scoping phase prompt."""
-    workspace_section = _workspace_section(workspace_trees)
-    return (
-        "You are a task intake agent for an automated software orchestrator.\n\n"
-        "Your only job is to validate and normalize the task below. Do not implement\n"
-        "anything. Do not discuss implementation. Do not ask questions. Produce output\n"
-        "in exactly one pass.\n\n"
-        "RAW TASK:\n"
-        f"{raw_task}\n\n"
-        "REPOSITORY SUMMARY:\n"
-        f"{repo_summary}\n\n"
-        "REPOSITORY STRUCTURE (depth 2):\n"
-        f"{directory_tree}{workspace_section}\n\n"
-        "---\n\n"
-        "RULES:\n"
-        "1. If the task is actionable and scoped to this repository:\n"
-        '   - Set "actionable" to true\n'
-        '   - Set "normalized_task" to a clean, precise restatement of what must be done\n'
-        '   - List any assumptions you made to resolve ambiguity in "assumptions"\n'
-        '   - Omit "blocking_reason"\n\n'
-        "2. If the task cannot proceed (targets external systems, requires credentials\n"
-        "   you cannot scope, is too vague to plan even conservatively, or requests\n"
-        "   destructive actions on production systems):\n"
-        '   - Set "actionable" to false\n'
-        '   - Set "normalized_task" to the raw task verbatim\n'
-        '   - Set "blocking_reason" to a one-sentence explanation for the human operator\n'
-        '   - Set "assumptions" to []\n\n'
-        "3. Assess complexity:\n"
-        '   - "simple": single-file or config change, no architectural impact\n'
-        '   - "moderate": multi-file change, clear scope\n'
-        '   - "complex": cross-cutting, tricky dependencies, weak test coverage\n'
-        '   - "architectural": system design change, new patterns, ambiguous requirements\n'
-        '   - "extramax": exceptionally difficult architecture or migration work that requires extended context and maximum reasoning\n\n'
-        "4. When in doubt: default to actionable = true. Record your uncertainty in\n"
-        '   "assumptions". Do not block unless you are certain.\n\n'
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
-        "REQUIRED FIELDS - every response must include all four:\n"
-        '  - "actionable": true or false (never omit - use true if uncertain)\n'
-        '  - "normalized_task": string\n'
-        '  - "assumptions": array (use [] if none)\n'
-        '  - "complexity_tier": one of "simple", "moderate", "complex", "architectural", "extramax"\n\n'
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-    )
-
-
 def build_prescope_claude_prompt(raw_task: str) -> str:
     """Build Claude round-1 prompt that creates canonical scope.md."""
     return _prescope_prompt(
-        actor="Claude",
         raw_task=raw_task,
         repo_summary="",
         directory_tree="",
@@ -128,7 +72,6 @@ def build_prescope_claude_prompt(raw_task: str) -> str:
 def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
     """Build Codex round-2 prompt that creates Codex's independent scope file."""
     return _prescope_prompt(
-        actor="Codex",
         raw_task=raw_task,
         repo_summary=repo_summary,
         directory_tree=directory_tree,
@@ -138,8 +81,6 @@ def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree
 
 def build_scope_compare_codex_prompt(
     claude_scope_md: str,
-    codex_scope_md: str,
-    raw_task: str,
 ) -> str:
     """Build Codex round-3 prompt to compare both scopes."""
     return (
@@ -172,7 +113,7 @@ def build_scope_respond_claude_prompt(scope_md: str, codex_scope_md: str) -> str
     )
 
 
-def build_scope_final_codex_prompt(claude_scope_md: str, scope_md: str, codex_scope_md: str) -> str:
+def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
     """Build Codex round-5 prompt for final xhigh scope assessment."""
     return (
         "Claude disagrees with your review. Review its reasoning against your independent reviews.\n"
@@ -197,44 +138,17 @@ def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
     )
 
 
-def build_full_execution_prompt_codex(
+def build_full_execution_prompt(
     plan_text: str,
-    file_contents: str,
     result_file_path: str,
     schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
 ) -> str:
-    """Build a single-session Codex execution prompt for the full plan."""
-    workspace_section = _workspace_section(workspace_trees)
+    """Build a single-session execution prompt for the full plan."""
     return (
         f"{plan_text}\n\n"
         "FULLY IMPLEMENT THE PLAN ABOVE\n"
         "- Do not commit or push any changes yet. Leave them for reviewing.\n"
         "- Update the documentation accordingly if needed.\n"
-        "- Suggest the appropriate git commands to commit and push changes in the structured file.\n"
-        "- If no changes are needed, explain that in the result summary.\n\n"
-        "After making changes, write your result JSON to:\n"
-        f"{result_file_path}\n\n"
-        "The JSON must conform to this schema:\n"
-        f"{schema_json}\n\n"
-        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
-    )
-
-
-def build_full_execution_prompt_claude(
-    plan_text: str,
-    file_contents: str,
-    schema_json: str,
-    workspace_trees: dict[str, str] | None = None,
-) -> str:
-    """Build a single-session Claude execution prompt for the full plan."""
-    workspace_section = _workspace_section(workspace_trees)
-    return (
-        f"{plan_text}\n\n"
-        "FULLY IMPLEMENT THE PLAN ABOVE\n"
-        "- Do not commit or push any changes yet. Leave them for reviewing.\n"
-        "- Update the documentation accordingly if needed.\n"
-        "- Suggest the appropriate git commands to commit and push changes in the structured file.\n"
         "- If no changes are needed, explain that in the result summary.\n\n"
         "After making changes, write your result JSON to:\n"
         f"{result_file_path}\n\n"
@@ -245,8 +159,6 @@ def build_full_execution_prompt_claude(
 
 
 def build_review_prompt(
-    task_description: str,
-    plan_text: str,
     git_diff: str,
     step_results_json: str,
     schema_json: str,
@@ -271,17 +183,12 @@ def build_review_prompt(
         "If it does not exist or cannot run, continue with the provided diff and heuristic scan.\n\n"
         "Produce a JSON review conforming to this schema:\n"
         f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
         "Codex is going to review your work afterwards.\n"
     )
 
 
 def build_review_codex_prompt(
-    task_description: str,
-    scope_md: str,
-    plan_text: str,
     git_diff: str,
-    step_results_json: str,
     review_json: str,
     schema_json: str,
 ) -> str:
@@ -302,14 +209,7 @@ def build_review_codex_prompt(
 
 
 def build_review_final_claude_prompt(
-    task_description: str,
-    scope_md: str,
-    plan_text: str,
-    git_diff: str,
-    step_results_json: str,
-    claude_review_json: str,
     codex_review_json: str,
-    scenario: str,
     schema_json: str,
 ) -> str:
     """Build Claude Opus/max final review-debate prompt."""
@@ -321,7 +221,6 @@ def build_review_final_claude_prompt(
         f"{codex_review_json}\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -344,17 +243,11 @@ def build_retry_prompt(
 
 
 def build_fix_planning_prompt(
-    task: str,
-    scope_md: str,
-    original_plan: str,
-    step_results: str,
-    diff: str,
     issues: str,
-    debate_context: str,
 ) -> str:
     """Build a planning prompt for incremental fix plans."""
     return (
-        "Alright, plan to fix the fix the issues we found after reviewing the implementation:\n\n"
+        "Alright, plan to fix the issues we found after reviewing the implementation:\n\n"
         f"{issues}\n\n"
     )
 
@@ -537,16 +430,7 @@ def json_block(data: Any) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
 
 
-def _workspace_section(workspace_trees: dict[str, str] | None) -> str:
-    if not workspace_trees:
-        return ""
-    return "\n\nWorkspace repos:\n" + "\n".join(
-        f"## {name}/\n{tree}" for name, tree in workspace_trees.items()
-    )
-
-
 def _prescope_prompt(
-    actor: str,
     raw_task: str,
     repo_summary: str,
     directory_tree: str,

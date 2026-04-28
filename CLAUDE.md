@@ -4,12 +4,12 @@
 
 ## What is this project?
 
-A local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`codex exec`) as stateless worker processes. No API keys. No SDKs. CLI-only AI access.
+A local orchestrator that coordinates Claude Code (`claude -p`) and Codex (`codex exec`) as subprocess worker processes. No API keys. No SDKs. CLI-only AI access.
 
 ## Key architecture rules
 
 - **No API calls** — all AI interaction is via `claude -p` and `codex exec` subprocesses.
-- **Fresh subprocess per invocation** — every CLI call is a new subprocess. Claude phases can explicitly resume one unified `claude_main` session with `--resume` across scoping, planning, and reviewing.
+- **Fresh subprocess per invocation, resumable sessions** — every CLI call is a new subprocess. Claude phases can explicitly resume one unified `claude_main` session with `--resume`; Codex runs with `--json`, captures `thread_id`, and resumes Codex debate/review threads when available.
 - **Disk artifacts only** — steps communicate through JSON files in `.ai-orchestrator/`, never through stdout chaining.
 - **Schema + application validation** — planning output is markdown. All other AI outputs are validated against JSON schemas in `schemas/`, then checked against application-level invariants before the orchestrator acts on them.
 - **Single preserved worktree per run** — all mutating steps execute sequentially in one worktree branch. Fix cycles build on existing changes instead of discarding the worktree.
@@ -94,7 +94,7 @@ Canonical prompt templates for every workflow phase live in `docs/prompts/`:
 |---|---|---|
 | `scope.md` | SCOPING | transient scoping result |
 | `plan.md` | PLANNING (first plan) | `plans/plan-<prefix>-<hash>.md` |
-| `implement.md` | EXECUTING (full plan) | `results/execution-<uuid>.json` |
+| `implement.md` | EXECUTING (unified full-plan prompt) | `results/execution-<uuid>.json` |
 | `review.md` | REVIEWING | `reviews/review-<uuid>.json` |
 | `fix-plan.md` | PLANNING (incremental fix loop) | `plans/plan-<prefix>-<hash>.md` (new) |
 
@@ -104,9 +104,9 @@ Deferred prompt drafts live under `docs/prompts/deferred/` and are not wired int
 |---|---|---|
 | `deferred/finalize.md` | DONE entry | Deferred |
 
-Each prompt file defines: variables, escalation policy, scope constraints, template
-text (with `{variable}` placeholders for Python f-string substitution), and retry
-prompt. The orchestrator renders these via `engine.py` before each CLI invocation.
+Each prompt file documents the active template shape and output contract. Some
+prompts rely on resumed CLI session context instead of re-injecting all prior
+task, scope, plan, and review text.
 
 ## Claude Code skills
 

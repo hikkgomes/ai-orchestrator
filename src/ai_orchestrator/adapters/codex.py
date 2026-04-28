@@ -1,7 +1,7 @@
 """Codex CLI adapter.
 
-Invokes ``codex exec --skip-git-repo-check --sandbox workspace-write "<prompt>"``
-as a subprocess per AGENTS.md.
+Invokes ``codex exec --skip-git-repo-check --sandbox workspace-write --json
+"<prompt>"`` as a subprocess per AGENTS.md.
 
 Three-tier output strategy:
 1. **Result file (primary)**: prompt instructs Codex to write a JSON result to
@@ -89,9 +89,11 @@ class CodexAdapter(BaseAdapter):
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
+            resume_session_id=resume_session_id,
         )
         completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
         stdout = completed.stdout
+        thread_id = self._extract_thread_id(stdout)
         stderr = completed.stderr
         raw_log_path = completed.raw_log_path
         started_at = completed.started_at
@@ -245,7 +247,7 @@ class CodexAdapter(BaseAdapter):
                 ),
             )
         )
-        return InvokeResult(data=validated, session_id=None)
+        return InvokeResult(data=validated, session_id=thread_id)
 
     def invoke_text(
         self,
@@ -262,10 +264,12 @@ class CodexAdapter(BaseAdapter):
             prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
+            resume_session_id=resume_session_id,
         )
         completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
         stdout = completed.stdout
         stderr = completed.stderr
+        thread_id = self._extract_thread_id(stdout)
 
         if completed.timed_out:
             self._record_invocation(
@@ -329,7 +333,7 @@ class CodexAdapter(BaseAdapter):
                 stdout=stdout,
                 stderr=stderr,
             )
-        return TextInvokeResult(text=stdout.strip())
+        return TextInvokeResult(text=self._extract_text_from_jsonl(stdout) or stdout.strip(), session_id=thread_id)
 
     def _build_command(
         self,
@@ -337,14 +341,22 @@ class CodexAdapter(BaseAdapter):
         *,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
+        resume_session_id: str | None = None,
     ) -> tuple[list[str], str | None, str | None]:
         command = [
             self.CLI_NAME,
             "exec",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
         ]
+        if resume_session_id:
+            command.extend(["resume", resume_session_id])
+        command.extend(
+            [
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "--json",
+            ]
+        )
         model = model_override or getattr(self._config.routing.codex, "model", "") or None
         reasoning_effort = (
             reasoning_effort_override
@@ -361,6 +373,35 @@ class CodexAdapter(BaseAdapter):
     def _pending_result_path(self, step_number: int) -> Path:
         """Return the expected result file path for *step_number*."""
         return self._artifact_root / "results" / f"pending-step-{step_number}.json"
+
+    @staticmethod
+    def _extract_thread_id(stdout: str) -> str | None:
+        """Return the first Codex JSONL thread id, if present."""
+        for line in stdout.splitlines():
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and parsed.get("type") == "thread.started":
+                thread_id = parsed.get("thread_id")
+                return str(thread_id) if thread_id else None
+        return None
+
+    @staticmethod
+    def _extract_text_from_jsonl(stdout: str) -> str | None:
+        """Extract agent message text from Codex ``--json`` JSONL output."""
+        messages: list[str] = []
+        for line in stdout.splitlines():
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict) or parsed.get("type") != "item.completed":
+                continue
+            text = CodexAdapter._agent_message_text(parsed)
+            if text:
+                messages.append(text)
+        return "\n".join(messages).strip() or None
 
     @staticmethod
     def _extract_step_number(prompt: str) -> int | None:
@@ -399,6 +440,12 @@ class CodexAdapter(BaseAdapter):
         if not stripped:
             return None
 
+        jsonl_text = CodexAdapter._extract_text_from_jsonl(stripped)
+        if jsonl_text:
+            parsed_jsonl = CodexAdapter._scan_stdout_for_json(jsonl_text)
+            if parsed_jsonl is not None:
+                return parsed_jsonl
+
         candidates: list[dict[str, Any]] = []
         for line in reversed(stripped.splitlines()):
             line = line.strip()
@@ -428,6 +475,34 @@ class CodexAdapter(BaseAdapter):
             if {"step_number", "status", "summary"}.issubset(candidate):
                 return candidate
         return last_dict or (candidates[0] if candidates else None)
+
+    @staticmethod
+    def _agent_message_text(event: dict[str, Any]) -> str | None:
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            return None
+        for key in ("text", "content", "message"):
+            value = item.get(key)
+            text = CodexAdapter._stringify_message_content(value)
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _stringify_message_content(value: Any) -> str | None:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts: list[str] = []
+            for entry in value:
+                if isinstance(entry, str):
+                    parts.append(entry)
+                elif isinstance(entry, dict):
+                    text = entry.get("text") or entry.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts).strip() or None
+        return None
 
     def _git_diff_fallback(
         self,

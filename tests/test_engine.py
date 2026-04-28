@@ -102,7 +102,10 @@ class FakeClaudeAdapter:
                 "allowed_tools": allowed_tools,
             }
         )
-        if "software planning agent" in prompt and "## Approach" in prompt:
+        if (
+            "Plan for the implementation of the task below:" in prompt
+            or "plan to fix the issues we found" in prompt
+        ):
             self.planning_calls += 1
             self.invocations.append(
                 {
@@ -114,7 +117,7 @@ class FakeClaudeAdapter:
                 }
             )
             return TextInvokeResult(_plan_markdown(self._plans.pop(0)), session_id="planning-session")
-        if "independently scoping" in prompt:
+        if "Scope the request for implementation across this project" in prompt:
             self.scoping_calls += 1
             if self._scopings:
                 self._last_scope = self._scopings.pop(0)
@@ -127,11 +130,8 @@ class FakeClaudeAdapter:
                 }
             return TextInvokeResult(_scope_md(self._last_scope), session_id="scoping-claude-session")
         if (
-            "resolving task scope" in prompt
-            or "updating canonical scope.md" in prompt
-            or "responding to Codex's scope disagreement" in prompt
-            or "FINAL Claude scope decision" in prompt
-            or "final Claude scope decision" in prompt
+            "Codex's scope and reasoning are ready" in prompt
+            or "Codex still disagrees with your scope" in prompt
         ):
             return TextInvokeResult(
                 _scope_md(self._last_scope or {
@@ -181,8 +181,8 @@ class FakeCodexAdapter:
         if schema["title"] == "Review":
             self.review_calls += 1
             if self._reviews:
-                return InvokeResult(self._reviews.pop(0))
-            return InvokeResult(_review())
+                return InvokeResult(self._reviews.pop(0), session_id="codex-review-session")
+            return InvokeResult(_review(), session_id="codex-review-session")
         if schema["title"] == "DebateResponse":
             if self._debate_responses:
                 return InvokeResult(self._debate_responses.pop(0))
@@ -546,7 +546,7 @@ def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_roo
     assert "AI FAILURE CATEGORIES:" in review_prompts[0]
 
 
-def test_codex_review_prompt_uses_normalized_task(tmp_repo, artifact_root, default_config):
+def test_codex_review_prompt_uses_trimmed_context(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
     claude = FakeClaudeAdapter(
@@ -576,8 +576,9 @@ def test_codex_review_prompt_uses_normalized_task(tmp_repo, artifact_root, defau
     assert state.status == "DONE"
     codex_review_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "Review"]
     assert codex_review_prompts
-    assert "ORIGINAL TASK:\nNormalized implementation task" in codex_review_prompts[0]
-    assert "ORIGINAL TASK:\nraw user wording" not in codex_review_prompts[0]
+    assert "IMPLEMENTATION DIFF:" in codex_review_prompts[0]
+    assert "CLAUDE REVIEW REPORT:" in codex_review_prompts[0]
+    assert "ORIGINAL TASK:" not in codex_review_prompts[0]
 
 
 def test_scoping_debate_parallel_and_convergence(tmp_repo, artifact_root, default_config):
@@ -627,7 +628,7 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
             resume_session_id=None,
             allowed_tools=None,
         ):
-            if "independently scoping" in prompt:
+            if "Scope the request for implementation across this project" in prompt:
                 self.text_invocations.append(
                     {
                         "prompt": prompt,
@@ -663,10 +664,9 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
 
     assert state.status == "DONE"
     assert state.session_ids["scoping_claude"] == "scope-session-1"
-    assert any("independently scoping" in str(item["prompt"]) for item in claude.text_invocations)
+    assert any("Scope the request for implementation across this project" in str(item["prompt"]) for item in claude.text_invocations)
     codex_review_prompt = str(codex.text_invocations[1]["prompt"])
     assert "CLAUDE CANONICAL SCOPE.MD:\n## Claude pre-scope" in codex_review_prompt
-    assert "YOUR INDEPENDENT CODEX SCOPE:" in codex_review_prompt
 
 
 def test_scoping_debate_max_rounds_proceeds_without_agreement(
@@ -833,7 +833,7 @@ def test_unified_session_disabled_does_not_set_claude_main_or_resume_across_phas
     assert codex.review_calls == 1
 
 
-def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_root, default_config):
+def test_workspace_execution_prompt_omits_workspace_trees(tmp_path, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
     workspace_root = tmp_path / "workspace"
@@ -861,9 +861,10 @@ def test_workspace_execution_prompt_includes_workspace_trees(tmp_path, artifact_
     assert state.status == "DONE"
     execution_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "ExecutionResult"]
     assert execution_prompts
-    assert "Workspace repos:" in execution_prompts[0]
-    assert "## frontend/" in execution_prompts[0]
-    assert "## backend/" in execution_prompts[0]
+    assert "FULLY IMPLEMENT THE PLAN ABOVE" in execution_prompts[0]
+    assert "Workspace repos:" not in execution_prompts[0]
+    assert "## frontend/" not in execution_prompts[0]
+    assert "## backend/" not in execution_prompts[0]
 
 
 def test_workspace_resume_allows_uncommitted_changes(tmp_path, artifact_root, default_config):
@@ -1203,7 +1204,7 @@ def test_engine_retries_when_step_reports_failed_status(tmp_repo, artifact_root,
     assert state.status == "DONE"
     assert codex.calls == [1, 1]
     assert state.retry_counts["execution"] == 0
-    assert "Execute the full plan" in codex.prompts[1]
+    assert "FULLY IMPLEMENT THE PLAN ABOVE" in codex.prompts[1]
     assert "The full original prompt follows." in codex.prompts[1]
 
 
@@ -1252,12 +1253,12 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
             allowed_tools=None,
         ):
             self.prompts.append(prompt)
-            if "software planning agent" in prompt and "## Approach" in prompt:
+            if "Plan for the implementation of the task below:" in prompt:
                 self._plan_attempts += 1
                 if self._plan_attempts == 1:
                     raise StepFailure("invalid plan", validation_error="missing task context")
                 return TextInvokeResult(_plan_markdown(_plan()), session_id="planning-session")
-            if "independently scoping" in prompt:
+            if "Scope the request for implementation across this project" in prompt:
                 return TextInvokeResult(_scope_md({
                     "actionable": True,
                     "normalized_task": "Implement feature",
@@ -1281,7 +1282,7 @@ def test_invoke_with_retries_passes_full_prompt(tmp_repo, artifact_root, default
     assert state.status == "DONE"
     assert len(claude.prompts) >= 2
     retry_prompt = next(prompt for prompt in claude.prompts if "The full original prompt follows." in prompt)
-    assert "TASK:\nImplement feature" in retry_prompt
+    assert "Plan for the implementation of the task below:\nImplement feature" in retry_prompt
     assert "SCOPE:" in retry_prompt
     assert "missing task context" in retry_prompt
 

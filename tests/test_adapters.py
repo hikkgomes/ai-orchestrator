@@ -499,9 +499,10 @@ class TestCodexAdapter:
             "--skip-git-repo-check",
             "--sandbox",
             "workspace-write",
+            "--json",
             "--config",
-            'model_reasoning_effort="medium"',
         ]
+        assert commands[0][7] == 'model_reasoning_effort="medium"'
 
     def test_invoke_falls_back_to_stdout_jsonl(
         self,
@@ -582,3 +583,32 @@ class TestCodexAdapter:
     def test_scan_stdout_for_json_returns_last_object(self):
         stdout = 'noise\n{"first": true}\nmore\n{"second": true}\n'
         assert CodexAdapter._scan_stdout_for_json(stdout) == {"second": True}
+
+    def test_extracts_thread_id_from_jsonl(self):
+        stdout = '\n'.join(
+            [
+                '{"type":"session.configure"}',
+                '{"type":"thread.started","thread_id":"thread-123"}',
+            ]
+        )
+        assert CodexAdapter._extract_thread_id(stdout) == "thread-123"
+
+    def test_scan_stdout_for_json_reads_agent_message_jsonl(self):
+        payload = {
+            "step_number": 1,
+            "status": "partial",
+            "files_changed": [],
+            "summary": "From JSONL",
+            "issues": [],
+            "test_commands": [],
+        }
+        stdout = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "content": json.dumps(payload),
+                },
+            }
+        )
+        assert CodexAdapter._scan_stdout_for_json(stdout) == payload
