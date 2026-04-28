@@ -54,22 +54,10 @@ def build_planning_prompt(
         Fully rendered prompt for the planner CLI.
     """
     return (
-        "You are a software planning agent. You have access to Read, Grep, and Glob\n"
-        "tools to explore the codebase.\n\n"
-        "TASK:\n"
+        "Plan for the implementation of the task below:\n"
         f"{task_description}\n\n"
         "SCOPE:\n"
         f"{scope_md}\n\n"
-        "Explore the codebase to understand the relevant code, then write an\n"
-        "implementation plan. Structure your plan with these sections:\n\n"
-        "## Approach\n"
-        "Strategy, reasoning, risks, and validation approach.\n\n"
-        "## Steps\n"
-        "Ordered implementation actions. Be specific and reference files or functions\n"
-        "you found during exploration.\n\n"
-        "## Key Files\n"
-        "List the files that will need changes using a bullet list of repository-relative paths.\n\n"
-        "Write ONLY the plan. No preamble and no markdown code fences.\n"
     )
 
 
@@ -155,73 +143,55 @@ def build_scope_compare_codex_prompt(
 ) -> str:
     """Build Codex round-3 prompt to compare both scopes."""
     return (
-        "You are Codex reviewing Claude's canonical scope against your independent\n"
-        "scope notes. Do not edit the canonical scope.md. Return ONLY markdown for\n"
-        "codex-scope.md.\n\n"
+        "Claude's canonical scope is ready. Review it against your independent scope.\n"
+        "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
         "Start with YAML frontmatter containing exactly:\n"
         "agreement: true|false\n\n"
-        "If agreement is true, briefly explain why Claude's scope is safe to send to\n"
-        "planning. If agreement is false, write concise reasoning that identifies\n"
-        "what must change before planning.\n\n"
-        "RAW TASK:\n"
-        f"{raw_task}\n\n"
+        "For the it to be true, either your initial scope must fully align with Claude's scope or you must be convinced by Claude's reasoning that their scope is absolutely correct.\n"
+        "If you have any disagreements, notes, concerns or pushbacks, write concise reasoning that identifies what must change.\n\n"
         "CLAUDE CANONICAL SCOPE.MD:\n"
         f"{claude_scope_md}\n\n"
-        "YOUR INDEPENDENT CODEX SCOPE:\n"
-        f"{codex_scope_md}\n"
+        "Remember: You need to reach full agreement with Claude before proceeding to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
     )
 
 
 def build_scope_respond_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
     """Build Claude round-4 prompt to respond to Codex reasoning."""
     return (
-        "You are Claude responding to Codex's scope disagreement at high reasoning.\n\n"
-        "Read the current canonical scope.md and Codex's reasoning. Return ONLY\n"
-        "markdown. You may either update the canonical scope.md or explain why the\n"
-        "current scope should stand.\n\n"
+        "Codex's scope and reasoning are ready. Review it against your independent scope.\n"
+        "Return ONLY markdown.\n\n"
         "Start with YAML frontmatter containing these keys:\n"
         "normalized_task, complexity_tier, actionable, key_files, context,\n"
         "agreement: true|false\n"
-        "Set agreement true if you accept Codex's objection and have updated the\n"
-        "scope accordingly. Set agreement false if you still disagree with Codex,\n"
-        "and include your reasoning in the body.\n\n"
-        "CURRENT CANONICAL SCOPE.MD:\n"
-        f"{scope_md}\n\n"
+        "Set agreement true if you accept Codex's objection and have updated the canonical scope.md\n"
+        "Set agreement false if you have any pushbacks to Codex and include your reasoning in the body.\n\n"
+        "This must be a fundamented decision, so if you don't have a good reasoning to continue disagreeing with Codex, you should just update the canonical scope.md to align with Codex's scope and set agreement to true.\n\n"
         "CODEX REASONING:\n"
         f"{codex_scope_md}\n"
+        "Remember: You need to reach full agreement with Codex before proceeding to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
     )
 
 
 def build_scope_final_codex_prompt(claude_scope_md: str, scope_md: str, codex_scope_md: str) -> str:
     """Build Codex round-5 prompt for final xhigh scope assessment."""
     return (
-        "You are making Codex's final scope assessment at xhigh reasoning.\n\n"
-        "This is the last Codex review before Claude makes the final call if needed.\n"
-        "Do not edit scope.md. Return\n"
-        "ONLY markdown for codex-scope.md with YAML frontmatter containing:\n"
+        "Claude disagrees with your review. Review its reasoning against your independent reviews.\n"
+        "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
+        "Start with YAML frontmatter containing exactly:\n"
         "agreement: true|false\n\n"
-        "If agreement is false, explain the remaining concern concisely. If agreement\n"
-        "is true, explain why the final scope is safe to plan from.\n\n"
-        "ORIGINAL CLAUDE SCOPE:\n"
+        "This must be a fundamented decision, so if you don't have a good reasoning to continue disagreeing with Claude, you should give in and set agreement to true.\n\n"
+        "CLAUDE CANONICAL SCOPE.MD:\n"
         f"{claude_scope_md}\n\n"
-        "PREVIOUS CODEX COMMENTS:\n"
-        f"{codex_scope_md}\n\n"
-        "CANONICAL SCOPE.MD:\n"
-        f"{scope_md}\n"
+        "Remember: You need to reach full agreement with Claude before we proceed to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
     )
 
 
 def build_scope_final_claude_prompt(scope_md: str, codex_scope_md: str) -> str:
     """Build Claude round-6 prompt for final Opus/max scope decision."""
     return (
-        "You are making the final Claude scope decision with Opus at max effort.\n\n"
-        "Read Codex's final assessment and return ONLY the final canonical scope.md.\n"
-        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable,\n"
-        "key_files, and context. If Codex still disagrees, decide whether to adjust\n"
-        "the scope or proceed with your current scope, and make that decision clear\n"
-        "in the body.\n\n"
-        "CURRENT SCOPE.MD:\n"
-        f"{scope_md}\n\n"
+        "Codex still disagrees with your scope and you are going to make the final decision on the scope. Read their assessment, review its updated reasoning and return ONLY the final canonical scope.md.\n"
+        "If you are convinced by any of Codex's points, update the canonical scope.md accordingly. If you still disagree, keep the canonical scope.md as is.\n\n"
+        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n\n"
         "CODEX FINAL ASSESSMENT:\n"
         f"{codex_scope_md}\n"
     )
@@ -237,20 +207,11 @@ def build_full_execution_prompt_codex(
     """Build a single-session Codex execution prompt for the full plan."""
     workspace_section = _workspace_section(workspace_trees)
     return (
-        "You are a software implementation agent. Execute the full plan in this\n"
-        "single Codex session. Maintain context across all implementation steps and\n"
-        "make the smallest correct set of changes.\n\n"
-        "PLAN:\n"
         f"{plan_text}\n\n"
-        "RELEVANT FILES:\n"
-        f"{file_contents}\n\n"
-        f"{workspace_section}"
-        "IMPLEMENTATION RULES:\n"
-        "- Implement the whole plan, not just the first listed item.\n"
-        "- Commit after each logical chunk when running in a git worktree, using:\n"
-        "  git add -A && git commit -m \"aio: <description>\"\n"
-        "- Do not commit in workspace mode if multiple repos are present unless the\n"
-        "  repo policy clearly allows it.\n"
+        "FULLY IMPLEMENT THE PLAN ABOVE\n"
+        "- Do not commit or push any changes yet. Leave them for reviewing.\n"
+        "- Update the documentation accordingly if needed.\n"
+        "- Suggest the appropriate git commands to commit and push changes in the structured file.\n"
         "- If no changes are needed, explain that in the result summary.\n\n"
         "After making changes, write your result JSON to:\n"
         f"{result_file_path}\n\n"
@@ -269,16 +230,17 @@ def build_full_execution_prompt_claude(
     """Build a single-session Claude execution prompt for the full plan."""
     workspace_section = _workspace_section(workspace_trees)
     return (
-        "You are a software implementation agent. Execute the full plan in one\n"
-        "continuous pass and then return one JSON result.\n\n"
-        "PLAN:\n"
         f"{plan_text}\n\n"
-        "RELEVANT FILES:\n"
-        f"{file_contents}\n\n"
-        f"{workspace_section}"
-        "OUTPUT SCHEMA:\n"
+        "FULLY IMPLEMENT THE PLAN ABOVE\n"
+        "- Do not commit or push any changes yet. Leave them for reviewing.\n"
+        "- Update the documentation accordingly if needed.\n"
+        "- Suggest the appropriate git commands to commit and push changes in the structured file.\n"
+        "- If no changes are needed, explain that in the result summary.\n\n"
+        "After making changes, write your result JSON to:\n"
+        f"{result_file_path}\n\n"
+        "The JSON must conform to this schema:\n"
         f"{schema_json}\n\n"
-        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
     )
 
 
@@ -297,11 +259,7 @@ def build_review_prompt(
     categories_section = _review_categories_section(review_categories)
     repo_context_section = _reviewer_context_section(reviewer_config)
     return (
-        "You are a code review agent. Review the following implementation.\n\n"
-        "ORIGINAL TASK:\n"
-        f"{task_description}\n\n"
-        "PLAN:\n"
-        f"{plan_text}\n\n"
+        "Review the plan implementation.\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
@@ -309,13 +267,12 @@ def build_review_prompt(
         f"{heuristic_section}"
         f"{categories_section}"
         f"{repo_context_section}"
-        "Before writing the final JSON, invoke the repository-local AI review workflow\n"
-        "if it exists at `.ai-review/scripts/review_changed.sh`, and consolidate its\n"
-        "signal with your own review. If it does not exist or cannot run, continue\n"
-        "with the provided diff and heuristic scan.\n\n"
+        "Before writing the final JSON, invoke the repository-local AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
+        "If it does not exist or cannot run, continue with the provided diff and heuristic scan.\n\n"
         "Produce a JSON review conforming to this schema:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        "Codex is going to review your work afterwards.\n"
     )
 
 
@@ -330,27 +287,17 @@ def build_review_codex_prompt(
 ) -> str:
     """Build Codex's independent review prompt inside the REVIEWING phase."""
     return (
-        "You are Codex performing an independent code review inside the single\n"
-        "REVIEWING phase. You can see Claude's review, but you must make your own\n"
-        "assessment from the task, scope, plan, diff, and execution result.\n\n"
-        "ORIGINAL TASK:\n"
-        f"{task_description}\n\n"
-        "FINAL SCOPE.MD:\n"
-        f"{scope_md}\n\n"
-        "PLAN:\n"
-        f"{plan_text}\n\n"
+        "The following task was implemented in my codebase and reviewed by Claude. Perform an independent review of both the implementation and Claude's review.\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
-        "EXECUTION RESULTS:\n"
-        f"{step_results_json}\n\n"
         "CLAUDE REVIEW REPORT:\n"
         f"{review_json}\n\n"
-        "Return a review JSON. Use verdict=approve and blocks_merge=false only if\n"
-        "the implementation should proceed to merge. If fixes are needed, include\n"
-        "specific findings and set blocks_merge=true.\n\n"
+        "Return a review JSON. Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
+        "If fixes are needed, include specific findings, the reasoning and set blocks_merge=true.\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        "Claude is going to review your work afterwards.\n"
     )
 
 
@@ -367,25 +314,9 @@ def build_review_final_claude_prompt(
 ) -> str:
     """Build Claude Opus/max final review-debate prompt."""
     return (
-        "You are Claude Opus making the final decision in a bounded review debate.\n\n"
-        "Decide whether the implementation can pass or must return to planning for\n"
-        "fixes. Return ONLY JSON matching the debate response schema. Use\n"
-        "position=issues_confirmed when fixes are required, or\n"
-        "position=issues_dismissed when the implementation can pass.\n\n"
-        "SCENARIO:\n"
-        f"{scenario}\n\n"
-        "ORIGINAL TASK:\n"
-        f"{task_description}\n\n"
-        "FINAL SCOPE.MD:\n"
-        f"{scope_md}\n\n"
-        "PLAN:\n"
-        f"{plan_text}\n\n"
-        "IMPLEMENTATION DIFF:\n"
-        f"{git_diff}\n\n"
-        "EXECUTION RESULTS:\n"
-        f"{step_results_json}\n\n"
-        "CLAUDE REVIEW REPORT:\n"
-        f"{claude_review_json}\n\n"
+        "Codex disagrees with your review.\n\n"
+        "Decide whether the implementation can pass or must be fixed.\n"
+        "Return ONLY JSON matching the debate response schema. Use position=issues_confirmed when fixes are required, or position=issues_dismissed when the implementation can pass.\n\n"
         "CODEX REVIEW REPORT AND PUSHBACK:\n"
         f"{codex_review_json}\n\n"
         "OUTPUT SCHEMA:\n"
@@ -423,29 +354,8 @@ def build_fix_planning_prompt(
 ) -> str:
     """Build a planning prompt for incremental fix plans."""
     return (
-        "You are a software planning agent creating an incremental fix plan.\n\n"
-        "You have access to Read, Grep, and Glob tools to inspect the current repository state.\n"
-        "The worktree already contains implementation changes. Do NOT produce a full replacement plan.\n"
-        "Produce only the smallest follow-up plan needed to fix the issues below on top of existing changes.\n\n"
-        "TASK:\n"
-        f"{task}\n\n"
-        "SCOPE.MD:\n"
-        f"{scope_md}\n\n"
-        "ORIGINAL PLAN:\n"
-        f"{original_plan}\n\n"
-        "EXISTING EXECUTION RESULTS:\n"
-        f"{step_results}\n\n"
-        "CURRENT DIFF:\n"
-        f"{diff}\n\n"
-        "ISSUES TO FIX:\n"
+        "Alright, plan to fix the fix the issues we found after reviewing the implementation:\n\n"
         f"{issues}\n\n"
-        "DEBATE CONTEXT:\n"
-        f"{debate_context}\n\n"
-        "Write the output using these sections:\n\n"
-        "## Approach\n"
-        "## Steps\n"
-        "## Key Files\n\n"
-        "Write ONLY the plan. No preamble and no markdown code fences.\n"
     )
 
 
@@ -652,25 +562,27 @@ def _prescope_prompt(
             "actionable must be true or false. key_files must be a YAML list.\n\n"
             "After the frontmatter, include concise notes on assumptions, risks, and\n"
             "important boundaries for planning.\n\n"
+            "Codex is also scoping this task and you are going to review each others output.\n"
+            "You both will need to reach an agreement before we proceed."
         )
     else:
         output_rules = (
-            "Return ONLY markdown for your own codex-scope.md. Do not write or imply\n"
-            "you are editing the canonical scope.md.\n\n"
+            "Return ONLY markdown for your own codex-scope.md. DO NOT write, edit or make any changes you are editing the canonical scope.md.\n\n"
             "Your markdown should include:\n"
             "- normalized task\n"
             "- actionable: true or false\n"
             "- complexity tier: simple, moderate, complex, architectural, or extramax\n"
             "- key files or areas likely involved\n"
             "- assumptions and risks\n\n"
+            "Claude Code is also scoping this task and you are going to review each others output.\n"
+            "You both will need to reach an agreement before we proceed."
         )
     return (
-        f"You are {actor}, independently scoping a user request for an automated\n"
-        "software orchestrator. You may use Read, Grep, and Glob to inspect the codebase.\n"
-        "Do not implement anything.\n\n"
-        f"{output_rules}"
-        "RAW TASK:\n"
+        f"I received the task below. Scope the request for implementation across this project\n"
+        "DO NOT MAKE ANY CHANGES TO THE CODEBASE YET. DO NOT EVER PUSH OR COMMIT ANYTHING.\n\n"
+        "TASK:\n"
         f"{raw_task}\n\n"
+        f"{output_rules}"
         + (
             ""
             if not repo_summary and not directory_tree
