@@ -188,6 +188,7 @@ def build_review_prompt(
 
 
 def build_review_codex_prompt(
+    task_description: str,
     git_diff: str,
     review_json: str,
     schema_json: str,
@@ -196,12 +197,15 @@ def build_review_codex_prompt(
     return (
         "The following task was implemented in my codebase and reviewed by Claude. Perform an independent review of both the implementation and Claude's review.\n"
         "Additionally, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
+        "TASK:\n"
+        f"{task_description}\n\n"
         "IMPLEMENTATION DIFF:\n"
         f"{git_diff}\n\n"
         "CLAUDE REVIEW REPORT:\n"
         f"{review_json}\n\n"
-        "Return a review JSON. Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
-        "If fixes are needed, include specific findings, the reasoning and set blocks_merge=true.\n\n"
+        "Return a JSON with these required fields: review_id (uuid), verdict (approve|request_changes|reject), score (1-10), findings (array), summary (string), blocks_merge (boolean).\n"
+        "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
+        "If fixes are needed, include specific findings and set blocks_merge=true.\n\n"
         "OUTPUT SCHEMA:\n"
         f"{schema_json}\n\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"

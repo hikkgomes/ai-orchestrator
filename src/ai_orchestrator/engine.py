@@ -833,6 +833,7 @@ class Engine:
             self._state_mgr.save(state)
 
             codex_prompt = build_review_codex_prompt(
+                task_description=state.normalized_task or state.task,
                 git_diff=git_diff,
                 review_json=json_block(claude_review),
                 schema_json=json_block(schema),
@@ -844,6 +845,12 @@ class Engine:
                 "codex",
                 state,
             )
+            codex_review_resume_session_id: str | None = None
+
+            def clear_codex_review_resume_on_retry() -> None:
+                nonlocal codex_review_resume_session_id
+                codex_review_resume_session_id = None
+
             codex_result = self._invoke_with_retries(
                 state,
                 retry_key="reviewing-codex",
@@ -856,9 +863,10 @@ class Engine:
                     schema,
                     reasoning_effort_override="high",
                     model_override=codex_model,
-                    resume_session_id=state.session_ids.get("scoping_codex"),
+                    resume_session_id=codex_review_resume_session_id,
                 ),
                 initial_prompt=codex_prompt,
+                on_retry=clear_codex_review_resume_on_retry,
             )
             codex_review = codex_result.data
             if codex_result.session_id:

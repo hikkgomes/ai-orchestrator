@@ -577,6 +577,8 @@ def test_codex_review_prompt_uses_trimmed_context(tmp_repo, artifact_root, defau
     assert codex_review_prompts
     assert "IMPLEMENTATION DIFF:" in codex_review_prompts[0]
     assert "CLAUDE REVIEW REPORT:" in codex_review_prompts[0]
+    assert "TASK:\nNormalized implementation task" in codex_review_prompts[0]
+    assert "review_id (uuid), verdict (approve|request_changes|reject), score (1-10)" in codex_review_prompts[0]
     assert "ORIGINAL TASK:" not in codex_review_prompts[0]
 
 
@@ -1066,7 +1068,7 @@ def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_co
     assert review_invocations[0]["resume_session_id"] == "planning-session"
 
 
-def test_codex_review_resumes_scoping_thread(tmp_repo, artifact_root, default_config):
+def test_codex_review_uses_fresh_session(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False
 
@@ -1108,7 +1110,7 @@ def test_codex_review_resumes_scoping_thread(tmp_repo, artifact_root, default_co
     codex_review_invocations = [item for item in codex.invocations if item["title"] == "Review"]
     assert state.status == "DONE"
     assert codex_review_invocations
-    assert codex_review_invocations[0]["resume_session_id"] == "codex-scope-thread"
+    assert codex_review_invocations[0]["resume_session_id"] is None
     assert state.session_ids["scoping_codex"] == "codex-review-session"
 
 

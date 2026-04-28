@@ -8,12 +8,12 @@
 
 ## Purpose
 
-Review the implementation diff and execution results. Review prompts are trimmed and rely on session continuity for task, plan, and scoping context instead of re-sending those artifacts every round.
+Review the implementation diff and execution results. Claude review prompts are trimmed and rely on session continuity for task, plan, and scoping context instead of re-sending those artifacts every round. Codex review runs in a fresh session with explicit task context and review schema requirements.
 
 ## Flow
 
 1. Claude review: `build_review_prompt(git_diff, step_results_json, schema_json, ...)`.
-2. Codex review: `build_review_codex_prompt(git_diff, review_json, schema_json)` resumes the scoping Codex thread when available.
+2. Codex review: `build_review_codex_prompt(task_description, git_diff, review_json, schema_json)` runs in a fresh Codex session.
 3. Claude tiebreaker: `build_review_final_claude_prompt(codex_review_json, schema_json)` runs only when Claude and Codex disagree.
 
 ## Claude Review Template

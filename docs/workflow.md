@@ -268,7 +268,7 @@ resume one unified session across phases:
 1. **Unified Claude session** — scoping starts a Claude session and stores it as `session_ids["claude_main"]`. Planning and reviewing resume that same session when enabled.
 2. **Fix loops keep continuity** — when review sends work back to planning, `claude_main` is preserved so replanning keeps scoping context, previous plan context, and review feedback.
 3. **Compaction behavior** — long sessions rely on vendor-side auto-compaction; recent review/fix context remains available when the session is resumed.
-4. **Codex thread continuity** — Codex scoping rounds and the Codex review cross-check resume the captured `scoping_codex` thread when available. Codex execution calls are fresh subprocesses.
+4. **Codex thread continuity** — Codex scoping rounds resume the captured `scoping_codex` thread when available. Codex review and execution calls use fresh subprocesses.
 5. **Controlled environment** — adapters pass only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `GIT_DIR`, `GIT_WORK_TREE`, and explicitly allowlisted vars. Credential vars are stripped.
 6. **Vendor CLI local state** — the orchestrator does not sandbox the vendor CLI's home directory. Auth state, caches, and project metadata managed by the CLI persist between invocations.
 
