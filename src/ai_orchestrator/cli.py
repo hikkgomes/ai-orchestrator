@@ -7,6 +7,7 @@ import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import click
@@ -43,7 +44,15 @@ from .models import RunState
 from .modes import AnalysisSettings, AutonomousSettings, Mode, ReviewSettings
 from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
-from .ui import MODE_LABELS, OrchestratorUI, TERMINAL_STATES, build_prompt_message
+from .ui import (
+    CLAUDE_MODELS,
+    CODEX_MODELS,
+    EFFORT_LEVELS,
+    MODE_LABELS,
+    OrchestratorUI,
+    TERMINAL_STATES,
+    build_prompt_message,
+)
 from .worktree import WorktreeManager
 
 
@@ -240,6 +249,155 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
                     if model_name and model_name not in seen:
                         seen.append(model_name)
     return ["(default)", *seen] if seen else ["(default)"]
+
+
+def _shell_model_choices(ctx: click.Context, cli_name: str) -> list[str]:
+    base = CLAUDE_MODELS if cli_name == "claude" else CODEX_MODELS
+    merged = [*base]
+    for model in _available_models_for_cli(_build_engine(ctx), cli_name):
+        if model not in merged:
+            merged.append(model)
+    return merged
+
+
+def _normalize_shell_count(value: int, unlimited_value: int) -> int:
+    return unlimited_value if value == 0 else value
+
+
+def _settings_mode_label(mode: Mode) -> str:
+    return MODE_LABELS.get(mode.value, mode.value) or "default"
+
+
+def _mode_settings_summary(mode_state: dict[str, Any]) -> str:
+    mode = mode_state.get("mode", Mode.DEFAULT)
+    if mode == Mode.ANALYSIS:
+        s = mode_state["analysis"]
+        rounds = "unlimited" if s.rounds >= 999 else str(s.rounds)
+        return (
+            f"analysis · Claude: {s.claude_model or 'default'} ({s.claude_effort}) · "
+            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds} · /config to change"
+        )
+    if mode == Mode.QUICK_EXECUTE:
+        s = mode_state["execute"]
+        return (
+            f"execute · Executor: {s['cli']} · Model: {s['model'] or 'default'} ({s['effort'] or 'default'}) · "
+            f"Skip review: {'yes' if s['skip_review'] else 'no'} · /config to change"
+        )
+    if mode == Mode.REVIEW:
+        s = mode_state["review"]
+        rounds = "unlimited" if s.rounds >= 999 else str(s.rounds)
+        return (
+            f"review · Claude: {s.claude_model or 'default'} ({s.claude_effort}) · "
+            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds} · /config to change"
+        )
+    if mode == Mode.AUTONOMOUS:
+        s = mode_state["autonomous"]
+        limit = "unlimited" if s["max_iterations"] >= 999 else str(s["max_iterations"])
+        return (
+            f"auto · Claude: {s['claude_model'] or 'default'} ({s['claude_effort']}) · "
+            f"Codex: {s['codex_model'] or 'default'} ({s['codex_effort']}) · Max iterations: {limit} · /config to change"
+        )
+    return "default · Settings are adjusted at approval gates · /config for details"
+
+
+def _print_mode_settings_summary(ctx: click.Context, mode_state: dict[str, Any]) -> None:
+    ctx.obj["ui"].info(_mode_settings_summary(mode_state))
+
+
+def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> None:
+    ui = ctx.obj["ui"]
+    mode = mode_state.get("mode", Mode.DEFAULT)
+    if mode == Mode.DEFAULT:
+        config = _require_config(ctx)
+        ui.info(
+            "Current settings (change at plan approval gate) | "
+            f"Claude: {config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort}) · "
+            f"Codex: {config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})"
+        )
+        return
+    if mode == Mode.ANALYSIS:
+        s: AnalysisSettings = mode_state["analysis"]
+        rounds = click.prompt("Rounds (0 for unlimited)", type=int, default=(0 if s.rounds >= 999 else s.rounds))
+        s.rounds = _normalize_shell_count(rounds, 999)
+        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s.claude_model or "(default)")
+        if claude_model:
+            s.claude_model = "" if claude_model == "(default)" else claude_model
+        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s.claude_effort)
+        if claude_effort:
+            s.claude_effort = claude_effort
+        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s.codex_model or "(default)")
+        if codex_model:
+            s.codex_model = "" if codex_model == "(default)" else codex_model
+        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s.codex_effort)
+        if codex_effort:
+            s.codex_effort = codex_effort
+        esc_model = _select_choice(
+            "Escalation model (final round)",
+            _shell_model_choices(ctx, "claude"),
+            default=s.escalation_model or "(default)",
+        )
+        if esc_model:
+            s.escalation_model = "" if esc_model == "(default)" else esc_model
+        esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s.escalation_effort)
+        if esc_effort:
+            s.escalation_effort = esc_effort
+        ui.info(_mode_settings_summary(mode_state))
+        return
+    if mode == Mode.QUICK_EXECUTE:
+        s: dict[str, Any] = mode_state["execute"]
+        cli_name = _select_choice("Executor", ["codex", "claude"], default=str(s["cli"]))
+        if cli_name:
+            s["cli"] = cli_name
+        model = _select_choice("Model", _shell_model_choices(ctx, s["cli"]), default=s["model"] or "(default)")
+        if model:
+            s["model"] = "" if model == "(default)" else model
+        effort = _select_choice("Effort", EFFORT_LEVELS, default=(s["effort"] or "high"))
+        if effort:
+            s["effort"] = effort
+        s["skip_review"] = _confirm_choice("Skip review?", default=bool(s["skip_review"]))
+        ui.info(_mode_settings_summary(mode_state))
+        return
+    if mode == Mode.REVIEW:
+        s: dict[str, Any] = mode_state["review"]
+        rounds = click.prompt("Rounds (0 for unlimited)", type=int, default=(0 if s["rounds"] >= 999 else s["rounds"]))
+        s["rounds"] = _normalize_shell_count(rounds, 999)
+        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s["claude_model"] or "(default)")
+        if claude_model:
+            s["claude_model"] = "" if claude_model == "(default)" else claude_model
+        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s["claude_effort"])
+        if claude_effort:
+            s["claude_effort"] = claude_effort
+        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s["codex_model"] or "(default)")
+        if codex_model:
+            s["codex_model"] = "" if codex_model == "(default)" else codex_model
+        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s["codex_effort"])
+        if codex_effort:
+            s["codex_effort"] = codex_effort
+        esc_model = _select_choice("Escalation model", _shell_model_choices(ctx, "claude"), default=s["escalation_model"] or "(default)")
+        if esc_model:
+            s["escalation_model"] = "" if esc_model == "(default)" else esc_model
+        esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s["escalation_effort"])
+        if esc_effort:
+            s["escalation_effort"] = esc_effort
+        ui.info(_mode_settings_summary(mode_state))
+        return
+    if mode == Mode.AUTONOMOUS:
+        s: dict[str, Any] = mode_state["autonomous"]
+        limit = click.prompt("Max fix iterations (0 for unlimited)", type=int, default=(0 if s["max_iterations"] >= 999 else s["max_iterations"]))
+        s["max_iterations"] = _normalize_shell_count(limit, 999)
+        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s["claude_model"] or "(default)")
+        if claude_model:
+            s["claude_model"] = "" if claude_model == "(default)" else claude_model
+        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s["claude_effort"])
+        if claude_effort:
+            s["claude_effort"] = claude_effort
+        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s["codex_model"] or "(default)")
+        if codex_model:
+            s["codex_model"] = "" if codex_model == "(default)" else codex_model
+        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s["codex_effort"])
+        if codex_effort:
+            s["codex_effort"] = codex_effort
+        ui.info(_mode_settings_summary(mode_state))
 
 
 def _adjust_execution_settings(
@@ -643,7 +801,7 @@ def _read_task_from_stdin_or_prompt() -> str:
     return click.prompt("Task", type=str)
 
 
-def _create_prompt_session(mode_state: dict[str, Mode] | None = None, ctx: click.Context | None = None):
+def _create_prompt_session(mode_state: dict[str, Any] | None = None, ctx: click.Context | None = None):
     if PromptSession is None or FileHistory is None or KeyBindings is None:
         raise click.ClickException(
             "prompt_toolkit is required for interactive shell mode. "
@@ -680,26 +838,6 @@ def _create_prompt_session(mode_state: dict[str, Mode] | None = None, ctx: click
     )
 
 
-def _change_model_or_effort(ctx: click.Context, cli_name: str, setting: str) -> None:
-    config = _require_config(ctx)
-    ui = ctx.obj["ui"]
-    routing = getattr(config.routing, cli_name)
-    if setting == "model":
-        available = _available_models_for_cli(_build_engine(ctx), cli_name)
-        model = _select_choice(f"{cli_name} model", available, default="(default)")
-        if model:
-            routing.model = "" if model == "(default)" else model
-    elif setting == "effort":
-        effort = _select_choice(
-            f"{cli_name} effort",
-            ["medium", "high", "xhigh", "max"],
-            default=routing.reasoning_effort,
-        )
-        if effort:
-            routing.reasoning_effort = effort
-    ui.info(f"{cli_name}: {routing.model or 'default'} ({routing.reasoning_effort})")
-
-
 def _run_shell(ctx: click.Context) -> None:
     ui = ctx.obj["ui"]
     repo_name = ctx.obj["repo_root"].name
@@ -713,10 +851,39 @@ def _run_shell(ctx: click.Context) -> None:
     console.print(f"  [dim]~/{repo_name}[/dim]")
     console.print()
     console.print(
-        "  [dim]shift+tab[/dim] mode    [dim]/model[/dim] model    [dim]/effort[/dim] effort    [dim]/help[/dim] commands"
+        "  [dim]shift+tab[/dim] mode    [dim]/config[/dim] settings    [dim]/help[/dim] commands"
     )
     console.print()
-    mode_state = {"mode": Mode.DEFAULT, "formatted_prompt": build_prompt_message(Mode.DEFAULT.value)}
+    mode_state: dict[str, Any] = {
+        "mode": Mode.DEFAULT,
+        "formatted_prompt": build_prompt_message(Mode.DEFAULT.value),
+        "analysis": AnalysisSettings(
+            rounds=config.modes.analysis_rounds,
+            claude_model=config.routing.claude.model,
+            codex_model=config.routing.codex.model,
+            claude_effort=config.routing.claude.reasoning_effort,
+            codex_effort=config.routing.codex.reasoning_effort,
+            escalation_model=config.modes.analysis_escalation_model,
+            escalation_effort=config.modes.analysis_escalation_effort,
+        ),
+        "review": {
+            "rounds": config.modes.review_rounds,
+            "claude_model": config.routing.claude.model,
+            "codex_model": config.routing.codex.model,
+            "claude_effort": config.routing.claude.reasoning_effort,
+            "codex_effort": config.routing.codex.reasoning_effort,
+            "escalation_model": config.modes.review_escalation_model,
+            "escalation_effort": config.modes.review_escalation_effort,
+        },
+        "autonomous": {
+            "max_iterations": config.modes.autonomous_max_iterations,
+            "claude_model": config.routing.claude.model,
+            "codex_model": config.routing.codex.model,
+            "claude_effort": config.routing.claude.reasoning_effort,
+            "codex_effort": config.routing.codex.reasoning_effort,
+        },
+        "execute": {"cli": "codex", "model": "", "effort": "", "skip_review": False},
+    }
     session = _create_prompt_session(mode_state, ctx)
     while True:
         try:
@@ -726,6 +893,7 @@ def _run_shell(ctx: click.Context) -> None:
             return
         if not task:
             if mode_state.pop("just_switched", False):
+                _print_mode_settings_summary(ctx, mode_state)
                 continue
             continue
         if task.startswith("/"):
@@ -734,26 +902,90 @@ def _run_shell(ctx: click.Context) -> None:
             continue
         mode = mode_state["mode"]
         if mode == Mode.ANALYSIS:
-            ctx.invoke(cmd_analysis, task=task)
-        elif mode == Mode.QUICK_EXECUTE:
-            ctx.invoke(cmd_execute, task_or_plan=task, no_review=False, interactive=True, detach=False)
-        elif mode == Mode.REVIEW:
+            settings: AnalysisSettings = mode_state["analysis"]
             ctx.invoke(
-                cmd_review,
+                cmd_analysis,
                 task=task,
-                rounds=None,
-                escalation_model="",
-                escalation_effort="",
-                interactive=True,
-                detach=False,
+                rounds=settings.rounds,
+                claude_model=settings.claude_model,
+                codex_model=settings.codex_model,
+                claude_effort=settings.claude_effort,
+                codex_effort=settings.codex_effort,
+                escalation_model=settings.escalation_model,
+                escalation_effort=settings.escalation_effort,
             )
+        elif mode == Mode.QUICK_EXECUTE:
+            execute_settings = mode_state["execute"]
+            run_config = deepcopy(_require_config(ctx))
+            run_config.routing.worker = execute_settings["cli"]
+            phase_override = run_config.routing.phases.get("executing")
+            if not phase_override:
+                from .config import PhaseRoutingOverride
+
+                phase_override = PhaseRoutingOverride()
+                run_config.routing.phases["executing"] = phase_override
+            phase_override.cli = execute_settings["cli"]
+            if execute_settings["model"]:
+                phase_override.model = execute_settings["model"]
+            if execute_settings["effort"]:
+                phase_override.reasoning_effort = execute_settings["effort"]
+            _start_run(
+                ctx,
+                task,
+                True,
+                skip_scoping=True,
+                start_at="executing",
+                mode=Mode.QUICK_EXECUTE.value,
+                skip_review=bool(execute_settings["skip_review"]),
+                config=run_config,
+            )
+        elif mode == Mode.REVIEW:
+            review_settings = mode_state["review"]
+            review_config = deepcopy(_require_config(ctx))
+            review_config.routing.claude.model = review_settings["claude_model"]
+            review_config.routing.claude.reasoning_effort = review_settings["claude_effort"]
+            review_config.routing.codex.model = review_settings["codex_model"]
+            review_config.routing.codex.reasoning_effort = review_settings["codex_effort"]
+            if review_settings["escalation_model"]:
+                review_config.debate.escalated_claude_model = review_settings["escalation_model"]
+            if review_settings["escalation_effort"]:
+                review_config.debate.escalated_claude_effort = review_settings["escalation_effort"]
+            engine = _build_engine(ctx, config=review_config, review_rounds=review_settings["rounds"])
+            run_id = str(uuid4())
+            state = engine.start(
+                task,
+                run_id,
+                is_workspace=True,
+                workspace_repos=[],
+                start_at="reviewing",
+                plan=_synthetic_plan(task),
+                mode=Mode.REVIEW.value,
+            )
+            state = _drive_interactive_approvals(ctx, state.run_id)
+            _render_run_snapshot(ctx, state.run_id, state=state)
         elif mode == Mode.AUTONOMOUS:
-            ctx.invoke(cmd_auto, task=task, max_iterations=None)
+            auto_settings = mode_state["autonomous"]
+            auto_config = deepcopy(_require_config(ctx))
+            auto_config.approval.require_plan_approval = False
+            auto_config.approval.require_merge_approval = False
+            auto_config.routing.claude.model = auto_settings["claude_model"]
+            auto_config.routing.claude.reasoning_effort = auto_settings["claude_effort"]
+            auto_config.routing.codex.model = auto_settings["codex_model"]
+            auto_config.routing.codex.reasoning_effort = auto_settings["codex_effort"]
+            _start_run(
+                ctx,
+                task,
+                False,
+                skip_scoping=False,
+                mode=Mode.AUTONOMOUS.value,
+                config=auto_config,
+                autonomous_max_iterations=auto_settings["max_iterations"],
+            )
         else:
             _start_run(ctx, task, True, skip_scoping=False)
 
 
-def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str, Mode] | None = None) -> bool:
+def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str, Any] | None = None) -> bool:
     parts = command.split()
     name = parts[0].lower()
     ui = ctx.obj["ui"]
@@ -772,8 +1004,7 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         table.add_row("/resume <id>", "Resume a paused/failed run")
         table.add_row("/approve <id> <gate>", "Approve a pending gate")
         table.add_row("/reject <id> <gate>", "Reject with feedback")
-        table.add_row("/model [claude|codex]", "Change model")
-        table.add_row("/effort [claude|codex]", "Change reasoning effort")
+        table.add_row("/config", "Configure current mode settings")
         table.add_row("/settings", "Show current configuration")
         table.add_row("/mode [name]", "Switch or show mode")
         table.add_row("", "")
@@ -781,40 +1012,17 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         table.add_row("Alt+Enter", "Multiline input")
         ui.stderr_console.print(table)
         return False
-    if name == "/model":
-        if len(parts) == 1:
-            target = _select_choice("Which model?", ["claude", "codex"])
-        else:
-            target = parts[1].lower()
-        if target not in {"claude", "codex"}:
-            ui.warning("Usage: /model [claude|codex]")
+    if name == "/config":
+        if mode_state is None:
+            ui.warning("Mode settings unavailable in this context.")
             return False
-        _change_model_or_effort(ctx, target, "model")
-        return False
-    if name == "/effort":
-        if len(parts) == 1:
-            target = _select_choice("Which effort?", ["claude", "codex"])
-        else:
-            target = parts[1].lower()
-        if target not in {"claude", "codex"}:
-            ui.warning("Usage: /effort [claude|codex]")
-            return False
-        _change_model_or_effort(ctx, target, "effort")
+        _configure_mode_settings(ctx, mode_state)
         return False
     if name == "/settings":
-        config = _require_config(ctx)
-        current_mode = mode_state.get("mode", Mode.DEFAULT) if mode_state is not None else Mode.DEFAULT
-        mode_label = MODE_LABELS.get(current_mode.value, current_mode.value)
-        details = [
-            f"mode={mode_label or 'default'}",
-            f"claude={config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort})",
-            f"codex={config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})",
-        ]
-        if current_mode == Mode.ANALYSIS:
-            details.append(f"analysis_rounds={config.modes.analysis_rounds}")
-        elif current_mode == Mode.AUTONOMOUS:
-            details.append(f"autonomous_max_iterations={config.modes.autonomous_max_iterations}")
-        ui.info(" | ".join(details))
+        if mode_state is None:
+            ui.info("mode=default")
+            return False
+        ui.info(_mode_settings_summary(mode_state))
         return False
     if name == "/mode":
         modes = list(Mode)
@@ -831,7 +1039,7 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
             mode_state["mode"] = target_mode
             mode_state["formatted_prompt"] = build_prompt_message(target_mode.value)
             mode_state["just_switched"] = True
-        ui.info(f"mode: {target_mode.value}")
+        ui.info(f"mode: {_settings_mode_label(target_mode)}")
         return False
     if name == "/runs":
         ctx.invoke(cmd_status, run_id=None, watch=False)

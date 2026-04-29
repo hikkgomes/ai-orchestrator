@@ -187,6 +187,26 @@ MODE_LABELS = {
     "autonomous": "auto",
 }
 
+CLAUDE_MODELS = [
+    "(default)",
+    "opus",
+    "sonnet",
+    "haiku",
+    "opus[1m]",
+    "sonnet[1m]",
+]
+
+CODEX_MODELS = [
+    "(default)",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+]
+
+EFFORT_LEVELS = ["medium", "high", "xhigh", "max"]
+
 
 def build_prompt_message(mode: str) -> FormattedText:
     label = MODE_LABELS.get(mode, mode)
