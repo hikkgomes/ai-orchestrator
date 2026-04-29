@@ -16,16 +16,12 @@ except Exception:  # pragma: no cover
     questionary = None
 try:  # pragma: no cover - optional in minimal test environments
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.styles import Style as PTStyle
 except ImportError:  # pragma: no cover
     PromptSession = None
-    HTML = None
     FileHistory = None
     KeyBindings = None
-    PTStyle = None
 from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
@@ -648,7 +644,7 @@ def _read_task_from_stdin_or_prompt() -> str:
 
 
 def _create_prompt_session(mode_state: dict[str, Mode] | None = None, ctx: click.Context | None = None):
-    if PromptSession is None or FileHistory is None or KeyBindings is None or HTML is None or PTStyle is None:
+    if PromptSession is None or FileHistory is None or KeyBindings is None:
         raise click.ClickException(
             "prompt_toolkit is required for interactive shell mode. "
             "Install ai-orchestrator with its project dependencies.",
@@ -676,71 +672,31 @@ def _create_prompt_session(mode_state: dict[str, Mode] | None = None, ctx: click
             mode_state["just_switched"] = True
             event.app.invalidate()
 
-        @bindings.add("escape", "c")
-        def adjust_claude(event):
-            event.app.exit(result="__adjust_claude__")
-
-        @bindings.add("escape", "x")
-        def adjust_codex(event):
-            event.app.exit(result="__adjust_codex__")
-
-    def toolbar():
-        if mode_state is None or ctx is None:
-            return ""
-        mode = mode_state.get("mode", Mode.DEFAULT)
-        mode_label = MODE_LABELS.get(mode.value, mode.value)
-        config = _require_config(ctx)
-        parts = [
-            f"<b>{mode_label}</b> <style fg='#666666'>shift+tab</style>",
-            (
-                "Claude: "
-                f"{config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort}) "
-                "<style fg='#666666'>alt+c</style>"
-            ),
-            (
-                "Codex: "
-                f"{config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort}) "
-                "<style fg='#666666'>alt+x</style>"
-            ),
-        ]
-        if mode == Mode.ANALYSIS:
-            parts.append(f"Rounds: {config.modes.analysis_rounds}")
-        elif mode == Mode.AUTONOMOUS:
-            parts.append(f"Max iterations: {config.modes.autonomous_max_iterations}")
-        return HTML(" <style fg='#555555'>│</style> ".join(parts))
-
-    pt_style = PTStyle.from_dict(
-        {
-            "bottom-toolbar": "#aaaaaa bg:#1a1a1a",
-            "bottom-toolbar.text": "#aaaaaa",
-        }
-    )
-
     return PromptSession(
         history=FileHistory(str(_HISTORY_FILE)),
         key_bindings=bindings,
         multiline=False,
         enable_open_in_editor=True,
-        bottom_toolbar=toolbar,
-        style=pt_style,
     )
 
 
-def _inline_adjust_model(ctx: click.Context, cli_name: str) -> None:
+def _change_model_or_effort(ctx: click.Context, cli_name: str, setting: str) -> None:
     config = _require_config(ctx)
     ui = ctx.obj["ui"]
     routing = getattr(config.routing, cli_name)
-    available = _available_models_for_cli(_build_engine(ctx), cli_name)
-    model = _select_choice(f"{cli_name} model", available, default="(default)")
-    if model:
-        routing.model = "" if model == "(default)" else model
-    effort = _select_choice(
-        f"{cli_name} effort",
-        ["medium", "high", "xhigh", "max"],
-        default=routing.reasoning_effort,
-    )
-    if effort:
-        routing.reasoning_effort = effort
+    if setting == "model":
+        available = _available_models_for_cli(_build_engine(ctx), cli_name)
+        model = _select_choice(f"{cli_name} model", available, default="(default)")
+        if model:
+            routing.model = "" if model == "(default)" else model
+    elif setting == "effort":
+        effort = _select_choice(
+            f"{cli_name} effort",
+            ["medium", "high", "xhigh", "max"],
+            default=routing.reasoning_effort,
+        )
+        if effort:
+            routing.reasoning_effort = effort
     ui.info(f"{cli_name}: {routing.model or 'default'} ({routing.reasoning_effort})")
 
 
@@ -748,12 +704,16 @@ def _run_shell(ctx: click.Context) -> None:
     ui = ctx.obj["ui"]
     repo_name = ctx.obj["repo_root"].name
     console = ui.stderr_console
+    config = _require_config(ctx)
+    claude_label = f"{config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort})"
+    codex_label = f"{config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})"
+    console.print()
+    console.print(f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]")
+    console.print(f"  [dim]Claude: {claude_label}  ·  Codex: {codex_label}[/dim]")
+    console.print(f"  [dim]~/{repo_name}[/dim]")
     console.print()
     console.print(
-        f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]  [dim]│[/dim]  [dim]{repo_name}[/dim]"
-    )
-    console.print(
-        "  [dim]shift+tab[/dim] mode  [dim]alt+c[/dim] claude  [dim]alt+x[/dim] codex  [dim]/help[/dim] commands"
+        "  [dim]shift+tab[/dim] mode    [dim]/model[/dim] model    [dim]/effort[/dim] effort    [dim]/help[/dim] commands"
     )
     console.print()
     mode_state = {"mode": Mode.DEFAULT, "formatted_prompt": build_prompt_message(Mode.DEFAULT.value)}
@@ -764,18 +724,12 @@ def _run_shell(ctx: click.Context) -> None:
             task = (session.prompt(prompt_message) or "").strip()
         except (EOFError, KeyboardInterrupt):
             return
-        if task == "__adjust_claude__":
-            _inline_adjust_model(ctx, "claude")
-            continue
-        if task == "__adjust_codex__":
-            _inline_adjust_model(ctx, "codex")
-            continue
         if not task:
             if mode_state.pop("just_switched", False):
                 continue
             continue
         if task.startswith("/"):
-            if _handle_shell_command(ctx, task):
+            if _handle_shell_command(ctx, task, mode_state):
                 return
             continue
         mode = mode_state["mode"]
@@ -799,7 +753,7 @@ def _run_shell(ctx: click.Context) -> None:
             _start_run(ctx, task, True, skip_scoping=False)
 
 
-def _handle_shell_command(ctx: click.Context, command: str) -> bool:
+def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str, Mode] | None = None) -> bool:
     parts = command.split()
     name = parts[0].lower()
     ui = ctx.obj["ui"]
@@ -818,12 +772,76 @@ def _handle_shell_command(ctx: click.Context, command: str) -> bool:
         table.add_row("/resume <id>", "Resume a paused/failed run")
         table.add_row("/approve <id> <gate>", "Approve a pending gate")
         table.add_row("/reject <id> <gate>", "Reject with feedback")
+        table.add_row("/model [claude|codex]", "Change model")
+        table.add_row("/effort [claude|codex]", "Change reasoning effort")
+        table.add_row("/settings", "Show current configuration")
+        table.add_row("/mode [name]", "Switch or show mode")
         table.add_row("", "")
         table.add_row("Shift+Tab", "Cycle mode")
-        table.add_row("Alt+C", "Change Claude model/effort")
-        table.add_row("Alt+X", "Change Codex model/effort")
         table.add_row("Alt+Enter", "Multiline input")
         ui.stderr_console.print(table)
+        return False
+    if name == "/model":
+        config = _require_config(ctx)
+        if len(parts) == 1:
+            ui.info(
+                "models: "
+                f"claude={config.routing.claude.model or 'default'}, "
+                f"codex={config.routing.codex.model or 'default'}"
+            )
+            return False
+        target = parts[1].lower()
+        if target not in {"claude", "codex"}:
+            ui.warning("Usage: /model [claude|codex]")
+            return False
+        _change_model_or_effort(ctx, target, "model")
+        return False
+    if name == "/effort":
+        config = _require_config(ctx)
+        if len(parts) == 1:
+            ui.info(
+                "efforts: "
+                f"claude={config.routing.claude.reasoning_effort}, "
+                f"codex={config.routing.codex.reasoning_effort}"
+            )
+            return False
+        target = parts[1].lower()
+        if target not in {"claude", "codex"}:
+            ui.warning("Usage: /effort [claude|codex]")
+            return False
+        _change_model_or_effort(ctx, target, "effort")
+        return False
+    if name == "/settings":
+        config = _require_config(ctx)
+        current_mode = mode_state.get("mode", Mode.DEFAULT) if mode_state is not None else Mode.DEFAULT
+        mode_label = MODE_LABELS.get(current_mode.value, current_mode.value)
+        details = [
+            f"mode={mode_label or 'default'}",
+            f"claude={config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort})",
+            f"codex={config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})",
+        ]
+        if current_mode == Mode.ANALYSIS:
+            details.append(f"analysis_rounds={config.modes.analysis_rounds}")
+        elif current_mode == Mode.AUTONOMOUS:
+            details.append(f"autonomous_max_iterations={config.modes.autonomous_max_iterations}")
+        ui.info(" | ".join(details))
+        return False
+    if name == "/mode":
+        modes = list(Mode)
+        current = mode_state.get("mode", Mode.DEFAULT) if mode_state is not None else Mode.DEFAULT
+        if len(parts) == 1:
+            ui.info(f"current mode: {current.value}")
+            return False
+        target = parts[1].lower()
+        target_mode = next((mode for mode in modes if mode.value == target), None)
+        if target_mode is None:
+            ui.warning(f"Unknown mode: {target}. Valid: {', '.join(mode.value for mode in modes)}")
+            return False
+        if mode_state is not None:
+            mode_state["mode"] = target_mode
+            mode_state["formatted_prompt"] = build_prompt_message(target_mode.value)
+            mode_state["just_switched"] = True
+        ui.info(f"mode: {target_mode.value}")
         return False
     if name == "/runs":
         ctx.invoke(cmd_status, run_id=None, watch=False)

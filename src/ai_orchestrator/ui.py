@@ -180,7 +180,7 @@ MODE_COLORS = {
 }
 
 MODE_LABELS = {
-    "default": "default",
+    "default": "",
     "analysis": "analysis",
     "quick_execute": "execute",
     "review": "review",
@@ -189,15 +189,17 @@ MODE_LABELS = {
 
 
 def build_prompt_message(mode: str) -> FormattedText:
-    color = MODE_COLORS.get(mode, "#888888")
     label = MODE_LABELS.get(mode, mode)
-    return FormattedText(
-        [
-            (f"bold {color}", f"[{label}]"),
-            ("", " "),
-            ("#666666", "> "),
-        ]
-    )
+    if label:
+        color = MODE_COLORS.get(mode, "#888888")
+        return FormattedText(
+            [
+                (f"bold {color}", f"[{label}]"),
+                ("", " "),
+                ("#666666", "❯ "),
+            ]
+        )
+    return FormattedText([("#666666", "❯ ")])
 
 
 def random_message(pool: list[str]) -> str:
