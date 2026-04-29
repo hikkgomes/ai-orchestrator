@@ -159,6 +159,11 @@ class Engine:
     def _relay(self) -> bool:
         return self._config.orchestrator.prompt_mode == "relay"
 
+    def _log_prompt_size(self, label: str, prompt: str) -> None:
+        if self._ui:
+            approx_tokens = len(prompt) // 4
+            self._ui.info(f"  {label}: ~{approx_tokens:,} tokens")
+
     def start(
         self,
         task: str,
@@ -365,8 +370,12 @@ class Engine:
             raise EngineError(f"Unhandled engine status: {status.value}")
 
     def _run_scoping(self, state: RunState) -> RunState:
-        directory_tree = render_directory_tree(self._repo_root, max_depth=2)
-        summary = repo_summary(self._repo_root)
+        if self._relay:
+            directory_tree = ""
+            summary = ""
+        else:
+            directory_tree = render_directory_tree(self._repo_root, max_depth=2)
+            summary = repo_summary(self._repo_root)
         claude = self._adapter("claude")
         codex = self._adapter("codex")
         scoping_tools_claude = self._phase_allowed_tools("scoping", default=["Read", "Grep", "Glob"])
@@ -389,6 +398,8 @@ class Engine:
             )
             self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
             self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
+            self._log_prompt_size("Prescope Claude prompt", claude_prompt)
+            self._log_prompt_size("Prescope Codex prompt", codex_prompt)
             claude_text_result, codex_text_result = invoke_parallel(
                 [
                     lambda: self._invoke_adapter_text(
@@ -428,6 +439,7 @@ class Engine:
 
             prompt = build_scope_compare_codex_prompt(claude_scope, relay=self._relay)
             self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
+            self._log_prompt_size("Scope compare (Codex r3) prompt", prompt)
             codex_result = self._invoke_adapter_text(
                 codex,
                 prompt,
@@ -461,6 +473,7 @@ class Engine:
             if not state.scoping_agreed:
                 prompt = build_scope_respond_claude_prompt(codex_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
+                self._log_prompt_size("Scope respond (Claude r4) prompt", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
                     prompt,
@@ -495,6 +508,7 @@ class Engine:
             if not state.scoping_agreed:
                 prompt = build_scope_final_codex_prompt(claude_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
+                self._log_prompt_size("Scope final (Codex r5) prompt", prompt)
                 codex_result = self._invoke_adapter_text(
                     codex,
                     prompt,
@@ -521,6 +535,7 @@ class Engine:
             if not state.scoping_agreed:
                 prompt = build_scope_final_claude_prompt(codex_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
+                self._log_prompt_size("Scope final (Claude r6) prompt", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
                     prompt,
@@ -603,6 +618,7 @@ class Engine:
                 scope_md=scope_md or "<none>",
             )
         self._artifacts.save_prompt(f"planning-{state.run_id[:8]}.md", prompt)
+        self._log_prompt_size("Planning prompt", prompt)
 
         adapter = self._adapter_for_phase("planning")
         cli_name = self._phase_cli("planning", config_name="planner")
@@ -764,6 +780,7 @@ class Engine:
             return InvokeResult(data=result, session_id=invoke_result.session_id)
 
         self._artifacts.save_prompt(f"execution-{state.run_id[:8]}.md", prompt)
+        self._log_prompt_size("Execution prompt", prompt)
 
         try:
             invoke_result = self._invoke_with_retries(
@@ -832,6 +849,7 @@ class Engine:
             relay=self._relay,
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
+        self._log_prompt_size("Review (Claude) prompt", review_prompt)
         adapter = self._adapter("claude")
         cli_name = "claude"
         review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name) or "high"
@@ -922,6 +940,7 @@ class Engine:
                     relay=self._relay,
                 )
                 self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
+                self._log_prompt_size("Review (Codex) prompt", codex_prompt)
                 codex = self._adapter("codex")
                 codex_model = self._config.debate.review_codex_model or self._resolve_model_for_phase(
                     "reviewing",
@@ -1025,6 +1044,7 @@ class Engine:
                 relay=self._relay,
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
+            self._log_prompt_size("Review final (Claude) prompt", final_prompt)
             final_effort = self._review_final_effort(state)
             final_review_resume_session_id: str | None = None
             if self._config.sessions.enable_review_resume:

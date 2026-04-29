@@ -208,6 +208,7 @@ def test_build_review_prompt_relay_omits_heavy_sections_and_keeps_heuristics():
     assert "AI FAILURE CATEGORIES:" not in prompt
     assert "REPOSITORY CONTEXT:" not in prompt
     assert '{"title":"Review"}' not in prompt
+    assert "If you cannot inspect the worktree, return verdict=request_changes" in prompt
     assert "Use verdict=approve and blocks_merge=false only if the implementation should proceed." in prompt
     assert "reject requires blocks_merge=true and at least one critical or major finding." in prompt
     assert "No extra fields allowed." in prompt
@@ -235,6 +236,7 @@ def test_build_review_codex_prompt_relay_omits_diff_and_schema():
     )
     assert "Task: Task body" in prompt
     assert '{"summary":"ok"}' in prompt
+    assert "If you cannot inspect the worktree, return verdict=request_changes" in prompt
     assert "IMPLEMENTATION DIFF:" not in prompt
     assert "OUTPUT SCHEMA:" not in prompt
     assert "Use verdict=approve and blocks_merge=false only if the implementation should proceed." in prompt
