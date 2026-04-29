@@ -782,30 +782,20 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         ui.stderr_console.print(table)
         return False
     if name == "/model":
-        config = _require_config(ctx)
         if len(parts) == 1:
-            ui.info(
-                "models: "
-                f"claude={config.routing.claude.model or 'default'}, "
-                f"codex={config.routing.codex.model or 'default'}"
-            )
-            return False
-        target = parts[1].lower()
+            target = _select_choice("Which model?", ["claude", "codex"])
+        else:
+            target = parts[1].lower()
         if target not in {"claude", "codex"}:
             ui.warning("Usage: /model [claude|codex]")
             return False
         _change_model_or_effort(ctx, target, "model")
         return False
     if name == "/effort":
-        config = _require_config(ctx)
         if len(parts) == 1:
-            ui.info(
-                "efforts: "
-                f"claude={config.routing.claude.reasoning_effort}, "
-                f"codex={config.routing.codex.reasoning_effort}"
-            )
-            return False
-        target = parts[1].lower()
+            target = _select_choice("Which effort?", ["claude", "codex"])
+        else:
+            target = parts[1].lower()
         if target not in {"claude", "codex"}:
             ui.warning("Usage: /effort [claude|codex]")
             return False
