@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .models import AnalysisSession
+
 
 class ArtifactError(Exception):
     """Raised when an artifact cannot be read or written."""
@@ -30,6 +32,7 @@ class ArtifactStore:
             "approvals": artifact_root / "approvals",
             "feedback": artifact_root / "feedback",
             "executions": artifact_root / "executions",
+            "analyses": artifact_root / "analyses",
         }
         for directory in self._dirs.values():
             directory.mkdir(parents=True, exist_ok=True)
@@ -205,6 +208,64 @@ class ArtifactStore:
         if path.exists():
             path.unlink()
 
+    def save_analysis_session(self, session: AnalysisSession) -> str:
+        path = self._dirs["analyses"] / f"session-{session.session_id}.json"
+        self._write_current_json(path, session.model_dump(mode="json"))
+        return path.relative_to(self._artifact_root).as_posix()
+
+    def load_analysis_session(self, session_id: str) -> AnalysisSession:
+        path = self._analysis_session_path(session_id)
+        if not path.exists():
+            raise ArtifactError(f"Analysis session does not exist: {session_id}")
+        return AnalysisSession.model_validate(self._read_path_json(path))
+
+    def list_analysis_sessions(self) -> list[AnalysisSession]:
+        directory = self._dirs["analyses"]
+        if not directory.exists():
+            return []
+        sessions = []
+        for path in sorted(directory.glob("session-*.json")):
+            try:
+                sessions.append(AnalysisSession.model_validate(self._read_path_json(path)))
+            except Exception:
+                continue
+        return sessions
+
+    def list_sessions(self, mode_filter: str = "all") -> list[dict[str, Any]]:
+        sessions: list[dict[str, Any]] = []
+        state_dir = self._artifact_root / "state"
+        if state_dir.exists():
+            for path in sorted(state_dir.glob("run-*.json")):
+                try:
+                    payload = self._read_path_json(path)
+                except ArtifactError:
+                    continue
+                mode = str(payload.get("mode") or "default")
+                if mode_filter not in {"all", mode}:
+                    continue
+                sessions.append(
+                    {
+                        "session_id": str(payload.get("run_id") or path.stem[4:]),
+                        "task": str(payload.get("task") or ""),
+                        "mode": mode,
+                        "status": str(payload.get("status") or ""),
+                        "timestamp": str(payload.get("updated_at") or payload.get("created_at") or ""),
+                    }
+                )
+        for session in self.list_analysis_sessions():
+            if mode_filter not in {"all", session.mode}:
+                continue
+            sessions.append(
+                {
+                    "session_id": session.session_id,
+                    "task": session.task,
+                    "mode": session.mode,
+                    "status": "DONE",
+                    "timestamp": session.updated_at or session.created_at,
+                }
+            )
+        return sorted(sessions, key=lambda item: item["timestamp"], reverse=True)
+
     def list_run_artifacts(self, run_id: str) -> list[Path]:
         matches: list[Path] = []
         for directory in self._dirs.values():
@@ -237,6 +298,14 @@ class ArtifactStore:
 
     def _execution_manifest_path(self, run_id: str) -> Path:
         return self._dirs["executions"] / f"run-{run_id}.json"
+
+    def _analysis_session_path(self, session_id: str) -> Path:
+        normalized = session_id
+        if not normalized.startswith("session-"):
+            normalized = f"session-{normalized}"
+        if not normalized.endswith(".json"):
+            normalized = f"{normalized}.json"
+        return self._dirs["analyses"] / normalized
 
     def _write_versioned_json(self, bucket: str, prefix: str, payload: dict[str, Any]) -> str:
         relative = Path(bucket) / f"{prefix}-{uuid4().hex[:8]}.json"

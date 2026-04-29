@@ -40,10 +40,16 @@ tests/                  # unit + integration tests
 | Command | Purpose |
 |---|---|
 | `orch run <task>` | Start orchestrated run |
+| `orch analysis <task>` | Run parallel Claude/Codex analysis and save the debate |
+| `orch execute <task|plan.json>` | Quick execute a task or plan, with optional `--no-review` |
+| `orch review [task]` | Review uncommitted changes |
+| `orch auto <task>` | Run the full pipeline without approval gates |
 | `orch resume <run-id>` | Resume paused/crashed run |
 | `orch approve <run-id> <gate>` | Approve a pending gate |
 | `orch reject <run-id> <gate>` | Soft-reject with feedback; use `--full` to terminate where supported |
 | `orch status` | Show run status |
+| `orch sessions` | List saved run and analysis sessions |
+| `orch continue <session-id>` | Continue a saved analysis session |
 | `orch log <run-id>` | View logs |
 | `orch review-install` | Install reviewer config and bundled rules |
 | `orch review-analyze` | Refresh reviewer config from repo heuristics |

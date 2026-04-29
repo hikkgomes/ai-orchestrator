@@ -59,6 +59,7 @@ class MetadataStore:
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
                     task TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'default',
                     status TEXT NOT NULL,
                     current_phase TEXT NOT NULL,
                     plan_id TEXT,
@@ -98,19 +99,23 @@ class MetadataStore:
                 );
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+            if "mode" not in columns:
+                conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'default'")
 
     def upsert_run(self, state: RunState) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO runs (
-                    run_id, task, status, current_phase, plan_id, review_id,
+                    run_id, task, mode, status, current_phase, plan_id, review_id,
                     rework_count, replan_count, retry_counts_json,
                     created_at, updated_at, error, base_commit, worktree_path,
                     worktree_branch
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     task = excluded.task,
+                    mode = excluded.mode,
                     status = excluded.status,
                     current_phase = excluded.current_phase,
                     plan_id = excluded.plan_id,
@@ -128,6 +133,7 @@ class MetadataStore:
                 (
                     state.run_id,
                     state.task,
+                    state.mode,
                     state.status,
                     state.current_phase,
                     state.plan_id,

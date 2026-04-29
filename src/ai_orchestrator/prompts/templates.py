@@ -229,6 +229,29 @@ def build_review_final_claude_prompt(
     )
 
 
+def build_analysis_prompt(task: str) -> str:
+    """Build an independent analysis-mode prompt."""
+    return (
+        "Analyze this task independently. Identify the key considerations, risks, and viable approaches.\n"
+        "Be concise, specific, and do not modify files.\n\n"
+        f"TASK:\n{task}\n"
+    )
+
+
+def build_analysis_debate_prompt(other_analysis: str) -> str:
+    """Build a debate-round prompt using existing session context."""
+    return (
+        "Review the other AI's latest analysis. State where you agree, disagree, and what you would add.\n"
+        "Be concise and focus on decision-useful differences.\n\n"
+        f"OTHER ANALYSIS:\n{other_analysis}\n"
+    )
+
+
+def build_analysis_synthesis_prompt() -> str:
+    """Build the final analysis synthesis prompt."""
+    return "Synthesize the debate into a final recommendation with key tradeoffs and next steps. Be concise.\n"
+
+
 def build_retry_prompt(
     original_prompt: str,
     error_message: str,

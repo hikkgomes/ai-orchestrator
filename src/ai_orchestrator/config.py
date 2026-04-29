@@ -180,6 +180,17 @@ class CliCompatConfig:
 
 
 @dataclass
+class ModesConfig:
+    analysis_rounds: int = 3
+    analysis_escalation_model: str = ""
+    analysis_escalation_effort: str = "xhigh"
+    autonomous_max_iterations: int = 5
+    review_rounds: int = 3
+    review_escalation_model: str = ""
+    review_escalation_effort: str = "xhigh"
+
+
+@dataclass
 class Config:
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
@@ -192,6 +203,7 @@ class Config:
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     cli_compat: CliCompatConfig = field(default_factory=CliCompatConfig)
+    modes: ModesConfig = field(default_factory=ModesConfig)
 
 
 class ConfigError(ValueError):
@@ -462,6 +474,19 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
         if key in compat:
             _validate_string(f"cli_compat.{key}", compat[key])
 
+    modes = _expect_mapping("modes", data.get("modes"))
+    for key in ("analysis_rounds", "autonomous_max_iterations", "review_rounds"):
+        if key in modes:
+            _validate_int(f"modes.{key}", modes[key], minimum=1)
+    for key in (
+        "analysis_escalation_model",
+        "analysis_escalation_effort",
+        "review_escalation_model",
+        "review_escalation_effort",
+    ):
+        if key in modes:
+            _validate_string(f"modes.{key}", modes[key])
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -516,6 +541,7 @@ def load_config(repo_root: Path | None = None) -> Config:
             "workspace",
             "logging",
             "cli_compat",
+            "modes",
         },
     )
     _warn_unknown_keys(
@@ -643,6 +669,11 @@ def load_config(repo_root: Path | None = None) -> Config:
             CliCompatConfig,
             _expect_mapping("cli_compat", merged.get("cli_compat")),
             section_name="cli_compat",
+        ),
+        modes=_apply_section(
+            ModesConfig,
+            _expect_mapping("modes", merged.get("modes")),
+            section_name="modes",
         ),
     )
     return config

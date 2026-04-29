@@ -439,6 +439,31 @@ class OrchestratorUI:
             renderable = Syntax(text, "text", line_numbers=False, word_wrap=True)
         self.console.print(Panel(renderable, title=title))
 
+    def print_mode_header(self, mode: str, settings: Any | None = None) -> None:
+        details = ""
+        if settings is not None:
+            details = " | " + " | ".join(
+                f"{key}: {value}" for key, value in vars(settings).items() if value not in {"", None}
+            )
+        self.console.print(Panel(f"Mode: {mode}{details}", title="Orchestrator Mode", border_style="cyan"))
+
+    def print_analysis_round(self, round_num: int, actor: str, text: str) -> None:
+        title = f"{actor.title()} Analysis" if round_num == 0 else f"Round {round_num}: {actor.title()}"
+        self.console.print(Panel(Markdown(text), title=title, border_style="blue"))
+
+    def print_analysis_result(self, session: Any) -> None:
+        self.console.print(
+            Panel(
+                Markdown(str(session.final_summary or "")),
+                title=f"Analysis Result {str(session.session_id)[:8]}",
+                border_style="green",
+            )
+        )
+
+    @staticmethod
+    def mode_prompt_prefix(mode: str) -> str:
+        return f"[{mode}] > "
+
     def print_doctor_report(self, report: Any) -> None:
         """Render doctor checks as a rich table."""
         table = Table(

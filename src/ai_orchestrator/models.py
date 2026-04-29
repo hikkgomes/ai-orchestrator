@@ -211,6 +211,7 @@ class RunState(BaseModel):
 
     run_id: str
     task: str
+    mode: str = "default"
     status: WorkflowStatus = WorkflowStatus.INIT
     current_phase: str = "INIT"
     plan_id: str | None = None
@@ -242,3 +243,19 @@ class RunState(BaseModel):
     workspace_repos: list[str] = Field(default_factory=list)
 
     model_config = {"use_enum_values": True}
+
+
+class AnalysisSession(BaseModel):
+    """Persisted analysis-mode session."""
+
+    session_id: str
+    task: str
+    mode: str = "analysis"
+    rounds: list[dict[str, Any]] = Field(default_factory=list)
+    claude_initial: str = ""
+    codex_initial: str = ""
+    consensus_reached: bool = False
+    final_summary: str = ""
+    settings: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

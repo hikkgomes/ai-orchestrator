@@ -8,6 +8,20 @@ Every orchestrated run moves through these phases in order. Each phase is a dist
 
 `workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
+## Modes
+
+`orch run <task>` and `orch new <task>` use the default full pipeline. The CLI also exposes mode-specific entrypoints:
+
+| Mode | Command | Behavior |
+|---|---|---|
+| Default | `orch run <task>` | Full scoping, planning, approval, execution, review, merge handoff |
+| Analysis | `orch analysis <task>` | Parallel Claude/Codex analysis plus saved debate outside the FSM |
+| Quick Execute | `orch execute <task|plan.json>` | Starts at execution; `--no-review` jumps from execution to merge handoff |
+| Review | `orch review [task]` | Starts at review against current uncommitted changes |
+| Autonomous | `orch auto <task>` | Full pipeline with approval gates disabled and a configurable fix-loop limit |
+
+Interactive shell mode tracks the current mode and cycles modes with Shift+Tab. The prompt and bottom toolbar show the active mode and key settings.
+
 ```
 INIT -> SCOPING(debate) -> PLANNING(session) -> APPROVAL_PLAN -> EXECUTING
           ^                    ^                    |

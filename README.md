@@ -142,7 +142,10 @@ orch new "Fix the off-by-one in pagination" --skip-scoping
 orch new "Apply this small patch" --skip-planning
 orch new "Review this change" --start-at reviewing
 orch execute plan.json
+orch execute "Make the small edit" --no-review
 orch review
+orch analysis "Compare the migration options"
+orch auto "Implement and iterate without approval gates"
 ```
 
 Common commands:
@@ -160,6 +163,8 @@ orch reject <run-id> plan --reason "Split step 3 into smaller pieces"
 orch reject <run-id> plan --full --reason "Do not continue"
 orch reject <run-id> scope --reason "I mean the REST API, not the GraphQL one"
 orch resume <run-id>
+orch sessions
+orch continue <analysis-session-id> "Follow-up question"
 orch sync
 orch update
 orch config

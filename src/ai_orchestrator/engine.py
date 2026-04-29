@@ -74,6 +74,7 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     },
     WorkflowStatus.EXECUTING: {
         WorkflowStatus.REVIEWING,
+        WorkflowStatus.MERGING,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
         WorkflowStatus.PAUSED,
@@ -81,6 +82,7 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.REVIEWING: {
         WorkflowStatus.MERGING,
         WorkflowStatus.PLANNING,
+        WorkflowStatus.PAUSED,
         WorkflowStatus.FAILED,
         WorkflowStatus.BLOCKED_ON_CLI,
     },
@@ -102,6 +104,7 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
         WorkflowStatus.APPROVAL_PLAN,
+        WorkflowStatus.REVIEWING,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
         WorkflowStatus.SCOPING,
@@ -129,6 +132,8 @@ class Engine:
         adapters: dict[str, Any] | None = None,
         workflow: WorkflowDefinition | None = None,
         ui: Any | None = None,
+        skip_review: bool = False,
+        autonomous_max_iterations: int | None = None,
     ) -> None:
         self._config = config
         self._repo_root = repo_root.resolve()
@@ -143,6 +148,8 @@ class Engine:
         self._workflow = workflow or load_workflow_definition(self._repo_root)
         self._adapters = adapters or {}
         self._ui = ui
+        self._skip_review = skip_review
+        self._autonomous_max_iterations = autonomous_max_iterations
 
     def start(
         self,
@@ -153,12 +160,14 @@ class Engine:
         workspace_repos: list[str] | None = None,
         start_at: str | None = None,
         plan: dict[str, Any] | None = None,
+        mode: str = "default",
     ) -> RunState:
         state = RunState(
             run_id=run_id,
             task=task,
             is_workspace=is_workspace,
             workspace_repos=list(workspace_repos or []),
+            mode=mode,
         )
         if plan is not None:
             state.plan_id = self._artifacts.save_plan(run_id, plan)
@@ -777,6 +786,8 @@ class Engine:
         state.step_results = [reference]
         state.error = None
         self._state_mgr.save(state)
+        if self._skip_review:
+            return self._transition(state, WorkflowStatus.MERGING)
         return self._transition(state, WorkflowStatus.REVIEWING)
 
     def _run_review(self, state: RunState) -> RunState:
@@ -1122,6 +1133,16 @@ class Engine:
         return list(dict.fromkeys(path.strip() for path in result.stdout.splitlines() if path.strip()))
 
     def _debate_resolve_fix(self, state: RunState) -> RunState:
+        if (
+            self._autonomous_max_iterations is not None
+            and state.fix_iteration_count >= self._autonomous_max_iterations
+        ):
+            return self._transition(
+                state,
+                WorkflowStatus.PAUSED,
+                current_phase=WorkflowStatus.REVIEWING.value,
+                error=f"Autonomous limit: {state.fix_iteration_count} fix iterations",
+            )
         issues = state.debate_state.consolidated_issues if state.debate_state else []
         feedback = "Issues to fix:\n" + json_block(issues)
         feedback += "\n\nDebate transcript:\n" + self._debate_history_text(state)

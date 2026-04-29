@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,6 +26,7 @@ from rich.console import RenderableType
 from rich.panel import Panel
 
 from . import __version__
+from .analysis import AnalysisRunner
 from .artifacts import ArtifactStore
 from .bootstrap import (
     ensure_runtime_gitignore,
@@ -37,6 +39,7 @@ from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
 from .models import RunState
+from .modes import AnalysisSettings, Mode, ReviewSettings
 from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
@@ -46,13 +49,21 @@ from .worktree import WorktreeManager
 _HISTORY_FILE = Path.home() / ".config" / "ai-orchestrator" / "shell_history"
 
 
-def _build_engine(ctx: click.Context) -> Engine:
+def _build_engine(
+    ctx: click.Context,
+    *,
+    config: Config | None = None,
+    skip_review: bool = False,
+    autonomous_max_iterations: int | None = None,
+) -> Engine:
     _ensure_runtime_gitignore(ctx)
     return Engine(
-        _require_config(ctx),
+        config or _require_config(ctx),
         ctx.obj["repo_root"],
         ctx.obj["artifact_root"],
         ui=ctx.obj["ui"],
+        skip_review=skip_review,
+        autonomous_max_iterations=autonomous_max_iterations,
     )
 
 
@@ -309,15 +320,25 @@ def _start_run(
     skip_planning: bool = False,
     start_at: str | None = None,
     plan_file: str | None = None,
-) -> None:
+    mode: str = Mode.DEFAULT.value,
+    skip_review: bool = False,
+    config: Config | None = None,
+    autonomous_max_iterations: int | None = None,
+) -> RunState:
+    active_config = config or _require_config(ctx)
     if skip_scoping:
-        _require_config(ctx).scoping.enabled = False
+        active_config.scoping.enabled = False
     plan = _load_plan_file(plan_file) if plan_file else None
     if skip_planning and start_at is None:
         start_at = "executing"
     if start_at in {"executing", "execution", "reviewing", "review"} and plan is None:
         plan = _synthetic_plan(task)
-    engine = _build_engine(ctx)
+    engine = _build_engine(
+        ctx,
+        config=active_config,
+        skip_review=skip_review,
+        autonomous_max_iterations=autonomous_max_iterations,
+    )
     run_id = str(uuid4())
     workspace_repos = ctx.obj["workspace_repos"]
     state = engine.start(
@@ -327,10 +348,12 @@ def _start_run(
         workspace_repos=workspace_repos,
         start_at=start_at,
         plan=plan,
+        mode=mode,
     )
     if interactive:
         state = _drive_interactive_approvals(ctx, state.run_id)
     _render_run_snapshot(ctx, state.run_id, state=state)
+    return state
 
 
 @main.command("new")
@@ -417,14 +440,26 @@ def cmd_shell(ctx: click.Context) -> None:
 
 
 @main.command("execute")
-@click.argument("plan_file", type=click.Path(dir_okay=False, path_type=str))
+@click.argument("task_or_plan", required=False)
+@click.option("--no-review", is_flag=True, default=False, help="Skip the review phase after execution.")
 @click.option("--interactive/--no-interactive", default=True)
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.pass_context
-def cmd_execute(ctx: click.Context, plan_file: str, interactive: bool, detach: bool) -> None:
-    """Execute an existing natural plan JSON file."""
-    plan = _load_plan_file(plan_file)
-    task = str(plan.get("task") or "Execute provided plan")
+def cmd_execute(
+    ctx: click.Context,
+    task_or_plan: str | None,
+    no_review: bool,
+    interactive: bool,
+    detach: bool,
+) -> None:
+    """Quick execute a task or an existing natural plan JSON file."""
+    if task_or_plan is None:
+        task_or_plan = _read_task_from_stdin_or_prompt()
+    plan_file = task_or_plan if Path(task_or_plan).expanduser().is_file() else None
+    task = task_or_plan
+    if plan_file:
+        plan = _load_plan_file(plan_file)
+        task = str(plan.get("task") or "Execute provided plan")
     interactive = interactive and not detach
     _start_run(
         ctx,
@@ -433,17 +468,36 @@ def cmd_execute(ctx: click.Context, plan_file: str, interactive: bool, detach: b
         skip_scoping=True,
         start_at="executing",
         plan_file=plan_file,
+        mode=Mode.QUICK_EXECUTE.value,
+        skip_review=no_review,
     )
 
 
 @main.command("review")
 @click.argument("task", required=False)
+@click.option("--rounds", type=int, default=None, help="Review debate rounds.")
+@click.option("--escalation-model", default="", help="Escalation model for review debate.")
+@click.option("--escalation-effort", default="", help="Escalation reasoning effort for review debate.")
 @click.option("--interactive/--no-interactive", default=True)
 @click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.pass_context
-def cmd_review(ctx: click.Context, task: str | None, interactive: bool, detach: bool) -> None:
+def cmd_review(
+    ctx: click.Context,
+    task: str | None,
+    rounds: int | None,
+    escalation_model: str,
+    escalation_effort: str,
+    interactive: bool,
+    detach: bool,
+) -> None:
     """Review the current branch diff without running planning or execution."""
     task = task or "Review the current branch diff."
+    settings = ReviewSettings(
+        rounds=rounds or _require_config(ctx).modes.review_rounds,
+        escalation_model=escalation_model or _require_config(ctx).modes.review_escalation_model,
+        escalation_effort=escalation_effort or _require_config(ctx).modes.review_escalation_effort,
+    )
+    ctx.obj["ui"].print_mode_header(Mode.REVIEW.value, settings)
     interactive = interactive and not detach
     engine = _build_engine(ctx)
     run_id = str(uuid4())
@@ -454,10 +508,128 @@ def cmd_review(ctx: click.Context, task: str | None, interactive: bool, detach: 
         workspace_repos=[],
         start_at="reviewing",
         plan=_synthetic_plan(task),
+        mode=Mode.REVIEW.value,
     )
     if interactive:
         state = _drive_interactive_approvals(ctx, state.run_id)
     _render_run_snapshot(ctx, state.run_id, state=state)
+
+
+@main.command("analysis")
+@click.argument("task", required=False)
+@click.option("--rounds", type=int, default=None)
+@click.option("--claude-model", default="")
+@click.option("--codex-model", default="")
+@click.option("--claude-effort", default="high")
+@click.option("--codex-effort", default="high")
+@click.option("--escalation-model", default="")
+@click.option("--escalation-effort", default="")
+@click.pass_context
+def cmd_analysis(
+    ctx: click.Context,
+    task: str | None,
+    rounds: int | None,
+    claude_model: str,
+    codex_model: str,
+    claude_effort: str,
+    codex_effort: str,
+    escalation_model: str,
+    escalation_effort: str,
+) -> None:
+    """Run parallel AI analysis and debate without changing files."""
+    task = task or _read_task_from_stdin_or_prompt()
+    config = _require_config(ctx)
+    settings = AnalysisSettings(
+        rounds=rounds or config.modes.analysis_rounds,
+        claude_model=claude_model,
+        codex_model=codex_model,
+        claude_effort=claude_effort,
+        codex_effort=codex_effort,
+        escalation_model=escalation_model or config.modes.analysis_escalation_model,
+        escalation_effort=escalation_effort or config.modes.analysis_escalation_effort,
+    )
+    ctx.obj["ui"].print_mode_header(Mode.ANALYSIS.value, settings)
+    AnalysisRunner(config, ctx.obj["repo_root"], ctx.obj["artifact_root"], ui=ctx.obj["ui"]).run(
+        task,
+        settings,
+    )
+
+
+@main.command("auto")
+@click.argument("task", required=False)
+@click.option("--max-iterations", type=int, default=None)
+@click.option("--interactive/--no-interactive", default=True)
+@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
+@click.pass_context
+def cmd_auto(
+    ctx: click.Context,
+    task: str | None,
+    max_iterations: int | None,
+    interactive: bool,
+    detach: bool,
+) -> None:
+    """Run the full pipeline without approval gates."""
+    task = task or _read_task_from_stdin_or_prompt()
+    config = deepcopy(_require_config(ctx))
+    config.approval.require_plan_approval = False
+    config.approval.require_merge_approval = False
+    limit = max_iterations or config.modes.autonomous_max_iterations
+    interactive = interactive and not detach
+    ctx.obj["ui"].print_mode_header(Mode.AUTONOMOUS.value, type("Settings", (), {"max_iterations": limit})())
+    state = _start_run(
+        ctx,
+        task,
+        interactive,
+        skip_scoping=False,
+        mode=Mode.AUTONOMOUS.value,
+        config=config,
+        autonomous_max_iterations=limit,
+    )
+    if state.status == "PAUSED" and state.current_phase == "REVIEWING" and interactive:
+        if _confirm_choice(f"Autonomous fix limit ({limit}) reached. Continue?", default=False):
+            state.fix_iteration_count = 0
+            StateManager(ctx.obj["artifact_root"]).save(state)
+            resumed = _build_engine(
+                ctx,
+                config=config,
+                autonomous_max_iterations=limit,
+            ).resume(state.run_id)
+            _render_run_snapshot(ctx, resumed.run_id, state=resumed)
+        else:
+            ctx.obj["ui"].warning("Autonomous run left paused.")
+
+
+@main.command("sessions")
+@click.option("--mode", "mode_filter", default="all", type=click.Choice(["all", "analysis", "review", "auto", "default", "quick_execute", "autonomous"]))
+@click.pass_context
+def cmd_sessions(ctx: click.Context, mode_filter: str) -> None:
+    """List past orchestrator sessions."""
+    normalized = "autonomous" if mode_filter == "auto" else mode_filter
+    sessions = ArtifactStore(ctx.obj["artifact_root"]).list_sessions(normalized)
+    lines = [
+        f"{item['session_id'][:8]}  {item['mode']:<13} {item['status']:<12} {item['timestamp']}  {item['task'][:80]}"
+        for item in sessions
+    ]
+    ctx.obj["ui"].print_logs("\n".join(lines) if lines else "No sessions found.", title="Sessions")
+
+
+@main.command("continue")
+@click.argument("session_id")
+@click.argument("follow_up", required=False)
+@click.pass_context
+def cmd_continue(ctx: click.Context, session_id: str, follow_up: str | None) -> None:
+    """Continue a past analysis session."""
+    config = _require_config(ctx)
+    settings = AnalysisSettings(
+        rounds=config.modes.analysis_rounds,
+        escalation_model=config.modes.analysis_escalation_model,
+        escalation_effort=config.modes.analysis_escalation_effort,
+    )
+    AnalysisRunner(config, ctx.obj["repo_root"], ctx.obj["artifact_root"], ui=ctx.obj["ui"]).continue_session(
+        session_id,
+        follow_up or "",
+        settings,
+    )
 
 
 def _read_task_from_stdin_or_prompt() -> str:
@@ -468,7 +640,7 @@ def _read_task_from_stdin_or_prompt() -> str:
     return click.prompt("Task", type=str)
 
 
-def _create_prompt_session():
+def _create_prompt_session(mode_state: dict[str, Mode] | None = None, ctx: click.Context | None = None):
     if PromptSession is None or FileHistory is None or KeyBindings is None:
         raise click.ClickException(
             "prompt_toolkit is required for interactive shell mode. "
@@ -485,11 +657,32 @@ def _create_prompt_session():
     def newline(event):
         event.current_buffer.insert_text("\n")
 
+    if mode_state is not None:
+        modes = list(Mode)
+
+        @bindings.add("s-tab")
+        def cycle_mode(event):
+            current = mode_state.get("mode", Mode.DEFAULT)
+            mode_state["mode"] = modes[(modes.index(current) + 1) % len(modes)]
+            event.app.invalidate()
+
+    def toolbar():
+        if mode_state is None or ctx is None:
+            return ""
+        mode = mode_state.get("mode", Mode.DEFAULT).value
+        config = _require_config(ctx)
+        return (
+            f"Mode: {mode} | Claude: {config.routing.claude.model or 'default'} "
+            f"({config.routing.claude.reasoning_effort}) | Codex: {config.routing.codex.model or 'default'} "
+            f"({config.routing.codex.reasoning_effort}) | Rounds: {config.modes.analysis_rounds}"
+        )
+
     return PromptSession(
         history=FileHistory(str(_HISTORY_FILE)),
         key_bindings=bindings,
         multiline=False,
         enable_open_in_editor=True,
+        bottom_toolbar=toolbar,
     )
 
 
@@ -498,10 +691,11 @@ def _run_shell(ctx: click.Context) -> None:
     repo_name = ctx.obj["repo_root"].name
     ui.info(f"ai-orchestrator {__version__} | repo: {repo_name}")
     ui.info("Type a task prompt, or /help for commands.")
-    session = _create_prompt_session()
+    mode_state = {"mode": Mode.DEFAULT}
+    session = _create_prompt_session(mode_state, ctx)
     while True:
         try:
-            task = session.prompt("> ").strip()
+            task = session.prompt(ctx.obj["ui"].mode_prompt_prefix(mode_state["mode"].value)).strip()
         except (EOFError, KeyboardInterrupt):
             return
         if not task:
@@ -510,7 +704,25 @@ def _run_shell(ctx: click.Context) -> None:
             if _handle_shell_command(ctx, task):
                 return
             continue
-        _start_run(ctx, task, True, skip_scoping=False)
+        mode = mode_state["mode"]
+        if mode == Mode.ANALYSIS:
+            ctx.invoke(cmd_analysis, task=task)
+        elif mode == Mode.QUICK_EXECUTE:
+            ctx.invoke(cmd_execute, task_or_plan=task, no_review=False, interactive=True, detach=False)
+        elif mode == Mode.REVIEW:
+            ctx.invoke(
+                cmd_review,
+                task=task,
+                rounds=None,
+                escalation_model="",
+                escalation_effort="",
+                interactive=True,
+                detach=False,
+            )
+        elif mode == Mode.AUTONOMOUS:
+            ctx.invoke(cmd_auto, task=task, max_iterations=None, interactive=True, detach=False)
+        else:
+            _start_run(ctx, task, True, skip_scoping=False)
 
 
 def _handle_shell_command(ctx: click.Context, command: str) -> bool:
@@ -528,6 +740,8 @@ def _handle_shell_command(ctx: click.Context, command: str) -> bool:
                     "/approve <run-id|latest> <gate>",
                     "/reject <run-id|latest> <gate> <reason>",
                     "/runs",
+                    "/sessions",
+                    "/continue <analysis-session-id> [follow-up]",
                     "/quit",
                 ]
             ),
@@ -536,6 +750,12 @@ def _handle_shell_command(ctx: click.Context, command: str) -> bool:
         return False
     if name == "/runs":
         ctx.invoke(cmd_status, run_id=None, watch=False)
+        return False
+    if name == "/sessions":
+        ctx.invoke(cmd_sessions, mode_filter="all")
+        return False
+    if name == "/continue" and len(parts) >= 2:
+        ctx.invoke(cmd_continue, session_id=parts[1], follow_up=" ".join(parts[2:]) if len(parts) > 2 else None)
         return False
     if name == "/status":
         ctx.invoke(cmd_status, run_id=parts[1] if len(parts) > 1 else "latest", watch=False)
