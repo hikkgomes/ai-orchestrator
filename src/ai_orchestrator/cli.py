@@ -19,10 +19,12 @@ try:  # pragma: no cover - optional in minimal test environments
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.styles import Style as PTStyle
 except ImportError:  # pragma: no cover
     PromptSession = None
     FileHistory = None
     KeyBindings = None
+    PTStyle = None
 from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
@@ -298,11 +300,6 @@ def _mode_settings_summary(mode_state: dict[str, Any]) -> str:
             f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Max iterations: {limit}"
         )
     return "default · Settings at approval gates"
-
-
-def _print_mode_line(ctx: click.Context, mode_state: dict[str, Any]) -> None:
-    summary = _mode_settings_summary(mode_state)
-    ctx.obj["ui"].info(f"shift+tab {summary} · /config · /help")
 
 
 def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> None:
@@ -811,7 +808,7 @@ def _read_task_from_stdin_or_prompt() -> str:
 
 
 def _create_prompt_session(mode_state: dict[str, Any] | None = None, ctx: click.Context | None = None):
-    if PromptSession is None or FileHistory is None or KeyBindings is None:
+    if PromptSession is None or FileHistory is None or KeyBindings is None or PTStyle is None:
         raise click.ClickException(
             "prompt_toolkit is required for interactive shell mode. "
             "Install ai-orchestrator with its project dependencies.",
@@ -836,14 +833,22 @@ def _create_prompt_session(mode_state: dict[str, Any] | None = None, ctx: click.
             new_mode = modes[(modes.index(current) + 1) % len(modes)]
             mode_state["mode"] = new_mode
             mode_state["formatted_prompt"] = build_prompt_message(new_mode.value)
-            mode_state["just_switched"] = True
-            event.app.exit(result="")
+            event.app.invalidate()
+
+    def toolbar() -> str:
+        if mode_state is None:
+            return ""
+        return f"shift+tab {_mode_settings_summary(mode_state)} · /config · /help"
+
+    pt_style = PTStyle.from_dict({"bottom-toolbar": "noreverse #888888"})
 
     return PromptSession(
         history=FileHistory(str(_HISTORY_FILE)),
         key_bindings=bindings,
         multiline=False,
         enable_open_in_editor=True,
+        bottom_toolbar=toolbar,
+        style=pt_style,
     )
 
 
@@ -885,7 +890,6 @@ def _run_shell(ctx: click.Context) -> None:
         ),
         "execute": {"cli": "codex", "model": "", "effort": "", "skip_review": False},
     }
-    _print_mode_line(ctx, mode_state)
     session = _create_prompt_session(mode_state, ctx)
     while True:
         try:
@@ -894,9 +898,6 @@ def _run_shell(ctx: click.Context) -> None:
         except (EOFError, KeyboardInterrupt):
             return
         if not task:
-            if mode_state.pop("just_switched", False):
-                _print_mode_line(ctx, mode_state)
-                continue
             continue
         if task.startswith("/"):
             if _handle_shell_command(ctx, task, mode_state):
@@ -1040,7 +1041,6 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         if mode_state is not None:
             mode_state["mode"] = target_mode
             mode_state["formatted_prompt"] = build_prompt_message(target_mode.value)
-            mode_state["just_switched"] = True
         ui.info(f"mode: {_settings_mode_label(target_mode)}")
         return False
     if name == "/runs":
