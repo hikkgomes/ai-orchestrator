@@ -1313,45 +1313,27 @@ class Engine:
                 )
             except WorktreeError as exc:
                 return self._fail_run(state, str(exc))
-
-            checkout = subprocess.run(
-                ["git", "checkout", base_branch],
-                cwd=self._repo_root,
-                capture_output=True,
-                text=True,
-                shell=False,
-                check=False,
-            )
-            if checkout.returncode != 0:
-                return self._fail_run(
-                    state,
-                    f"git checkout {base_branch} failed: {checkout.stderr.strip() or checkout.stdout.strip()}",
-                )
-
             branch = state.worktree_branch or ""
-            result = subprocess.run(
-                ["git", "merge", "--squash", branch],
-                cwd=self._repo_root,
-                capture_output=True,
-                text=True,
-                shell=False,
-                check=False,
-            )
-            if result.returncode != 0:
-                return self._fail_run(
-                    state,
-                    f"git merge --squash failed: {result.stderr.strip() or result.stdout.strip()}",
-                )
-
-            self._discard_worktree(state, force=True)
+            needs_remote_push = not self._remote_branch_exists("origin", base_branch)
             commands = [
-                "# Review staged changes:",
-                "git status",
-                "git diff --cached",
+                "# Review changes on the worktree branch:",
+                f"git diff {base_branch}..{branch}",
                 "",
+                "# Apply changes to your branch:",
+                f"git merge --squash {branch}",
                 f'git commit -m "aio: {task_summary}"',
-                f"git push origin {base_branch}",
+                "",
+                "# Clean up the worktree:",
+                "orch clean",
             ]
+            if needs_remote_push:
+                commands.extend(
+                    [
+                        "",
+                        "# If your base branch does not exist on origin yet:",
+                        f"git push -u origin {base_branch}",
+                    ]
+                )
         else:
             commands = self._generate_workspace_commands(state)
 
@@ -1360,6 +1342,19 @@ class Engine:
         state.error = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.DONE)
+
+    def _remote_branch_exists(self, remote: str, branch: str) -> bool:
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", remote, branch],
+            cwd=self._repo_root,
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        return bool(result.stdout.strip())
 
     def _transition(
         self,

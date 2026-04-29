@@ -72,15 +72,31 @@ _STATUS_STYLES = {
     WorkflowStatus.SCOPING.value: "bright_cyan",
     WorkflowStatus.PLANNING.value: "cyan",
     WorkflowStatus.APPROVAL_PLAN.value: "yellow",
-    WorkflowStatus.EXECUTING.value: "magenta",
-    WorkflowStatus.REVIEWING.value: "blue",
-    WorkflowStatus.MERGING.value: "green",
+    WorkflowStatus.EXECUTING.value: "cyan",
+    WorkflowStatus.REVIEWING.value: "cyan",
+    WorkflowStatus.MERGING.value: "cyan",
     WorkflowStatus.DONE.value: "bold green",
     WorkflowStatus.FAILED.value: "bold red",
     WorkflowStatus.TERMINATED.value: "bold yellow",
     WorkflowStatus.PAUSED.value: "yellow",
-    WorkflowStatus.BLOCKED_ON_CLI.value: "bold yellow",
+    WorkflowStatus.BLOCKED_ON_CLI.value: "bold red",
     WorkflowStatus.CONFLICT.value: "bold red",
+}
+
+_FRIENDLY_PHASE_NAMES = {
+    WorkflowStatus.INIT.value: "Starting",
+    WorkflowStatus.SCOPING.value: "Scoping",
+    WorkflowStatus.PLANNING.value: "Planning",
+    WorkflowStatus.APPROVAL_PLAN.value: "Plan Review",
+    WorkflowStatus.EXECUTING.value: "Building",
+    WorkflowStatus.REVIEWING.value: "Code Review",
+    WorkflowStatus.MERGING.value: "Handoff",
+    WorkflowStatus.DONE.value: "Complete",
+    WorkflowStatus.FAILED.value: "Failed",
+    WorkflowStatus.TERMINATED.value: "Stopped",
+    WorkflowStatus.PAUSED.value: "Waiting on You",
+    WorkflowStatus.BLOCKED_ON_CLI.value: "Blocked",
+    WorkflowStatus.CONFLICT.value: "Conflict",
 }
 
 _PHASE_SUBTITLES = {
@@ -89,7 +105,7 @@ _PHASE_SUBTITLES = {
     WorkflowStatus.APPROVAL_PLAN.value: "Your turn to review",
     WorkflowStatus.EXECUTING.value: "Codex is building",
     WorkflowStatus.REVIEWING.value: "Time for a code review",
-    WorkflowStatus.MERGING.value: "Almost there",
+    WorkflowStatus.MERGING.value: "Preparing your changes for review",
     WorkflowStatus.DONE.value: "All done",
 }
 
@@ -226,6 +242,39 @@ def random_message(pool: list[str]) -> str:
     return random.choice(pool)
 
 
+def friendly_phase(phase: str) -> str:
+    return _FRIENDLY_PHASE_NAMES.get(phase, phase.title().replace("_", " "))
+
+
+def _next_step_info(state: RunState) -> tuple[str, str]:
+    phase = state.current_phase
+    if phase == WorkflowStatus.INIT.value:
+        return "The orchestrator is initializing your run.", "cyan"
+    if phase == WorkflowStatus.SCOPING.value:
+        return "Claude and Codex are evaluating the task. No action needed.", "cyan"
+    if phase == WorkflowStatus.PLANNING.value:
+        return "Claude is designing the implementation plan. No action needed.", "cyan"
+    if phase == WorkflowStatus.APPROVAL_PLAN.value:
+        return "The plan is ready for your review.", "yellow"
+    if phase == WorkflowStatus.EXECUTING.value:
+        return "The executor is writing code. No action needed.", "cyan"
+    if phase == WorkflowStatus.REVIEWING.value:
+        return "Claude and Codex are reviewing the code. No action needed.", "cyan"
+    if phase == WorkflowStatus.MERGING.value:
+        return "Changes are being prepared for handoff.", "cyan"
+    if phase == WorkflowStatus.DONE.value:
+        return "Run complete! Review the suggested commands below.", "green"
+    if phase == WorkflowStatus.FAILED.value:
+        return "This run failed. Use `orch resume` to retry, or start a new run.", "red"
+    if phase == WorkflowStatus.TERMINATED.value:
+        return "This run was stopped.", "dim"
+    if phase == WorkflowStatus.BLOCKED_ON_CLI.value:
+        return "A CLI tool is unavailable. Run `orch doctor` to check.", "red"
+    if phase == WorkflowStatus.CONFLICT.value:
+        return "Merge conflict detected. Resolve manually, then `orch resume`.", "red"
+    return "No action needed right now.", "dim"
+
+
 class OrchestratorUI:
     """Rich terminal UI helper."""
 
@@ -266,7 +315,7 @@ class OrchestratorUI:
     def phase_banner(self, phase: str, detail: str = "") -> None:
         """Print a visible phase separator."""
         subtitle = detail or _PHASE_SUBTITLES.get(phase, "")
-        label = f"▸ {phase.title().replace('_', ' ')}"
+        label = f"▸ {friendly_phase(phase)}"
         if subtitle:
             label += f": {subtitle}"
         self.stderr_console.print(f"\n[bold cyan]{label}[/bold cyan]")
@@ -339,7 +388,7 @@ class OrchestratorUI:
         summary.add_column(justify="left", ratio=2)
         summary.add_row("Run", state.run_id)
         summary.add_row("Task", Text(state.task, overflow="fold"))
-        summary.add_row("Phase", state.current_phase)
+        summary.add_row("Phase", friendly_phase(state.current_phase))
         summary.add_row("Status", Text(state.status, style=self._status_style(state.status)))
         summary.add_row("Updated", state.updated_at)
         if state.normalized_task and state.normalized_task.strip() != state.task.strip():
@@ -424,6 +473,8 @@ class OrchestratorUI:
                 1,
                 Panel(Text(state.error, overflow="fold"), title="Failure Detail", border_style="bold red"),
             )
+        next_msg, next_style = _next_step_info(state)
+        panels.append(Panel(next_msg, title="What happens next", border_style=next_style))
         body = Group(*panels)
         return body
 
@@ -445,7 +496,7 @@ class OrchestratorUI:
             table.add_row(
                 state.run_id,
                 Text(state.status, style=self._status_style(state.status)),
-                state.current_phase,
+                friendly_phase(state.current_phase),
                 self._truncate(state.task, 60),
                 state.updated_at,
             )
@@ -479,7 +530,29 @@ class OrchestratorUI:
         self.console.print(
             Panel(
                 "\n".join(commands),
-                title="[bold green]Changes staged — run these commands to commit",
+                title="[bold green]Handoff — review and commit when ready",
+                border_style="green",
+            )
+        )
+
+    def print_doctor_fix_actions(self, actions: list[dict[str, str]]) -> None:
+        table = Table(box=box.ROUNDED, expand=True, header_style="bold cyan")
+        table.add_column("Check", style="bold")
+        table.add_column("Result", width=12)
+        table.add_column("Action")
+        for action in actions:
+            status = action.get("status", "warn")
+            marker = "[green]fixed[/green]" if status == "fixed" else "[yellow]manual[/yellow]"
+            table.add_row(action.get("name", "unknown"), marker, action.get("detail", ""))
+        self.console.print(Panel(table, title="Doctor Fix Actions", border_style="cyan"))
+
+    def print_doctor_ready(self) -> None:
+        self.console.print(
+            Panel(
+                "All checks passed. You're ready to go.\n"
+                '  orch run "your task"    Start a new run\n'
+                "  orch                    Open the interactive shell",
+                title="Ready",
                 border_style="green",
             )
         )
@@ -552,15 +625,15 @@ class OrchestratorUI:
         """Prompt the user for a named gate decision."""
         panel = Panel(
             context,
-            title=f"{gate.title()} Decision",
+            title="Your Decision",
             border_style="yellow",
         )
         self.console.print(panel)
         if questionary is not None and sys.stdin.isatty():
             label_map = {
-                "approve": "Approve",
-                "soft-reject": "Request changes",
-                "full-reject": "Reject and terminate",
+                "approve": "Approve — start building",
+                "soft-reject": "Request changes — revise the plan",
+                "full-reject": "Reject — stop this run",
                 "adjust": "Adjust execution settings",
                 "approve-override": "Approve override",
                 "approve-claude": "Approve Claude plan",
@@ -581,6 +654,56 @@ class OrchestratorUI:
             choices=choices,
             default=default,
             console=self.console,
+        )
+
+    def render_home_screen(
+        self,
+        *,
+        repo_name: str,
+        version: str,
+        has_config: bool,
+        active_runs: list[RunState],
+        paused_runs: list[RunState],
+    ) -> RenderableType:
+        lines: list[RenderableType] = []
+        if paused_runs:
+            lines.append(Text(f"{len(paused_runs)} run waiting on you", style="yellow"))
+            for state in paused_runs[:3]:
+                lines.append(Text(f"  {state.run_id[:8]}  {friendly_phase(state.current_phase):<12} {self._truncate(state.task, 60)}"))
+            lines.append(Text(""))
+        if active_runs:
+            lines.append(Text(f"{len(active_runs)} run in progress", style="cyan"))
+            for state in active_runs[:3]:
+                lines.append(Text(f"  {state.run_id[:8]}  {friendly_phase(state.current_phase):<12} {self._truncate(state.task, 60)}"))
+            lines.append(Text(""))
+        if not has_config:
+            lines.append(Text("Run `orch init` to scaffold repository config.", style="yellow"))
+            lines.append(Text(""))
+        lines.extend(
+            [
+                Text("Quick start:", style="dim"),
+                Text('  orch run "your task"'),
+                Text("  orch doctor"),
+                Text("  Type a task here to start"),
+            ]
+        )
+        return Panel(
+            Group(*lines),
+            title=f"ai-orchestrator v{version} - ~/{repo_name}",
+            border_style="cyan",
+        )
+
+    def print_first_run_tutorial(self) -> None:
+        self.console.print(
+            Panel(
+                "Your repository is set up.\n\n"
+                "1. Check your environment:  orch doctor\n"
+                '2. Start your first run:    orch run "task"\n'
+                "3. Or review changes:       orch review\n\n"
+                "Tip: type 'orch' to enter the interactive shell, where you can just type your task.",
+                title="Getting Started",
+                border_style="cyan",
+            )
         )
 
     def rejection_reason(self, default: str) -> str:
