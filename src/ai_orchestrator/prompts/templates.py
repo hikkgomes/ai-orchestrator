@@ -122,10 +122,11 @@ def build_scope_respond_claude_prompt(codex_scope_md: str, *, relay: bool = Fals
     """Build Claude round-4 prompt to respond to Codex reasoning."""
     if relay:
         return (
-            "I had another analysis of this task:\n\n"
+            "Codex reviewed your scope and has feedback:\n\n"
             f"{codex_scope_md}\n\n"
-            "Review it. Start with `agreement: true` or `agreement: false`.\n"
-            "If you disagree, explain why concisely.\n"
+            "If you accept, update the canonical scope.md accordingly.\n"
+            "Start with `agreement: true` or `agreement: false`.\n"
+            "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
         )
     return (
         "Codex's scope and reasoning are ready. Review it against your independent scope.\n"
@@ -146,9 +147,9 @@ def build_scope_final_codex_prompt(claude_scope_md: str, *, relay: bool = False)
     """Build Codex round-5 prompt for final xhigh scope assessment."""
     if relay:
         return (
-            "I had another analysis of this task:\n\n"
+            "Claude still disagrees. Make your final case:\n\n"
             f"{claude_scope_md}\n\n"
-            "Review it. Start with `agreement: true` or `agreement: false`.\n"
+            "Start with `agreement: true` or `agreement: false`.\n"
             "If you disagree, explain why concisely.\n"
         )
     return (
@@ -167,10 +168,10 @@ def build_scope_final_claude_prompt(codex_scope_md: str, *, relay: bool = False)
     """Build Claude round-6 prompt for final Opus/max scope decision."""
     if relay:
         return (
-            "I had another analysis of this task:\n\n"
+            "Codex still disagrees. You have the final say on the scope.\n"
+            "Review their assessment and return the final canonical scope.md.\n\n"
             f"{codex_scope_md}\n\n"
-            "Review it. Start with `agreement: true` or `agreement: false`.\n"
-            "If you disagree, explain why concisely.\n"
+            "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
         )
     return (
         "Codex still disagrees with your scope and you are going to make the final decision on the scope. Read their assessment, review its updated reasoning and return ONLY the final canonical scope.md.\n"
@@ -198,9 +199,11 @@ def build_full_execution_prompt(
             "- If no changes are needed, explain that in the result summary.\n\n"
             "After making changes, write your result JSON to:\n"
             f"{result_file_path}\n\n"
-            "Required JSON fields: status (success|partial|failed),\n"
-            "files_changed (array of {path, action, summary}),\n"
-            "summary (string).\n\n"
+            "Required JSON fields (no extra fields allowed):\n"
+            '- status: "success", "partial", or "failed"\n'
+            "- files_changed: array of {path (relative), action (created|modified|deleted), summary}\n"
+            "- summary: string\n"
+            "Optional: issues (array of strings), test_commands (array of strings).\n\n"
             "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
         )
     return (
@@ -244,6 +247,10 @@ def build_review_prompt(
             "- findings (array)\n"
             "- summary (string)\n"
             "- blocks_merge (boolean)\n\n"
+            "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
+            "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
+            "reject requires blocks_merge=true and at least one critical or major finding.\n"
+            "No extra fields allowed.\n\n"
             "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
         )
     categories_section = _review_categories_section(review_categories)
@@ -276,11 +283,16 @@ def build_review_codex_prompt(
     """Build Codex's independent review prompt inside the REVIEWING phase."""
     if relay:
         return (
+            f"Task: {task_description}\n\n"
             "Review this implementation independently and evaluate Claude's review.\n"
             "Inspect the code directly with your tools.\n\n"
             "CLAUDE REVIEW REPORT:\n"
             f"{review_json}\n\n"
             "Return a JSON with these required fields: review_id (uuid), verdict (approve|request_changes|reject), score (1-10), findings (array), summary (string), blocks_merge (boolean).\n"
+            "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
+            "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
+            "reject requires blocks_merge=true and at least one critical or major finding.\n"
+            "No extra fields allowed.\n"
             "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
         )
     return (
@@ -358,20 +370,12 @@ def build_analysis_synthesis_prompt() -> str:
 def build_retry_prompt(
     original_prompt: str,
     error_message: str,
-    *,
-    relay: bool = False,
 ) -> str:
     """Build a retry prompt when the previous response was invalid.
 
     Per AGENTS.md Retry Protocol, includes the validation error and the
     full original prompt because each retry runs in a fresh subprocess.
     """
-    if relay:
-        return (
-            "Your previous response was not valid. Error: "
-            f"{error_message}\n\n"
-            "Fix the error and try again.\n"
-        )
     return (
         "Your previous response was not valid. Error: "
         f"{error_message}\n\n"

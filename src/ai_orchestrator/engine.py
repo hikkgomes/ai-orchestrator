@@ -807,7 +807,7 @@ class Engine:
     def _run_review(self, state: RunState) -> RunState:
         schema = load_bundled_schema("review.schema.json")
         debate_schema = load_bundled_schema("debate_response.schema.json")
-        git_diff = redact_secret_text(self._implementation_diff(state))
+        git_diff = "" if self._relay else redact_secret_text(self._implementation_diff(state))
         review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
         try:
             changed_files = self._review_changed_files(state)
@@ -1427,7 +1427,6 @@ class Engine:
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
                     error_message=retry_error,
-                    relay=self._relay,
                 )
                 continue
 

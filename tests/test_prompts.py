@@ -81,20 +81,6 @@ def test_retry_prompt_includes_original_context():
     assert original_prompt in prompt
 
 
-def test_retry_prompt_relay_omits_original_context():
-    original_prompt = "STEP:\nImplement feature\n\nOUTPUT SCHEMA:\n{}"
-
-    prompt = build_retry_prompt(
-        original_prompt=original_prompt,
-        error_message="missing required field",
-        relay=True,
-    )
-
-    assert "missing required field" in prompt
-    assert "The full original prompt follows." not in prompt
-    assert original_prompt not in prompt
-
-
 def test_build_full_execution_prompt_renders_single_result_path():
     prompt = build_full_execution_prompt(
         plan_text="## Steps\n- Update endpoint",
@@ -119,6 +105,7 @@ def test_build_full_execution_prompt_relay_omits_schema_json():
     assert "/tmp/execution.json" in prompt
     assert '{"title":"ExecutionResult"}' not in prompt
     assert "Required JSON fields:" in prompt
+    assert "no extra fields allowed" in prompt
 
 
 def test_build_review_prompt_renders_optional_reviewer_sections():
@@ -166,18 +153,34 @@ def test_build_prescope_codex_prompt_relay_omits_repo_tree():
     assert "TREE DATA BLOCK" not in prompt
 
 
-def test_scope_debate_prompts_relay_are_lean():
+def test_scope_compare_codex_prompt_relay_is_lean():
     other_output = "---\nagreement: false\n---\nneeds changes"
-    for builder in (
-        build_scope_compare_codex_prompt,
-        build_scope_respond_claude_prompt,
-        build_scope_final_codex_prompt,
-        build_scope_final_claude_prompt,
-    ):
-        prompt = builder(other_output, relay=True)
-        assert "I had another analysis of this task:" in prompt
-        assert other_output in prompt
-        assert "agreement: true" in prompt
+    prompt = build_scope_compare_codex_prompt(other_output, relay=True)
+    assert "I had another analysis of this task:" in prompt
+    assert other_output in prompt
+    assert "agreement: true" in prompt
+
+
+def test_scope_respond_claude_prompt_relay_requires_frontmatter():
+    other_output = "---\nagreement: false\n---\nneeds changes"
+    prompt = build_scope_respond_claude_prompt(other_output, relay=True)
+    assert "Codex reviewed your scope and has feedback:" in prompt
+    assert "agreement: true" in prompt
+    assert "Preserve YAML frontmatter" in prompt
+
+
+def test_scope_final_codex_prompt_relay_is_final_case():
+    other_output = "---\nagreement: false\n---\nneeds changes"
+    prompt = build_scope_final_codex_prompt(other_output, relay=True)
+    assert "Claude still disagrees. Make your final case:" in prompt
+    assert "agreement: true" in prompt
+
+
+def test_scope_final_claude_prompt_relay_requires_canonical_scope():
+    other_output = "---\nagreement: false\n---\nneeds changes"
+    prompt = build_scope_final_claude_prompt(other_output, relay=True)
+    assert "You have the final say on the scope." in prompt
+    assert "Preserve YAML frontmatter" in prompt
 
 
 def test_build_review_prompt_relay_omits_heavy_sections_and_keeps_heuristics():
@@ -205,6 +208,21 @@ def test_build_review_prompt_relay_omits_heavy_sections_and_keeps_heuristics():
     assert "AI FAILURE CATEGORIES:" not in prompt
     assert "REPOSITORY CONTEXT:" not in prompt
     assert '{"title":"Review"}' not in prompt
+    assert "Use verdict=approve and blocks_merge=false only if the implementation should proceed." in prompt
+    assert "reject requires blocks_merge=true and at least one critical or major finding." in prompt
+    assert "No extra fields allowed." in prompt
+
+
+def test_build_review_prompt_relay_empty_heuristics():
+    prompt = build_review_prompt(
+        git_diff="diff --git a/a.py b/a.py\n+print('x')",
+        step_results_json='[{"step_number":1}]',
+        schema_json='{"title":"Review"}',
+        heuristic_findings=None,
+        relay=True,
+    )
+    assert "HEURISTIC SCAN RESULTS:" not in prompt
+    assert "EXECUTION RESULTS:" in prompt
 
 
 def test_build_review_codex_prompt_relay_omits_diff_and_schema():
@@ -215,9 +233,12 @@ def test_build_review_codex_prompt_relay_omits_diff_and_schema():
         schema_json='{"title":"Review"}',
         relay=True,
     )
+    assert "Task: Task body" in prompt
     assert '{"summary":"ok"}' in prompt
     assert "IMPLEMENTATION DIFF:" not in prompt
     assert "OUTPUT SCHEMA:" not in prompt
+    assert "Use verdict=approve and blocks_merge=false only if the implementation should proceed." in prompt
+    assert "reject requires blocks_merge=true and at least one critical or major finding." in prompt
 
 
 def test_build_review_final_claude_prompt_relay_omits_schema():
