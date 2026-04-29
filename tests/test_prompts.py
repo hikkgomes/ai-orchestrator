@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
+    build_prescope_codex_prompt,
+    build_scope_compare_codex_prompt,
+    build_scope_respond_claude_prompt,
+    build_scope_final_codex_prompt,
+    build_scope_final_claude_prompt,
     build_full_execution_prompt,
     build_review_prompt,
+    build_review_codex_prompt,
+    build_review_final_claude_prompt,
     build_retry_prompt,
     collect_file_context,
     redact_secret_text,
@@ -74,6 +81,20 @@ def test_retry_prompt_includes_original_context():
     assert original_prompt in prompt
 
 
+def test_retry_prompt_relay_omits_original_context():
+    original_prompt = "STEP:\nImplement feature\n\nOUTPUT SCHEMA:\n{}"
+
+    prompt = build_retry_prompt(
+        original_prompt=original_prompt,
+        error_message="missing required field",
+        relay=True,
+    )
+
+    assert "missing required field" in prompt
+    assert "The full original prompt follows." not in prompt
+    assert original_prompt not in prompt
+
+
 def test_build_full_execution_prompt_renders_single_result_path():
     prompt = build_full_execution_prompt(
         plan_text="## Steps\n- Update endpoint",
@@ -85,6 +106,19 @@ def test_build_full_execution_prompt_renders_single_result_path():
     assert "write your result JSON to:" in prompt
     assert "/tmp/execution.json" in prompt
     assert "src/api.py" not in prompt
+
+
+def test_build_full_execution_prompt_relay_omits_schema_json():
+    prompt = build_full_execution_prompt(
+        plan_text="## Steps\n- Update endpoint",
+        result_file_path="/tmp/execution.json",
+        schema_json='{"title":"ExecutionResult"}',
+        relay=True,
+    )
+
+    assert "/tmp/execution.json" in prompt
+    assert '{"title":"ExecutionResult"}' not in prompt
+    assert "Required JSON fields:" in prompt
 
 
 def test_build_review_prompt_renders_optional_reviewer_sections():
@@ -119,3 +153,78 @@ def test_build_review_prompt_renders_optional_reviewer_sections():
     assert "hallucinated_api - Non-existent APIs" in prompt
     assert "REPOSITORY CONTEXT:" in prompt
     assert "Stack: python, fastapi" in prompt
+
+
+def test_build_prescope_codex_prompt_relay_omits_repo_tree():
+    prompt = build_prescope_codex_prompt(
+        "Implement health checks",
+        "Repository summary block",
+        "TREE DATA BLOCK",
+        relay=True,
+    )
+    assert "Repository summary block" not in prompt
+    assert "TREE DATA BLOCK" not in prompt
+
+
+def test_scope_debate_prompts_relay_are_lean():
+    other_output = "---\nagreement: false\n---\nneeds changes"
+    for builder in (
+        build_scope_compare_codex_prompt,
+        build_scope_respond_claude_prompt,
+        build_scope_final_codex_prompt,
+        build_scope_final_claude_prompt,
+    ):
+        prompt = builder(other_output, relay=True)
+        assert "I had another analysis of this task:" in prompt
+        assert other_output in prompt
+        assert "agreement: true" in prompt
+
+
+def test_build_review_prompt_relay_omits_heavy_sections_and_keeps_heuristics():
+    prompt = build_review_prompt(
+        git_diff="diff --git a/a.py b/a.py\n+print('x')",
+        step_results_json='[{"step_number":1}]',
+        schema_json='{"title":"Review"}',
+        heuristic_findings=[
+            {
+                "workspace": "",
+                "rule_id": "placeholder",
+                "file": "src/app.py",
+                "line": 4,
+                "snippet": 'dummy_key = "changeme"',
+            }
+        ],
+        review_categories={"runtime_breakage": "desc"},
+        reviewer_config={"project": {"stack": ["python"]}},
+        relay=True,
+    )
+
+    assert "HEURISTIC SCAN RESULTS:" in prompt
+    assert "placeholder" in prompt
+    assert "IMPLEMENTATION DIFF:" not in prompt
+    assert "AI FAILURE CATEGORIES:" not in prompt
+    assert "REPOSITORY CONTEXT:" not in prompt
+    assert '{"title":"Review"}' not in prompt
+
+
+def test_build_review_codex_prompt_relay_omits_diff_and_schema():
+    prompt = build_review_codex_prompt(
+        task_description="Task body",
+        git_diff="diff --git ...",
+        review_json='{"summary":"ok"}',
+        schema_json='{"title":"Review"}',
+        relay=True,
+    )
+    assert '{"summary":"ok"}' in prompt
+    assert "IMPLEMENTATION DIFF:" not in prompt
+    assert "OUTPUT SCHEMA:" not in prompt
+
+
+def test_build_review_final_claude_prompt_relay_omits_schema():
+    prompt = build_review_final_claude_prompt(
+        codex_review_json='{"summary":"pushback"}',
+        schema_json='{"title":"Debate"}',
+        relay=True,
+    )
+    assert '{"summary":"pushback"}' in prompt
+    assert "OUTPUT SCHEMA:" not in prompt

@@ -155,6 +155,10 @@ class Engine:
         self._autonomous_max_iterations = autonomous_max_iterations
         self._review_rounds = review_rounds
 
+    @property
+    def _relay(self) -> bool:
+        return self._config.orchestrator.prompt_mode == "relay"
+
     def start(
         self,
         task: str,
@@ -377,7 +381,12 @@ class Engine:
 
         try:
             claude_prompt = build_prescope_claude_prompt(state.task)
-            codex_prompt = build_prescope_codex_prompt(state.task, summary, directory_tree)
+            codex_prompt = build_prescope_codex_prompt(
+                state.task,
+                summary,
+                directory_tree,
+                relay=self._relay,
+            )
             self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
             self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
             claude_text_result, codex_text_result = invoke_parallel(
@@ -417,7 +426,7 @@ class Engine:
             state.scoping_round = 2
             self._state_mgr.save(state)
 
-            prompt = build_scope_compare_codex_prompt(claude_scope)
+            prompt = build_scope_compare_codex_prompt(claude_scope, relay=self._relay)
             self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
             codex_result = self._invoke_adapter_text(
                 codex,
@@ -450,7 +459,7 @@ class Engine:
                 )
 
             if not state.scoping_agreed:
-                prompt = build_scope_respond_claude_prompt(codex_scope)
+                prompt = build_scope_respond_claude_prompt(codex_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
@@ -484,7 +493,7 @@ class Engine:
                         self._ui.info("Claude stands firm; sending reasoning back to Codex.")
 
             if not state.scoping_agreed:
-                prompt = build_scope_final_codex_prompt(claude_scope)
+                prompt = build_scope_final_codex_prompt(claude_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
                 codex_result = self._invoke_adapter_text(
                     codex,
@@ -510,7 +519,7 @@ class Engine:
                         self._ui.info("Still no agreement; Claude Opus will make the final call.")
 
             if not state.scoping_agreed:
-                prompt = build_scope_final_claude_prompt(codex_scope)
+                prompt = build_scope_final_claude_prompt(codex_scope, relay=self._relay)
                 self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
                 scope_result = self._invoke_adapter_text(
                     claude,
@@ -715,6 +724,7 @@ class Engine:
             plan_text=plan_text,
             result_file_path=pending_result_path,
             schema_json=json_block(schema),
+            relay=self._relay,
         )
 
         def invoke(current_prompt: str) -> Any:
@@ -819,6 +829,7 @@ class Engine:
             heuristic_findings=heuristic_findings,
             review_categories=reviewer_rules.get("review_categories") or {},
             reviewer_config=reviewer_config,
+            relay=self._relay,
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         adapter = self._adapter("claude")
@@ -908,6 +919,7 @@ class Engine:
                     git_diff=git_diff,
                     review_json=json_block(claude_review),
                     schema_json=json_block(schema),
+                    relay=self._relay,
                 )
                 self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
                 codex = self._adapter("codex")
@@ -1010,6 +1022,7 @@ class Engine:
             final_prompt = build_review_final_claude_prompt(
                 codex_review_json=json_block(codex_review),
                 schema_json=json_block(debate_schema),
+                relay=self._relay,
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
             final_effort = self._review_final_effort(state)
@@ -1414,6 +1427,7 @@ class Engine:
                 prompt = build_retry_prompt(
                     original_prompt=initial_prompt,
                     error_message=retry_error,
+                    relay=self._relay,
                 )
                 continue
 

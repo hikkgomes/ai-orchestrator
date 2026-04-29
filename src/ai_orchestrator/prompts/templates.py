@@ -69,8 +69,21 @@ def build_prescope_claude_prompt(raw_task: str) -> str:
     )
 
 
-def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree: str) -> str:
+def build_prescope_codex_prompt(
+    raw_task: str,
+    repo_summary: str,
+    directory_tree: str,
+    *,
+    relay: bool = False,
+) -> str:
     """Build Codex round-2 prompt that creates Codex's independent scope file."""
+    if relay:
+        return _prescope_prompt(
+            raw_task=raw_task,
+            repo_summary="",
+            directory_tree="",
+            canonical=False,
+        )
     return _prescope_prompt(
         raw_task=raw_task,
         repo_summary=repo_summary,
@@ -81,8 +94,17 @@ def build_prescope_codex_prompt(raw_task: str, repo_summary: str, directory_tree
 
 def build_scope_compare_codex_prompt(
     claude_scope_md: str,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build Codex round-3 prompt to compare both scopes."""
+    if relay:
+        return (
+            "I had another analysis of this task:\n\n"
+            f"{claude_scope_md}\n\n"
+            "Review it. Start with `agreement: true` or `agreement: false`.\n"
+            "If you disagree, explain why concisely.\n"
+        )
     return (
         "Claude's canonical scope is ready. Review it against your independent scope.\n"
         "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
@@ -96,8 +118,15 @@ def build_scope_compare_codex_prompt(
     )
 
 
-def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
+def build_scope_respond_claude_prompt(codex_scope_md: str, *, relay: bool = False) -> str:
     """Build Claude round-4 prompt to respond to Codex reasoning."""
+    if relay:
+        return (
+            "I had another analysis of this task:\n\n"
+            f"{codex_scope_md}\n\n"
+            "Review it. Start with `agreement: true` or `agreement: false`.\n"
+            "If you disagree, explain why concisely.\n"
+        )
     return (
         "Codex's scope and reasoning are ready. Review it against your independent scope.\n"
         "Return ONLY markdown.\n\n"
@@ -113,8 +142,15 @@ def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
     )
 
 
-def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
+def build_scope_final_codex_prompt(claude_scope_md: str, *, relay: bool = False) -> str:
     """Build Codex round-5 prompt for final xhigh scope assessment."""
+    if relay:
+        return (
+            "I had another analysis of this task:\n\n"
+            f"{claude_scope_md}\n\n"
+            "Review it. Start with `agreement: true` or `agreement: false`.\n"
+            "If you disagree, explain why concisely.\n"
+        )
     return (
         "Claude disagrees with your review. Review its reasoning against your independent reviews.\n"
         "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
@@ -127,8 +163,15 @@ def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
     )
 
 
-def build_scope_final_claude_prompt(codex_scope_md: str) -> str:
+def build_scope_final_claude_prompt(codex_scope_md: str, *, relay: bool = False) -> str:
     """Build Claude round-6 prompt for final Opus/max scope decision."""
+    if relay:
+        return (
+            "I had another analysis of this task:\n\n"
+            f"{codex_scope_md}\n\n"
+            "Review it. Start with `agreement: true` or `agreement: false`.\n"
+            "If you disagree, explain why concisely.\n"
+        )
     return (
         "Codex still disagrees with your scope and you are going to make the final decision on the scope. Read their assessment, review its updated reasoning and return ONLY the final canonical scope.md.\n"
         "If you are convinced by any of Codex's points, update the canonical scope.md accordingly. If you still disagree, keep the canonical scope.md as is.\n\n"
@@ -142,8 +185,24 @@ def build_full_execution_prompt(
     plan_text: str,
     result_file_path: str,
     schema_json: str,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build a single-session execution prompt for the full plan."""
+    if relay:
+        return (
+            f"{plan_text}\n\n"
+            "FULLY IMPLEMENT THE PLAN ABOVE\n"
+            "- Do not commit or push any changes yet. Leave them for reviewing.\n"
+            "- Update the documentation accordingly if needed.\n"
+            "- If no changes are needed, explain that in the result summary.\n\n"
+            "After making changes, write your result JSON to:\n"
+            f"{result_file_path}\n\n"
+            "Required JSON fields: status (success|partial|failed),\n"
+            "files_changed (array of {path, action, summary}),\n"
+            "summary (string).\n\n"
+            "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
+        )
     return (
         f"{plan_text}\n\n"
         "FULLY IMPLEMENT THE PLAN ABOVE\n"
@@ -165,9 +224,28 @@ def build_review_prompt(
     heuristic_findings: list[dict[str, Any]] | None = None,
     review_categories: dict[str, str] | list[tuple[str, str]] | None = None,
     reviewer_config: dict[str, Any] | None = None,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build the review phase prompt."""
     heuristic_section = _review_heuristic_section(heuristic_findings)
+    if relay:
+        return (
+            "Review the plan implementation.\n\n"
+            "EXECUTION RESULTS:\n"
+            f"{step_results_json}\n\n"
+            f"{heuristic_section}"
+            "Inspect the worktree directly with your tools and use /ai-review to consolidate findings.\n"
+            "If /ai-review is unavailable, continue with your own review.\n\n"
+            "Return ONLY valid JSON with fields:\n"
+            "- review_id (uuid)\n"
+            "- verdict (approve|request_changes|reject)\n"
+            "- score (1-10)\n"
+            "- findings (array)\n"
+            "- summary (string)\n"
+            "- blocks_merge (boolean)\n\n"
+            "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        )
     categories_section = _review_categories_section(review_categories)
     repo_context_section = _reviewer_context_section(reviewer_config)
     return (
@@ -192,8 +270,19 @@ def build_review_codex_prompt(
     git_diff: str,
     review_json: str,
     schema_json: str,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build Codex's independent review prompt inside the REVIEWING phase."""
+    if relay:
+        return (
+            "Review this implementation independently and evaluate Claude's review.\n"
+            "Inspect the code directly with your tools.\n\n"
+            "CLAUDE REVIEW REPORT:\n"
+            f"{review_json}\n\n"
+            "Return a JSON with these required fields: review_id (uuid), verdict (approve|request_changes|reject), score (1-10), findings (array), summary (string), blocks_merge (boolean).\n"
+            "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
+        )
     return (
         "The following task was implemented in my codebase and reviewed by Claude. Perform an independent review of both the implementation and Claude's review.\n"
         "Additionally, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
@@ -216,8 +305,21 @@ def build_review_codex_prompt(
 def build_review_final_claude_prompt(
     codex_review_json: str,
     schema_json: str,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build Claude Opus/max final review-debate prompt."""
+    if relay:
+        return (
+            "Codex disagrees with your review.\n\n"
+            "Decide whether the implementation can pass or must be fixed.\n"
+            "Return ONLY JSON with fields:\n"
+            "- position (issues_confirmed|issues_dismissed|issues_accepted)\n"
+            "- reasoning (string)\n"
+            "- issues (array)\n\n"
+            "CODEX REVIEW REPORT AND PUSHBACK:\n"
+            f"{codex_review_json}\n\n"
+        )
     return (
         "Codex disagrees with your review.\n\n"
         "Decide whether the implementation can pass or must be fixed.\n"
@@ -256,12 +358,20 @@ def build_analysis_synthesis_prompt() -> str:
 def build_retry_prompt(
     original_prompt: str,
     error_message: str,
+    *,
+    relay: bool = False,
 ) -> str:
     """Build a retry prompt when the previous response was invalid.
 
     Per AGENTS.md Retry Protocol, includes the validation error and the
     full original prompt because each retry runs in a fresh subprocess.
     """
+    if relay:
+        return (
+            "Your previous response was not valid. Error: "
+            f"{error_message}\n\n"
+            "Fix the error and try again.\n"
+        )
     return (
         "Your previous response was not valid. Error: "
         f"{error_message}\n\n"
