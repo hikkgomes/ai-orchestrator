@@ -39,7 +39,7 @@ from .config import Config, ConfigError, load_config
 from .doctor import run_doctor
 from .engine import Engine, EngineError
 from .models import RunState
-from .modes import AnalysisSettings, Mode, ReviewSettings
+from .modes import AnalysisSettings, AutonomousSettings, Mode, ReviewSettings
 from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import OrchestratorUI, TERMINAL_STATES
@@ -55,6 +55,7 @@ def _build_engine(
     config: Config | None = None,
     skip_review: bool = False,
     autonomous_max_iterations: int | None = None,
+    review_rounds: int | None = None,
 ) -> Engine:
     _ensure_runtime_gitignore(ctx)
     return Engine(
@@ -64,6 +65,7 @@ def _build_engine(
         ui=ctx.obj["ui"],
         skip_review=skip_review,
         autonomous_max_iterations=autonomous_max_iterations,
+        review_rounds=review_rounds,
     )
 
 
@@ -499,7 +501,13 @@ def cmd_review(
     )
     ctx.obj["ui"].print_mode_header(Mode.REVIEW.value, settings)
     interactive = interactive and not detach
-    engine = _build_engine(ctx)
+    config = deepcopy(_require_config(ctx))
+    if settings.escalation_model:
+        config.debate.escalated_claude_model = settings.escalation_model
+        config.debate.review_codex_model = settings.escalation_model
+    if settings.escalation_effort:
+        config.debate.escalated_claude_effort = settings.escalation_effort
+    engine = _build_engine(ctx, config=config, review_rounds=settings.rounds)
     run_id = str(uuid4())
     state = engine.start(
         task,
@@ -520,8 +528,8 @@ def cmd_review(
 @click.option("--rounds", type=int, default=None)
 @click.option("--claude-model", default="")
 @click.option("--codex-model", default="")
-@click.option("--claude-effort", default="high")
-@click.option("--codex-effort", default="high")
+@click.option("--claude-effort", default="")
+@click.option("--codex-effort", default="")
 @click.option("--escalation-model", default="")
 @click.option("--escalation-effort", default="")
 @click.pass_context
@@ -541,10 +549,10 @@ def cmd_analysis(
     config = _require_config(ctx)
     settings = AnalysisSettings(
         rounds=rounds or config.modes.analysis_rounds,
-        claude_model=claude_model,
-        codex_model=codex_model,
-        claude_effort=claude_effort,
-        codex_effort=codex_effort,
+        claude_model=claude_model or config.routing.claude.model,
+        codex_model=codex_model or config.routing.codex.model,
+        claude_effort=claude_effort or config.routing.claude.reasoning_effort,
+        codex_effort=codex_effort or config.routing.codex.reasoning_effort,
         escalation_model=escalation_model or config.modes.analysis_escalation_model,
         escalation_effort=escalation_effort or config.modes.analysis_escalation_effort,
     )
@@ -558,15 +566,11 @@ def cmd_analysis(
 @main.command("auto")
 @click.argument("task", required=False)
 @click.option("--max-iterations", type=int, default=None)
-@click.option("--interactive/--no-interactive", default=True)
-@click.option("--detach", is_flag=True, default=False, help="Alias for --no-interactive.")
 @click.pass_context
 def cmd_auto(
     ctx: click.Context,
     task: str | None,
     max_iterations: int | None,
-    interactive: bool,
-    detach: bool,
 ) -> None:
     """Run the full pipeline without approval gates."""
     task = task or _read_task_from_stdin_or_prompt()
@@ -574,18 +578,17 @@ def cmd_auto(
     config.approval.require_plan_approval = False
     config.approval.require_merge_approval = False
     limit = max_iterations or config.modes.autonomous_max_iterations
-    interactive = interactive and not detach
-    ctx.obj["ui"].print_mode_header(Mode.AUTONOMOUS.value, type("Settings", (), {"max_iterations": limit})())
+    ctx.obj["ui"].print_mode_header(Mode.AUTONOMOUS.value, AutonomousSettings(max_iterations=limit))
     state = _start_run(
         ctx,
         task,
-        interactive,
+        False,
         skip_scoping=False,
         mode=Mode.AUTONOMOUS.value,
         config=config,
         autonomous_max_iterations=limit,
     )
-    if state.status == "PAUSED" and state.current_phase == "REVIEWING" and interactive:
+    if state.status == "PAUSED" and state.current_phase == "REVIEWING":
         if _confirm_choice(f"Autonomous fix limit ({limit}) reached. Continue?", default=False):
             state.fix_iteration_count = 0
             StateManager(ctx.obj["artifact_root"]).save(state)
@@ -720,7 +723,7 @@ def _run_shell(ctx: click.Context) -> None:
                 detach=False,
             )
         elif mode == Mode.AUTONOMOUS:
-            ctx.invoke(cmd_auto, task=task, max_iterations=None, interactive=True, detach=False)
+            ctx.invoke(cmd_auto, task=task, max_iterations=None)
         else:
             _start_run(ctx, task, True, skip_scoping=False)
 
@@ -1079,7 +1082,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         elif state.current_phase == "APPROVAL_PLAN":
             gate = "plan"
         else:
-            return engine.resume(run_id)
+            return state
         if gate == "scope":
             if state.normalized_task or state.complexity_tier:
                 ui.print_scoping_result(

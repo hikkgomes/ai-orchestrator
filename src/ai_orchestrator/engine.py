@@ -103,7 +103,9 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
     WorkflowStatus.TERMINATED: set(),
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
+        WorkflowStatus.PLANNING,
         WorkflowStatus.APPROVAL_PLAN,
+        WorkflowStatus.EXECUTING,
         WorkflowStatus.REVIEWING,
     },
     WorkflowStatus.BLOCKED_ON_CLI: {
@@ -134,6 +136,7 @@ class Engine:
         ui: Any | None = None,
         skip_review: bool = False,
         autonomous_max_iterations: int | None = None,
+        review_rounds: int | None = None,
     ) -> None:
         self._config = config
         self._repo_root = repo_root.resolve()
@@ -150,6 +153,7 @@ class Engine:
         self._ui = ui
         self._skip_review = skip_review
         self._autonomous_max_iterations = autonomous_max_iterations
+        self._review_rounds = review_rounds
 
     def start(
         self,
@@ -884,6 +888,20 @@ class Engine:
                 claude_review = self._load_saved_claude_review(state)
                 claude_has_issues = self._review_has_issues(claude_review)
 
+            if self._review_rounds is not None and self._review_rounds <= 1:
+                if claude_has_issues:
+                    if state.debate_state:
+                        state.debate_state.final_verdict = "fix"
+                        state.debate_state.consolidated_issues = self._issues_from_review(claude_review)
+                        state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                    self._state_mgr.save(state)
+                    return self._debate_resolve_fix(state)
+                if state.debate_state:
+                    state.debate_state.final_verdict = "pass"
+                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                self._state_mgr.save(state)
+                return self._debate_resolve_pass(state)
+
             if state.debate_state.debate_phase == ReviewDebatePhase.CODEX_REVIEW:
                 codex_prompt = build_review_codex_prompt(
                     task_description=state.normalized_task or state.task,
@@ -973,6 +991,22 @@ class Engine:
                 self._state_mgr.save(state)
             else:
                 codex_review = self._load_codex_review_from_debate(state)
+            if self._review_rounds is not None and self._review_rounds <= 2:
+                if claude_has_issues or self._review_has_issues(codex_review):
+                    if state.debate_state:
+                        state.debate_state.final_verdict = "fix"
+                        state.debate_state.consolidated_issues = (
+                            self._issues_from_review(claude_review)
+                            or self._issues_from_review(codex_review)
+                        )
+                        state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                    self._state_mgr.save(state)
+                    return self._debate_resolve_fix(state)
+                if state.debate_state:
+                    state.debate_state.final_verdict = "pass"
+                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                self._state_mgr.save(state)
+                return self._debate_resolve_pass(state)
             final_prompt = build_review_final_claude_prompt(
                 codex_review_json=json_block(codex_review),
                 schema_json=json_block(debate_schema),

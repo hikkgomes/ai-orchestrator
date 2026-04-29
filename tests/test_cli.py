@@ -8,11 +8,21 @@ from click.testing import CliRunner
 from rich.console import Console
 
 from ai_orchestrator.bootstrap import DEFAULT_WORKFLOW
-from ai_orchestrator.cli import _adjust_execution_settings, _available_models_for_cli, main
+from ai_orchestrator.cli import (
+    _adjust_execution_settings,
+    _available_models_for_cli,
+    _drive_interactive_approvals,
+    main,
+)
 from ai_orchestrator.config import Config, PhaseRoutingOverride
 from ai_orchestrator.models import RunState
 from ai_orchestrator.state import StateManager
 from ai_orchestrator.ui import OrchestratorUI
+
+
+class _Ctx:
+    def __init__(self, obj):
+        self.obj = obj
 
 
 def test_root_help_lists_primary_commands():
@@ -198,6 +208,37 @@ def test_debate_tiebreaker_gate_is_removed(monkeypatch):
     assert result.exit_code != 0
     assert "debate_tiebreaker" in result.output
     assert "is not one of 'scope', 'plan'" in result.output
+
+
+def test_drive_interactive_approvals_returns_unknown_pause_gate(tmp_path, monkeypatch):
+    artifact_root = tmp_path / ".ai-orchestrator"
+    state = RunState(
+        run_id="99999999-9999-4999-8999-999999999999",
+        task="Autonomous task",
+        status="PAUSED",
+        current_phase="REVIEWING",
+    )
+    StateManager(artifact_root).save(state)
+
+    class FakeEngine:
+        def resume(self, run_id):
+            raise AssertionError("unknown pause gates should not auto-resume")
+
+    monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx: FakeEngine())
+    ctx = _Ctx(
+        {
+            "artifact_root": artifact_root,
+            "repo_root": tmp_path,
+            "ui": OrchestratorUI(console=Console(file=sys.stdout), stderr_console=Console(file=sys.stderr)),
+            "config": Config(),
+            "config_error": None,
+        }
+    )
+
+    resumed = _drive_interactive_approvals(ctx, state.run_id)
+
+    assert resumed.status == "PAUSED"
+    assert resumed.current_phase == "REVIEWING"
 
 
 def test_show_latest_plan_renders_full_plan(tmp_path, monkeypatch):

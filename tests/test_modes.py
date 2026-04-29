@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from ai_orchestrator.adapters.base import TextInvokeResult
+from ai_orchestrator.analysis import AnalysisRunner, DebateLoop
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import Config, load_config
 from ai_orchestrator.models import AnalysisSession, RunState
@@ -66,7 +68,97 @@ def test_analysis_session_round_trips_and_lists(tmp_path):
     store.save_analysis_session(session)
 
     loaded = store.load_analysis_session(session.session_id)
+    loaded_by_prefix = store.load_analysis_session(session.session_id[:8])
     listed = store.list_sessions("analysis")
     assert loaded.final_summary == "Use option A."
+    assert loaded_by_prefix.session_id == session.session_id
     assert listed[0]["session_id"] == session.session_id
     assert listed[0]["mode"] == "analysis"
+
+
+class _TextAdapter:
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def invoke_text(self, *args, **kwargs):
+        self.calls += 1
+        text = self.responses.pop(0) if self.responses else "agreement: false\nMore analysis."
+        return TextInvokeResult(text=text, session_id=f"session-{self.calls}")
+
+
+def test_debate_loop_stops_on_consensus(tmp_path):
+    claude = _TextAdapter(["agreement: true\nI agree."])
+    codex = _TextAdapter(["agreement: false\nOne addition."])
+    loop = DebateLoop(tmp_path, 30)
+
+    rounds, _, _, consensus = loop.run(
+        claude,
+        codex,
+        "Claude initial",
+        "Codex initial",
+        3,
+        {"model": "", "effort": ""},
+    )
+
+    assert consensus is True
+    assert len(rounds) == 2
+    assert claude.calls == 1
+    assert codex.calls == 1
+
+
+def test_debate_loop_alternates_round_order(tmp_path):
+    claude = _TextAdapter(["agreement: false\nClaude r1.", "agreement: false\nClaude r2."])
+    codex = _TextAdapter(["agreement: false\nCodex r1.", "agreement: false\nCodex r2."])
+    loop = DebateLoop(tmp_path, 30)
+
+    rounds, _, _, consensus = loop.run(
+        claude,
+        codex,
+        "Claude initial",
+        "Codex initial",
+        2,
+        {"model": "", "effort": ""},
+    )
+
+    assert consensus is False
+    assert [(round_ .round_number, round_.actor) for round_ in rounds] == [
+        (1, "codex"),
+        (1, "claude"),
+        (2, "claude"),
+        (2, "codex"),
+    ]
+
+
+def test_continue_session_does_not_create_orphan(monkeypatch, tmp_path):
+    class FakeClaude(_TextAdapter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(
+                [
+                    "Claude initial.",
+                    "agreement: true\nClaude agrees.",
+                    "Final synthesis.",
+                ]
+            )
+
+    class FakeCodex(_TextAdapter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(["Codex initial.", "agreement: false\nCodex adds detail."])
+
+    monkeypatch.setattr("ai_orchestrator.analysis.ClaudeAdapter", FakeClaude)
+    monkeypatch.setattr("ai_orchestrator.analysis.CodexAdapter", FakeCodex)
+    artifact_root = tmp_path / ".ai-orchestrator"
+    store = ArtifactStore(artifact_root)
+    session = AnalysisSession(
+        session_id="33333333-3333-4333-8333-333333333333",
+        task="Analyze this",
+        rounds=[],
+        final_summary="Prior summary.",
+    )
+    store.save_analysis_session(session)
+
+    runner = AnalysisRunner(Config(), tmp_path, artifact_root)
+    runner.continue_session(session.session_id[:8], "Follow up", AnalysisSettings(rounds=2))
+
+    files = sorted((artifact_root / "analyses").glob("session-*.json"))
+    assert [path.name for path in files] == [f"session-{session.session_id}.json"]

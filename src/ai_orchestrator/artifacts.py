@@ -216,7 +216,7 @@ class ArtifactStore:
     def load_analysis_session(self, session_id: str) -> AnalysisSession:
         path = self._analysis_session_path(session_id)
         if not path.exists():
-            raise ArtifactError(f"Analysis session does not exist: {session_id}")
+            path = self._resolve_analysis_session_prefix(session_id)
         return AnalysisSession.model_validate(self._read_path_json(path))
 
     def list_analysis_sessions(self) -> list[AnalysisSession]:
@@ -306,6 +306,15 @@ class ArtifactStore:
         if not normalized.endswith(".json"):
             normalized = f"{normalized}.json"
         return self._dirs["analyses"] / normalized
+
+    def _resolve_analysis_session_prefix(self, prefix: str) -> Path:
+        normalized = prefix.removeprefix("session-").removesuffix(".json")
+        matches = sorted(self._dirs["analyses"].glob(f"session-{normalized}*.json"))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ArtifactError(f"Analysis session prefix is ambiguous: {prefix}")
+        raise ArtifactError(f"Analysis session does not exist: {prefix}")
 
     def _write_versioned_json(self, bucket: str, prefix: str, payload: dict[str, Any]) -> str:
         relative = Path(bucket) / f"{prefix}-{uuid4().hex[:8]}.json"

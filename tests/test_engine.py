@@ -445,6 +445,61 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     ]
 
 
+def test_skip_review_transitions_execution_to_merge(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    claude = FakeClaudeAdapter([_plan()], [_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+        skip_review=True,
+    )
+
+    state = engine.start(
+        "Implement feature",
+        "abababab-abab-4bab-8bab-abababababab",
+        start_at="executing",
+        plan=_plan(),
+    )
+
+    assert state.status == "DONE"
+    assert codex.execution_calls == 1
+    assert claude.review_calls == 0
+
+
+def test_autonomous_limit_pauses_review_fix_loop(tmp_repo, artifact_root, default_config):
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": FakeClaudeAdapter([], []), "codex": FakeCodexAdapter()},
+        workflow=_workflow(),
+        autonomous_max_iterations=1,
+    )
+    state = RunState(
+        run_id="acacacac-acac-4cac-8cac-acacacacacac",
+        task="Implement feature",
+        status=WorkflowStatus.REVIEWING,
+        current_phase=WorkflowStatus.REVIEWING.value,
+        fix_iteration_count=1,
+        debate_state=DebateState(
+            debate_phase=ReviewDebatePhase.RESOLVED,
+            final_verdict="fix",
+            consolidated_issues=[{"severity": "major", "description": "Fix it."}],
+        ),
+    )
+
+    paused = engine._debate_resolve_fix(state)
+
+    assert paused.status == "PAUSED"
+    assert paused.current_phase == "REVIEWING"
+    assert paused.error == "Autonomous limit: 1 fix iterations"
+
+
 def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo, artifact_root, default_config):
     default_config.approval.require_plan_approval = False
     default_config.approval.require_merge_approval = False

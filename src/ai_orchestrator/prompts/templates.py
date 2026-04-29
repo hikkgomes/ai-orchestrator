@@ -242,6 +242,7 @@ def build_analysis_debate_prompt(other_analysis: str) -> str:
     """Build a debate-round prompt using existing session context."""
     return (
         "Review the other AI's latest analysis. State where you agree, disagree, and what you would add.\n"
+        "Start with a line exactly like: agreement: true or agreement: false.\n"
         "Be concise and focus on decision-useful differences.\n\n"
         f"OTHER ANALYSIS:\n{other_analysis}\n"
     )
