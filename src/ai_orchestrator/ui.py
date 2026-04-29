@@ -26,6 +26,11 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+try:  # pragma: no cover - optional dependency fallback for minimal test envs
+    from prompt_toolkit.formatted_text import FormattedText
+except Exception:  # pragma: no cover
+    FormattedText = list  # type: ignore[misc,assignment]
+
 from .models import Plan, RunState, WorkflowStatus
 
 try:  # pragma: no cover - optional dependency fallback for minimal test envs
@@ -166,6 +171,34 @@ _REVIEWING_MESSAGES = {
     ],
 }
 
+MODE_COLORS = {
+    "default": "#888888",
+    "analysis": "#b58900",
+    "quick_execute": "#859900",
+    "review": "#268bd2",
+    "autonomous": "#dc322f",
+}
+
+MODE_LABELS = {
+    "default": "default",
+    "analysis": "analysis",
+    "quick_execute": "execute",
+    "review": "review",
+    "autonomous": "auto",
+}
+
+
+def build_prompt_message(mode: str) -> FormattedText:
+    color = MODE_COLORS.get(mode, "#888888")
+    label = MODE_LABELS.get(mode, mode)
+    return FormattedText(
+        [
+            (f"bold {color}", f"[{label}]"),
+            ("", " "),
+            ("#666666", "> "),
+        ]
+    )
+
 
 def random_message(pool: list[str]) -> str:
     return random.choice(pool)
@@ -211,10 +244,9 @@ class OrchestratorUI:
     def phase_banner(self, phase: str, detail: str = "") -> None:
         """Print a visible phase separator."""
         subtitle = detail or _PHASE_SUBTITLES.get(phase, "")
-        label = f"--- {phase.title().replace('_', ' ')}"
+        label = f"▸ {phase.title().replace('_', ' ')}"
         if subtitle:
             label += f": {subtitle}"
-        label += " ---"
         self.stderr_console.print(f"\n[bold cyan]{label}[/bold cyan]")
 
     def scoping_message(self, key: str) -> str:
@@ -460,10 +492,6 @@ class OrchestratorUI:
             )
         )
 
-    @staticmethod
-    def mode_prompt_prefix(mode: str) -> str:
-        return f"[{mode}] > "
-
     def print_doctor_report(self, report: Any) -> None:
         """Render doctor checks as a rich table."""
         table = Table(
@@ -578,10 +606,13 @@ class OrchestratorUI:
         )
 
     def error(self, message: str) -> None:
-        self.stderr_console.print(Panel(message, title="Error", border_style="bold red"))
+        if "\n" in message:
+            self.stderr_console.print(Panel(message, title="Error", border_style="bold red"))
+            return
+        self.stderr_console.print(f"  [bold red]✗ {message}[/bold red]")
 
     def warning(self, message: str) -> None:
-        self.stderr_console.print(Panel(message, title="Warning", border_style="yellow"))
+        self.stderr_console.print(f"  [yellow]⚠ {message}[/yellow]")
 
     def info(self, message: str) -> None:
         self.stderr_console.print(Text(message, style="dim"))
