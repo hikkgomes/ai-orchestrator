@@ -91,7 +91,13 @@ TRANSITIONS: dict[WorkflowStatus, set[WorkflowStatus]] = {
         WorkflowStatus.PAUSED,
     },
     WorkflowStatus.DONE: set(),
-    WorkflowStatus.FAILED: set(),
+    WorkflowStatus.FAILED: {
+        WorkflowStatus.SCOPING,
+        WorkflowStatus.PLANNING,
+        WorkflowStatus.EXECUTING,
+        WorkflowStatus.REVIEWING,
+        WorkflowStatus.MERGING,
+    },
     WorkflowStatus.TERMINATED: set(),
     WorkflowStatus.PAUSED: {
         WorkflowStatus.SCOPING,
@@ -184,8 +190,18 @@ class Engine:
     def resume(self, run_id: str) -> RunState:
         state = self._state_mgr.load(run_id)
         status = WorkflowStatus(state.status)
-        if status in {WorkflowStatus.DONE, WorkflowStatus.FAILED, WorkflowStatus.TERMINATED}:
+        if status in {WorkflowStatus.DONE, WorkflowStatus.TERMINATED}:
             raise EngineError(f"Run {run_id} is not resumable from {status.value}")
+        if status == WorkflowStatus.FAILED:
+            resume_phase = self._failed_resume_phase(state)
+            self._clear_retry_counts_for_phase(state, resume_phase)
+            state = self._transition(
+                state,
+                resume_phase,
+                current_phase=resume_phase.value,
+                error=None,
+            )
+            return self._run(state)
         if status == WorkflowStatus.PAUSED:
             state = self._transition(
                 state,
@@ -204,6 +220,25 @@ class Engine:
         elif status == WorkflowStatus.CONFLICT:
             state = self._transition(state, WorkflowStatus.MERGING)
         return self._run(state)
+
+    def _failed_resume_phase(self, state: RunState) -> WorkflowStatus:
+        phase = WorkflowStatus(state.current_phase)
+        if (
+            phase in {WorkflowStatus.EXECUTING, WorkflowStatus.REVIEWING, WorkflowStatus.MERGING}
+            and not state.is_workspace
+            and (not state.worktree_path or not Path(state.worktree_path).exists())
+        ):
+            return WorkflowStatus.EXECUTING
+        return phase
+
+    @staticmethod
+    def _clear_retry_counts_for_phase(state: RunState, phase: WorkflowStatus) -> None:
+        prefixes = {
+            WorkflowStatus.REVIEWING: ("reviewing", "review-final"),
+        }.get(phase, (phase.value.lower(),))
+        for key in list(state.retry_counts):
+            if key.startswith(prefixes):
+                del state.retry_counts[key]
 
     def approve(
         self,
@@ -778,8 +813,9 @@ class Engine:
         review_resume_session_id: str | None = None
         if self._config.sessions.enable_unified_session and self._config.sessions.enable_review_resume:
             review_resume_session_id = state.session_ids.get("claude_main")
-        state.session_ids.pop("reviewing", None)
-        state.debate_state = DebateState(debate_phase=ReviewDebatePhase.CLAUDE_REVIEW)
+        if not state.debate_state or state.debate_state.debate_phase == ReviewDebatePhase.CLAUDE_REVIEW:
+            state.session_ids.pop("reviewing", None)
+            state.debate_state = DebateState(debate_phase=ReviewDebatePhase.CLAUDE_REVIEW)
         self._state_mgr.save(state)
 
         def clear_review_resume_on_retry() -> None:
@@ -787,137 +823,145 @@ class Engine:
             review_resume_session_id = None
 
         try:
-            invoke_result = self._invoke_with_retries(
-                state,
-                retry_key="reviewing",
-                retries=self._retry_limit("reviewing"),
-                spinner_label=self._reviewing_message("claude_reviews", "Claude is reviewing the implementation..."),
-                invoke=lambda current_prompt: self._invoke_adapter_json(
-                    adapter,
-                    current_prompt,
-                    review_root,
-                    schema,
-                    reasoning_effort_override=review_effort,
-                    model_override=review_model,
-                    resume_session_id=review_resume_session_id,
-                    allowed_tools=review_tools,
-                    timeout_seconds=review_timeout,
-                ),
-                initial_prompt=review_prompt,
-                on_retry=clear_review_resume_on_retry,
-            )
+            assert state.debate_state is not None
+            if state.debate_state.debate_phase == ReviewDebatePhase.CLAUDE_REVIEW:
+                invoke_result = self._invoke_with_retries(
+                    state,
+                    retry_key="reviewing",
+                    retries=self._retry_limit("reviewing"),
+                    spinner_label=self._reviewing_message("claude_reviews", "Claude is reviewing the implementation..."),
+                    invoke=lambda current_prompt: self._invoke_adapter_json(
+                        adapter,
+                        current_prompt,
+                        review_root,
+                        schema,
+                        reasoning_effort_override=review_effort,
+                        model_override=review_model,
+                        resume_session_id=review_resume_session_id,
+                        allowed_tools=review_tools,
+                        timeout_seconds=review_timeout,
+                    ),
+                    initial_prompt=review_prompt,
+                    on_retry=clear_review_resume_on_retry,
+                )
 
-            claude_review = invoke_result.data
-            if invoke_result.session_id:
-                state.session_ids["reviewing"] = invoke_result.session_id
-                if self._config.sessions.enable_unified_session:
-                    state.session_ids["claude_main"] = invoke_result.session_id
-            state.review_id = self._artifacts.save_review(state.run_id, claude_review)
-            self._record_debate_round(
-                state,
-                actor="claude",
-                model_used=review_model,
-                effort_used=review_effort,
-                position="issues_confirmed" if self._review_has_issues(claude_review) else "issues_dismissed",
-                reasoning=str(claude_review.get("summary") or ""),
-                issues=self._issues_from_review(claude_review),
-            )
-            claude_has_issues = self._review_has_issues(claude_review)
-            if self._ui:
-                if claude_has_issues:
-                    self._ui.info("Claude found issues in the implementation.")
-                else:
-                    self._ui.info("Claude's review came back clean.")
-            if state.debate_state:
-                state.debate_state.debate_phase = ReviewDebatePhase.CODEX_REVIEW
-            self._state_mgr.save(state)
-
-            codex_prompt = build_review_codex_prompt(
-                task_description=state.normalized_task or state.task,
-                git_diff=git_diff,
-                review_json=json_block(claude_review),
-                schema_json=json_block(schema),
-            )
-            self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
-            codex = self._adapter("codex")
-            codex_model = self._config.debate.review_codex_model or self._resolve_model_for_phase(
-                "reviewing",
-                "codex",
-                state,
-            )
-            codex_review_resume_session_id: str | None = None
-
-            def clear_codex_review_resume_on_retry() -> None:
-                nonlocal codex_review_resume_session_id
-                codex_review_resume_session_id = None
-
-            codex_result = self._invoke_with_retries(
-                state,
-                retry_key="reviewing-codex",
-                retries=self._retry_limit("reviewing"),
-                spinner_label=self._reviewing_message("codex_reviews", "Codex is forming its verdict..."),
-                invoke=lambda current_prompt: self._invoke_adapter_json(
-                    codex,
-                    current_prompt,
-                    review_root,
-                    schema,
-                    reasoning_effort_override="high",
-                    model_override=codex_model,
-                    resume_session_id=codex_review_resume_session_id,
-                ),
-                initial_prompt=codex_prompt,
-                on_retry=clear_codex_review_resume_on_retry,
-            )
-            codex_review = codex_result.data
-            if codex_result.session_id:
-                state.session_ids["scoping_codex"] = codex_result.session_id
-            self._record_debate_round(
-                state,
-                actor="codex",
-                model_used=codex_model,
-                effort_used="high",
-                position="issues_confirmed" if self._review_has_issues(codex_review) else "issues_dismissed",
-                reasoning=str(codex_review.get("summary") or ""),
-                issues=self._issues_from_review(codex_review),
-            )
-
-            codex_has_issues = self._review_has_issues(codex_review)
-            if self._ui:
-                if codex_has_issues:
+                claude_review = invoke_result.data
+                if invoke_result.session_id:
+                    state.session_ids["reviewing"] = invoke_result.session_id
+                    if self._config.sessions.enable_unified_session:
+                        state.session_ids["claude_main"] = invoke_result.session_id
+                state.review_id = self._artifacts.save_review(state.run_id, claude_review)
+                self._record_debate_round(
+                    state,
+                    actor="claude",
+                    model_used=review_model,
+                    effort_used=review_effort,
+                    position="issues_confirmed" if self._review_has_issues(claude_review) else "issues_dismissed",
+                    reasoning=str(claude_review.get("summary") or ""),
+                    issues=self._issues_from_review(claude_review),
+                )
+                claude_has_issues = self._review_has_issues(claude_review)
+                if self._ui:
                     if claude_has_issues:
-                        self._ui.info("Codex also found issues.")
+                        self._ui.info("Claude found issues in the implementation.")
                     else:
-                        self._ui.info("Codex disagrees: it found issues Claude missed.")
-                elif claude_has_issues:
-                    self._ui.info("Codex disagrees: it thinks the issues are not real.")
-                else:
-                    self._ui.info("Codex agrees with Claude.")
-            if claude_has_issues and codex_has_issues and self._review_issues_match(
-                claude_review,
-                codex_review,
-            ):
+                        self._ui.info("Claude's review came back clean.")
                 if state.debate_state:
-                    state.debate_state.final_verdict = "fix"
-                    state.debate_state.consolidated_issues = self._issues_from_review(claude_review)
-                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                    state.debate_state.debate_phase = ReviewDebatePhase.CODEX_REVIEW
                 self._state_mgr.save(state)
-                if self._ui:
-                    self._ui.info("Issues confirmed; sending back for fixes.")
-                return self._debate_resolve_fix(state)
-            if not claude_has_issues and not codex_has_issues:
-                if state.debate_state:
-                    state.debate_state.final_verdict = "pass"
-                    state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
-                self._state_mgr.save(state)
-                if self._ui:
-                    self._ui.info("Implementation approved; moving to merge.")
-                return self._debate_resolve_pass(state)
+            else:
+                claude_review = self._load_saved_claude_review(state)
+                claude_has_issues = self._review_has_issues(claude_review)
 
-            scenario = self._review_disagreement_scenario(claude_has_issues, codex_has_issues)
-            if state.debate_state:
-                state.debate_state.disagreement_case = scenario
-                state.debate_state.debate_phase = ReviewDebatePhase.ESCALATION
-            self._state_mgr.save(state)
+            if state.debate_state.debate_phase == ReviewDebatePhase.CODEX_REVIEW:
+                codex_prompt = build_review_codex_prompt(
+                    task_description=state.normalized_task or state.task,
+                    git_diff=git_diff,
+                    review_json=json_block(claude_review),
+                    schema_json=json_block(schema),
+                )
+                self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
+                codex = self._adapter("codex")
+                codex_model = self._config.debate.review_codex_model or self._resolve_model_for_phase(
+                    "reviewing",
+                    "codex",
+                    state,
+                )
+                codex_review_resume_session_id: str | None = None
+
+                def clear_codex_review_resume_on_retry() -> None:
+                    nonlocal codex_review_resume_session_id
+                    codex_review_resume_session_id = None
+
+                codex_result = self._invoke_with_retries(
+                    state,
+                    retry_key="reviewing-codex",
+                    retries=self._retry_limit("reviewing"),
+                    spinner_label=self._reviewing_message("codex_reviews", "Codex is forming its verdict..."),
+                    invoke=lambda current_prompt: self._invoke_adapter_json(
+                        codex,
+                        current_prompt,
+                        review_root,
+                        schema,
+                        reasoning_effort_override="high",
+                        model_override=codex_model,
+                        resume_session_id=codex_review_resume_session_id,
+                    ),
+                    initial_prompt=codex_prompt,
+                    on_retry=clear_codex_review_resume_on_retry,
+                )
+                codex_review = codex_result.data
+                if codex_result.session_id:
+                    state.session_ids["scoping_codex"] = codex_result.session_id
+                self._record_debate_round(
+                    state,
+                    actor="codex",
+                    model_used=codex_model,
+                    effort_used="high",
+                    position="issues_confirmed" if self._review_has_issues(codex_review) else "issues_dismissed",
+                    reasoning=str(codex_review.get("summary") or ""),
+                    issues=self._issues_from_review(codex_review),
+                )
+
+                codex_has_issues = self._review_has_issues(codex_review)
+                if self._ui:
+                    if codex_has_issues:
+                        if claude_has_issues:
+                            self._ui.info("Codex also found issues.")
+                        else:
+                            self._ui.info("Codex disagrees: it found issues Claude missed.")
+                    elif claude_has_issues:
+                        self._ui.info("Codex disagrees: it thinks the issues are not real.")
+                    else:
+                        self._ui.info("Codex agrees with Claude.")
+                if claude_has_issues and codex_has_issues and self._review_issues_match(
+                    claude_review,
+                    codex_review,
+                ):
+                    if state.debate_state:
+                        state.debate_state.final_verdict = "fix"
+                        state.debate_state.consolidated_issues = self._issues_from_review(claude_review)
+                        state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                    self._state_mgr.save(state)
+                    if self._ui:
+                        self._ui.info("Issues confirmed; sending back for fixes.")
+                    return self._debate_resolve_fix(state)
+                if not claude_has_issues and not codex_has_issues:
+                    if state.debate_state:
+                        state.debate_state.final_verdict = "pass"
+                        state.debate_state.debate_phase = ReviewDebatePhase.RESOLVED
+                    self._state_mgr.save(state)
+                    if self._ui:
+                        self._ui.info("Implementation approved; moving to merge.")
+                    return self._debate_resolve_pass(state)
+
+                scenario = self._review_disagreement_scenario(claude_has_issues, codex_has_issues)
+                if state.debate_state:
+                    state.debate_state.disagreement_case = scenario
+                    state.debate_state.debate_phase = ReviewDebatePhase.ESCALATION
+                self._state_mgr.save(state)
+            else:
+                codex_review = self._load_codex_review_from_debate(state)
             final_prompt = build_review_final_claude_prompt(
                 codex_review_json=json_block(codex_review),
                 schema_json=json_block(debate_schema),
@@ -1091,6 +1135,29 @@ class Engine:
         state.error = None
         self._state_mgr.save(state)
         return self._transition(state, WorkflowStatus.MERGING)
+
+    def _load_saved_claude_review(self, state: RunState) -> dict[str, Any]:
+        if not state.review_id:
+            raise EngineError("Cannot resume review after Claude phase: missing saved Claude review artifact")
+        return self._artifacts.read_json(state.review_id)
+
+    @staticmethod
+    def _load_codex_review_from_debate(state: RunState) -> dict[str, Any]:
+        if not state.debate_state:
+            raise EngineError("Cannot resume review escalation: missing debate state")
+        for round_ in reversed(state.debate_state.rounds):
+            if round_.actor != "codex":
+                continue
+            blocks_merge = round_.position in {"issues_confirmed", "issues_accepted"}
+            return {
+                "review_id": str(uuid4()),
+                "verdict": "request_changes" if blocks_merge else "approve",
+                "score": 5 if blocks_merge else 9,
+                "findings": round_.issues,
+                "summary": round_.reasoning,
+                "blocks_merge": blocks_merge,
+            }
+        raise EngineError("Cannot resume review escalation: missing Codex debate round")
 
     def _record_debate_round(
         self,

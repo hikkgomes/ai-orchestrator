@@ -274,6 +274,18 @@ resume one unified session across phases:
 
 ---
 
+## Resuming Failed Runs
+
+`FAILED` runs can be resumed with `orch resume <run-id>`:
+
+- `SCOPING` and `PLANNING` failures resume at the failed phase.
+- `EXECUTING`, `REVIEWING`, and `MERGING` failures resume at the failed phase when the managed worktree still exists.
+- If the managed worktree was discarded or is missing, resume falls back to `EXECUTING` so the implementation can be recreated from the saved plan.
+- Review sub-phases are preserved: a failure after Claude review resumes at Codex review, and a failure after Codex review resumes at the final tiebreaker instead of repeating completed review work.
+- Retry counters for the resumed phase are cleared before re-entry so the resumed attempt receives a fresh retry budget.
+
+---
+
 ## Logging
 
 | Log | Location | Retention |

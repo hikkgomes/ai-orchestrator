@@ -11,7 +11,7 @@ from ai_orchestrator.adapters.base import BlockedOnCLI, InvokeResult, StepFailur
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import PhaseRoutingOverride
 from ai_orchestrator.engine import Engine, EngineError
-from ai_orchestrator.models import RunState, WorkflowStatus
+from ai_orchestrator.models import DebateState, ReviewDebatePhase, RunState, WorkflowStatus
 from ai_orchestrator.state import StateManager
 from ai_orchestrator.workflow import load_workflow_definition
 
@@ -1507,6 +1507,145 @@ def test_resume_paused_without_decision_re_pauses(tmp_repo, artifact_root, defau
 
     assert resumed.status == "PAUSED"
     assert resumed.current_phase == "APPROVAL_PLAN"
+
+
+def test_resume_failed_scoping_re_enters_scoping(tmp_repo, artifact_root, default_config):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    state_mgr = StateManager(artifact_root)
+    state_mgr.save(
+        RunState(
+            run_id="f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1",
+            task="Implement feature",
+            status=WorkflowStatus.FAILED,
+            current_phase=WorkflowStatus.SCOPING.value,
+            error="scoping failed",
+        )
+    )
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    resumed = engine.resume("f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1")
+
+    assert resumed.status == "DONE"
+    assert claude.scoping_calls >= 1
+
+
+def test_resume_failed_reviewing_at_codex_review_skips_claude_review(
+    tmp_repo,
+    artifact_root,
+    default_config,
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    run_id = "f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2"
+    store = ArtifactStore(artifact_root)
+    execution_ref = store.save_execution_result(
+        run_id,
+        {
+            "status": "success",
+            "files_changed": [{"path": "step-1.txt", "action": "created", "summary": "Created step 1."}],
+            "summary": "Implemented.",
+            "issues": [],
+            "test_commands": [],
+            "workspace_diffs": {"repo": "diff --git a/step-1.txt b/step-1.txt\n"},
+        },
+    )
+    review_ref = store.save_review(run_id, _review_with_issue())
+    StateManager(artifact_root).save(
+        RunState(
+            run_id=run_id,
+            task="Implement feature",
+            status=WorkflowStatus.FAILED,
+            current_phase=WorkflowStatus.REVIEWING.value,
+            normalized_task="Implement feature",
+            execution_result_ref=execution_ref,
+            step_results=[execution_ref],
+            review_id=review_ref,
+            retry_counts={"reviewing-codex": 3},
+            debate_state=DebateState(debate_phase=ReviewDebatePhase.CODEX_REVIEW),
+            is_workspace=True,
+            error="'verdict' is a required property",
+        )
+    )
+    claude = FakeClaudeAdapter([_plan()], [], [])
+    codex = FakeCodexAdapter(reviews=[_codex_approve_review()])
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    resumed = engine.resume(run_id)
+
+    assert resumed.status == "DONE"
+    assert claude.review_calls == 0
+    assert codex.review_calls == 1
+    assert codex.invocations[0]["resume_session_id"] is None
+
+
+def test_resume_failed_reviewing_without_worktree_falls_back_to_executing(
+    tmp_repo,
+    artifact_root,
+    default_config,
+):
+    default_config.approval.require_plan_approval = False
+    default_config.approval.require_merge_approval = False
+    run_id = "f3f3f3f3-f3f3-f3f3-f3f3-f3f3f3f3f3f3"
+    store = ArtifactStore(artifact_root)
+    plan_ref = store.save_plan_md(run_id, _plan_markdown(_plan()))
+    StateManager(artifact_root).save(
+        RunState(
+            run_id=run_id,
+            task="Implement feature",
+            status=WorkflowStatus.FAILED,
+            current_phase=WorkflowStatus.REVIEWING.value,
+            normalized_task="Implement feature",
+            complexity_tier="moderate",
+            plan_id=plan_ref,
+            error="review failed",
+        )
+    )
+    claude = FakeClaudeAdapter([_plan()], [_review()], [_codex_approve_review()])
+    codex = FakeCodexAdapter()
+    engine = Engine(
+        default_config,
+        tmp_repo,
+        artifact_root,
+        adapters={"claude": claude, "codex": codex},
+        workflow=_workflow(),
+    )
+
+    resumed = engine.resume(run_id)
+
+    assert resumed.status == "DONE"
+    assert codex.execution_calls == 1
+
+
+def test_failed_resume_clears_retry_counters_for_phase():
+    state = RunState(
+        run_id="f4f4f4f4-f4f4-f4f4-f4f4-f4f4f4f4f4f4",
+        task="Implement feature",
+        retry_counts={
+            "reviewing": 3,
+            "reviewing-codex": 3,
+            "review-final-claude": 3,
+            "planning": 2,
+        },
+    )
+
+    Engine._clear_retry_counts_for_phase(state, WorkflowStatus.REVIEWING)
+
+    assert state.retry_counts == {"planning": 2}
 
 
 def test_reset_worktree_failure_raises_engine_error(tmp_repo, artifact_root, default_config):
