@@ -123,7 +123,12 @@ def _show_home_screen(ctx: click.Context) -> None:
         run_ids = state_mgr.list_runs()
     except Exception:
         run_ids = []
-    states = [state_mgr.load(run_id) for run_id in run_ids]
+    states: list[RunState] = []
+    for run_id in run_ids:
+        try:
+            states.append(state_mgr.load(run_id))
+        except Exception:
+            continue
     active_states = set(ACTIVE_STATES)
     active_runs = [state for state in states if state.status in active_states]
     paused_runs = [state for state in states if state.status == "PAUSED"]
@@ -1093,6 +1098,8 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         if len(parts) >= 3:
             ctx.invoke(cmd_approve, run_id=parts[1], gate=parts[2], force=False, decision=None)
             return False
+        ui.warning("Usage: /approve [id] <gate>")
+        return False
     if name == "/reject":
         if len(parts) >= 3:
             if parts[1] in {"scope", "plan"}:
@@ -1112,6 +1119,8 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
                 full_reject=False,
             )
             return False
+        ui.warning("Usage: /reject [id] <gate> <reason>")
+        return False
     if name == "/logs":
         ctx.invoke(cmd_logs, run_id=(parts[1] if len(parts) > 1 else None), step=None, tail=40)
         return False
