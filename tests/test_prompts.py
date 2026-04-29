@@ -104,7 +104,7 @@ def test_build_full_execution_prompt_relay_omits_schema_json():
 
     assert "/tmp/execution.json" in prompt
     assert '{"title":"ExecutionResult"}' not in prompt
-    assert "Required JSON fields:" in prompt
+    assert "Required JSON fields (no extra fields allowed):" in prompt
     assert "no extra fields allowed" in prompt
 
 
