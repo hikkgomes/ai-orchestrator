@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 
-from .bootstrap import ensure_runtime_gitignore
+from .bootstrap import ensure_runtime_gitignore, scaffold_repository
 from .config import Config, ConfigError, load_config
 
 
@@ -52,6 +52,37 @@ def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = Non
         _check_repo_config(repo_root, effective_config),
     ]
     return DoctorReport(checks=checks)
+
+
+def run_doctor_fix(
+    repo_root: Path,
+    artifact_root: Path,
+    config: Config | None = None,
+) -> tuple[DoctorReport, list[dict[str, str]]]:
+    initial = run_doctor(repo_root, artifact_root, config)
+    actions: list[dict[str, str]] = []
+    for check in initial.checks:
+        action = fix_check(check, repo_root, artifact_root)
+        if action:
+            actions.append(action)
+    final = run_doctor(repo_root, artifact_root, config)
+    return final, actions
+
+
+def fix_check(check: DoctorCheck, repo_root: Path, artifact_root: Path) -> dict[str, str] | None:
+    if check.name == "repo-config" and check.status in {"warn", "fail"}:
+        scaffold_repository(repo_root, force=False)
+        return {"name": check.name, "status": "fixed", "detail": "Scaffolded repository config files."}
+    if check.name == "write-permissions" and check.status == "fail":
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        return {"name": check.name, "status": "fixed", "detail": f"Created {artifact_root}."}
+    if check.name in {"claude", "codex"} and check.status == "warn" and "not available on PATH" in check.summary:
+        return {
+            "name": check.name,
+            "status": "manual",
+            "detail": f"Install {check.name} and authenticate it; then rerun `orch doctor`.",
+        }
+    return None
 
 
 def _check_python() -> DoctorCheck:
@@ -247,4 +278,4 @@ def _compare_versions(left: str, right: str) -> int:
     return 0
 
 
-__all__ = ["DoctorCheck", "DoctorReport", "run_doctor"]
+__all__ = ["DoctorCheck", "DoctorReport", "run_doctor", "run_doctor_fix", "fix_check"]
