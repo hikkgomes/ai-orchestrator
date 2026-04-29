@@ -40,13 +40,14 @@ from .bootstrap import (
     scaffold_repository,
 )
 from .config import Config, ConfigError, load_config
-from .doctor import run_doctor
+from .doctor import run_doctor, run_doctor_fix
 from .engine import Engine, EngineError
 from .models import RunState
 from .modes import AnalysisSettings, AutonomousSettings, Mode, ReviewSettings
 from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import (
+    ACTIVE_STATES,
     CLAUDE_MODELS,
     CODEX_MODELS,
     EFFORT_LEVELS,
@@ -100,7 +101,7 @@ def _resolve_workspace_repos(repo_root: Path, config: Config) -> list[str]:
     ]
 
 
-def _resolve_run_id_arg(ctx: click.Context, run_id: str) -> str:
+def _resolve_run_id_arg(ctx: click.Context, run_id: str | None) -> str:
     _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     try:
@@ -111,6 +112,31 @@ def _resolve_run_id_arg(ctx: click.Context, run_id: str) -> str:
 
 def _ensure_runtime_gitignore(ctx: click.Context) -> None:
     ensure_runtime_gitignore(ctx.obj["repo_root"])
+
+
+def _show_home_screen(ctx: click.Context) -> None:
+    ui = ctx.obj["ui"]
+    repo_name = ctx.obj["repo_root"].name
+    has_config = ctx.obj["config_error"] is None
+    state_mgr = StateManager(ctx.obj["artifact_root"])
+    try:
+        run_ids = state_mgr.list_runs()
+    except Exception:
+        run_ids = []
+    states = [state_mgr.load(run_id) for run_id in run_ids]
+    active_states = set(ACTIVE_STATES)
+    active_runs = [state for state in states if state.status in active_states]
+    paused_runs = [state for state in states if state.status == "PAUSED"]
+    ui.stderr_console.print(
+        ui.render_home_screen(
+            repo_name=repo_name,
+            version=__version__,
+            has_config=has_config,
+            active_runs=active_runs,
+            paused_runs=paused_runs,
+        )
+    )
+    ctx.obj["home_shown"] = True
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]}, invoke_without_command=True)
@@ -135,6 +161,7 @@ def main(ctx: click.Context) -> None:
         ctx.obj["config_error"] = str(exc)
     ctx.obj["workspace_repos"] = _resolve_workspace_repos(repo_root, ctx.obj["config"])
     if ctx.invoked_subcommand is None:
+        _show_home_screen(ctx)
         _run_shell(ctx)
         ctx.exit()
 
@@ -153,6 +180,8 @@ def cmd_init(ctx: click.Context, force: bool, skip_review_setup: bool) -> None:
     actions = scaffold_repository(ctx.obj["repo_root"], force=force)
     if actions:
         ctx.obj["ui"].print_file_updates(actions)
+        if any(action == "created" for action, _ in actions):
+            ctx.obj["ui"].print_first_run_tutorial()
     else:
         ctx.obj["ui"].info("Repository already has the default orch scaffolding.")
 
@@ -523,7 +552,7 @@ def _start_run(
     return state
 
 
-@main.command("new")
+@main.command("new", hidden=True)
 @click.argument("task", required=False)
 @click.option(
     "--interactive/--no-interactive",
@@ -547,13 +576,11 @@ def cmd_new(
     plan_file: str | None,
 ) -> None:
     """Start a new orchestrated run for TASK."""
-    if task is None:
-        task = _read_task_from_stdin_or_prompt()
-    interactive = interactive and not detach
-    _start_run(
-        ctx,
-        task,
-        interactive,
+    ctx.invoke(
+        cmd_run,
+        task=task,
+        interactive=interactive,
+        detach=detach,
         skip_scoping=skip_scoping,
         skip_planning=skip_planning,
         start_at=start_at,
@@ -599,7 +626,7 @@ def cmd_run(
     )
 
 
-@main.command("shell")
+@main.command("shell", hidden=True)
 @click.pass_context
 def cmd_shell(ctx: click.Context) -> None:
     """Open the interactive ai-orchestrator shell."""
@@ -857,9 +884,10 @@ def _run_shell(ctx: click.Context) -> None:
     repo_name = ctx.obj["repo_root"].name
     console = ui.stderr_console
     config = _require_config(ctx)
-    console.print()
-    console.print(f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]  [dim]·  ~/{repo_name}[/dim]")
-    console.print()
+    if not ctx.obj.get("home_shown"):
+        console.print()
+        console.print(f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]  [dim]·  ~/{repo_name}[/dim]")
+        console.print()
     mode_state: dict[str, Any] = {
         "mode": Mode.DEFAULT,
         "formatted_prompt": build_prompt_message(Mode.DEFAULT.value),
@@ -1002,11 +1030,11 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         table.add_row("/quit, /exit", "Exit shell")
         table.add_row("/runs", "List pipeline runs")
         table.add_row("/sessions", "List analysis sessions")
-        table.add_row("/continue <id>", "Continue an analysis session")
+        table.add_row("/continue [id]", "Continue an analysis session")
         table.add_row("/status [id]", "Show run status")
-        table.add_row("/resume <id>", "Resume a paused/failed run")
-        table.add_row("/approve <id> <gate>", "Approve a pending gate")
-        table.add_row("/reject <id> <gate>", "Reject with feedback")
+        table.add_row("/resume [id]", "Resume a paused/failed run")
+        table.add_row("/approve [id] <gate>", "Approve a pending gate")
+        table.add_row("/reject [id] <gate>", "Reject with feedback")
         table.add_row("/config", "Configure current mode settings")
         table.add_row("/settings", "Show current configuration")
         table.add_row("/mode [name]", "Switch or show mode")
@@ -1055,29 +1083,46 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
     if name == "/status":
         ctx.invoke(cmd_status, run_id=parts[1] if len(parts) > 1 else "latest", watch=False)
         return False
-    if name == "/resume" and len(parts) >= 2:
-        ctx.invoke(cmd_resume, run_id=parts[1])
+    if name == "/resume":
+        ctx.invoke(cmd_resume, run_id=parts[1] if len(parts) >= 2 else None)
         return False
-    if name == "/approve" and len(parts) >= 3:
-        ctx.invoke(cmd_approve, run_id=parts[1], gate=parts[2], force=False, decision=None)
-        return False
-    if name == "/reject" and len(parts) >= 4:
-        ctx.invoke(
-            cmd_reject,
-            run_id=parts[1],
-            gate=parts[2],
-            reason=" ".join(parts[3:]),
-            full_reject=False,
-        )
+    if name == "/approve":
+        if len(parts) == 2:
+            ctx.invoke(cmd_approve, run_id=None, gate=parts[1], force=False, decision=None)
+            return False
+        if len(parts) >= 3:
+            ctx.invoke(cmd_approve, run_id=parts[1], gate=parts[2], force=False, decision=None)
+            return False
+    if name == "/reject":
+        if len(parts) >= 3:
+            if parts[1] in {"scope", "plan"}:
+                ctx.invoke(
+                    cmd_reject,
+                    run_id=None,
+                    gate=parts[1],
+                    reason=" ".join(parts[2:]),
+                    full_reject=False,
+                )
+                return False
+            ctx.invoke(
+                cmd_reject,
+                run_id=parts[1],
+                gate=parts[2],
+                reason=" ".join(parts[3:]) if len(parts) > 3 else "",
+                full_reject=False,
+            )
+            return False
+    if name == "/logs":
+        ctx.invoke(cmd_logs, run_id=(parts[1] if len(parts) > 1 else None), step=None, tail=40)
         return False
     ui.warning(f"Unknown shell command: {command}")
     return False
 
 
 @main.command("resume")
-@click.argument("run_id")
+@click.argument("run_id", required=False, default=None)
 @click.pass_context
-def cmd_resume(ctx: click.Context, run_id: str) -> None:
+def cmd_resume(ctx: click.Context, run_id: str | None) -> None:
     """Resume a paused or crashed run."""
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
@@ -1089,8 +1134,8 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 
 
 @main.command("approve")
-@click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan"]))
+@click.argument("run_id", required=False, default=None)
+@click.argument("gate", required=False, type=click.Choice(["scope", "plan"]))
 @click.option("--force", is_flag=True, default=False, help="Reserved for backward compatibility.")
 @click.option(
     "--decision",
@@ -1101,12 +1146,17 @@ def cmd_resume(ctx: click.Context, run_id: str) -> None:
 @click.pass_context
 def cmd_approve(
     ctx: click.Context,
-    run_id: str,
-    gate: str,
+    run_id: str | None,
+    gate: str | None,
     force: bool,
     decision: str | None,
 ) -> None:
     """Approve a pending gate."""
+    if run_id in {"scope", "plan"} and gate is None:
+        gate = run_id
+        run_id = None
+    if gate is None:
+        raise click.UsageError("Missing argument: GATE")
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
     try:
@@ -1117,13 +1167,18 @@ def cmd_approve(
 
 
 @main.command("reject")
-@click.argument("run_id")
-@click.argument("gate", type=click.Choice(["scope", "plan"]))
+@click.argument("run_id", required=False, default=None)
+@click.argument("gate", required=False, type=click.Choice(["scope", "plan"]))
 @click.option("--reason", required=True)
 @click.option("--full", "full_reject", is_flag=True, default=False, help="Terminate instead of requesting another plan.")
 @click.pass_context
-def cmd_reject(ctx: click.Context, run_id: str, gate: str, reason: str, full_reject: bool) -> None:
+def cmd_reject(ctx: click.Context, run_id: str | None, gate: str | None, reason: str, full_reject: bool) -> None:
     """Reject a pending gate with feedback."""
+    if run_id in {"scope", "plan"} and gate is None:
+        gate = run_id
+        run_id = None
+    if gate is None:
+        raise click.UsageError("Missing argument: GATE")
     engine = _build_engine(ctx)
     run_id = _resolve_run_id_arg(ctx, run_id)
     try:
@@ -1164,11 +1219,11 @@ def cmd_status(ctx: click.Context, run_id: str | None, watch: bool, refresh_inte
 
 
 @main.command("logs")
-@click.argument("run_id")
+@click.argument("run_id", required=False, default=None)
 @click.argument("step", required=False, type=int)
 @click.option("--tail", default=40, show_default=True, type=int)
 @click.pass_context
-def cmd_logs(ctx: click.Context, run_id: str, step: int | None, tail: int) -> None:
+def cmd_logs(ctx: click.Context, run_id: str | None, step: int | None, tail: int) -> None:
     """View run event logs or a step-result artifact."""
     artifact_root = ctx.obj["artifact_root"]
     ui = ctx.obj["ui"]
@@ -1190,11 +1245,15 @@ main.add_command(cmd_logs, "log")
 
 
 @main.command("show")
-@click.argument("run_id")
-@click.argument("artifact", type=click.Choice(["plan"]))
+@click.argument("run_id", required=False, default=None)
+@click.argument("artifact", required=False, default="plan", type=click.Choice(["plan"]))
 @click.pass_context
-def cmd_show(ctx: click.Context, run_id: str, artifact: str) -> None:
+def cmd_show(ctx: click.Context, run_id: str | None, artifact: str) -> None:
     """Show a full artifact for a run."""
+    valid_artifacts = {"plan"}
+    if run_id in valid_artifacts and artifact == "plan":
+        run_id = None
+        artifact = "plan"
     resolved_run_id = _resolve_run_id_arg(ctx, run_id)
     state = StateManager(ctx.obj["artifact_root"]).load(resolved_run_id)
     store = ArtifactStore(ctx.obj["artifact_root"])
@@ -1213,15 +1272,27 @@ def cmd_show(ctx: click.Context, run_id: str, artifact: str) -> None:
 
 
 @main.command("doctor")
+@click.option("--fix", "fix_mode", is_flag=True, default=False, help="Attempt to fix common issues and re-check.")
 @click.pass_context
-def cmd_doctor(ctx: click.Context) -> None:
+def cmd_doctor(ctx: click.Context, fix_mode: bool) -> None:
     """Run installation and environment checks."""
-    report = run_doctor(
-        ctx.obj["repo_root"],
-        ctx.obj["artifact_root"],
-        ctx.obj["config"],
-    )
+    if fix_mode:
+        report, actions = run_doctor_fix(
+            ctx.obj["repo_root"],
+            ctx.obj["artifact_root"],
+            ctx.obj["config"],
+        )
+        if actions:
+            ctx.obj["ui"].print_doctor_fix_actions(actions)
+    else:
+        report = run_doctor(
+            ctx.obj["repo_root"],
+            ctx.obj["artifact_root"],
+            ctx.obj["config"],
+        )
     ctx.obj["ui"].print_doctor_report(report)
+    if report.overall_status == "pass":
+        ctx.obj["ui"].print_doctor_ready()
 
 
 @main.command("update")
@@ -1391,7 +1462,13 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             ui.print_execution_info(engine.resolve_execution_settings(state))
             choice = ui.approval_choice(
                 gate,
-                f"Run {run_id} is paused at plan approval.",
+                (
+                    f"Run {run_id[:8]} has a plan ready.\n\n"
+                    "  [bold]Approve[/bold]          Start building with this plan\n"
+                    "  [bold]Request changes[/bold]  Send feedback — Claude will revise\n"
+                    "  [bold]Reject[/bold]           Stop this run\n"
+                    "  [bold]Adjust settings[/bold]  Change executor, model, or effort"
+                ),
                 choices=["approve", "soft-reject", "full-reject", "adjust"],
                 default="approve",
             )
@@ -1406,7 +1483,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 reason = ui.rejection_reason("Rejected in interactive mode")
                 state = engine.reject(run_id, gate, reason, full=False)
             continue
-        if ui.approval_prompt(gate, f"Run {run_id} is paused at {gate} approval."):
+        if ui.approval_prompt(gate, f"Run {run_id[:8]} has finished scoping. Approve to proceed to planning."):
             state = engine.approve(run_id, gate)
         else:
             reason = ui.rejection_reason("Rejected in interactive mode")
