@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from ai_orchestrator.reviewer import load_rules, run_review_scan
+from ai_orchestrator.reviewer import run_review_scan
 from ai_orchestrator.reviewer.detect_architecture import detect_architecture
 from ai_orchestrator.reviewer.detect_commands import detect_commands
 from ai_orchestrator.reviewer.installer import analyze_repo, install_reviewer
@@ -123,9 +123,3 @@ dependencies = ["fastapi>=0.1"]
     assert "keep me" in updated["notes"]
     assert updated["analyzed_at"]
 
-
-def test_load_rules_exposes_review_categories():
-    rules = load_rules()
-
-    assert rules["review_categories"]["hallucinated_api"] == "Non-existent APIs, methods, flags, or parameters."
-    assert rules["review_defaults"]["review_scope"] == "changed"

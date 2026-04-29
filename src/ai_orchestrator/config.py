@@ -250,6 +250,7 @@ def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
     orchestrator = data.get("orchestrator")
     if isinstance(orchestrator, dict):
         for key in (
+            "prompt_mode",
             "step_timeout",
             "scoping_timeout",
             "planning_timeout",

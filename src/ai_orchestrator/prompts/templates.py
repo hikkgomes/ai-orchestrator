@@ -16,21 +16,7 @@ Usage::
 from __future__ import annotations
 
 import json
-import re
-from pathlib import Path
 from typing import Any
-
-_PROMPT_TREE_MAX_DEPTH = 3
-_PROMPT_TREE_MAX_CHARS = 50_000
-_PROMPT_FILES_MAX_CHARS = 100_000
-
-_SECRET_PATTERNS = (
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(
-        r"(?im)\b(?:api[_-]?key|secret|token|password)\b\s*[:=]\s*['\"]?[A-Za-z0-9_\-+/=]{12,}"
-    ),
-)
 
 
 def build_planning_prompt(
@@ -61,17 +47,12 @@ def build_planning_prompt(
 
 def build_prescope_claude_prompt(raw_task: str) -> str:
     """Build Claude round-1 prompt that creates canonical scope.md."""
-    return _prescope_prompt(
-        raw_task=raw_task,
-        repo_summary="",
-        directory_tree="",
-        canonical=True,
-    )
+    return _prescope_prompt(raw_task=raw_task, canonical=True)
 
 
 def build_prescope_codex_prompt(raw_task: str) -> str:
     """Build Codex round-2 prompt that creates Codex's independent scope file."""
-    return _prescope_prompt(raw_task=raw_task, repo_summary="", directory_tree="", canonical=False)
+    return _prescope_prompt(raw_task=raw_task, canonical=False)
 
 
 def build_scope_compare_codex_prompt(claude_scope_md: str) -> str:
@@ -247,94 +228,6 @@ def build_fix_planning_prompt(
     )
 
 
-def render_directory_tree(
-    repo_root: Path,
-    *,
-    max_depth: int = _PROMPT_TREE_MAX_DEPTH,
-    max_chars: int = _PROMPT_TREE_MAX_CHARS,
-) -> str:
-    """Render a truncated directory tree rooted at *repo_root*."""
-    root = repo_root.resolve()
-    lines: list[str] = []
-
-    def walk(path: Path, depth: int) -> None:
-        if len("\n".join(lines)) >= max_chars:
-            return
-        if depth > max_depth:
-            return
-        names = sorted(
-            child.name
-            for child in path.iterdir()
-            if child.name not in {".git", ".ai-orchestrator", "__pycache__", ".pytest_cache"}
-        )
-        for name in names:
-            child = path / name
-            lines.append(f"{'  ' * depth}{name}")
-            if child.is_dir():
-                walk(child, depth + 1)
-
-    lines.append(root.name)
-    walk(root, 1)
-    rendered = "\n".join(lines)
-    if len(rendered) > max_chars:
-        return rendered[: max_chars - 16] + "\n... [truncated]"
-    return rendered
-
-
-def collect_file_context(
-    base_dir: Path,
-    file_paths: list[str],
-    *,
-    max_chars: int = _PROMPT_FILES_MAX_CHARS,
-) -> tuple[str, list[str]]:
-    """Read and concatenate prompt file context, excluding secret-bearing files."""
-    included: list[str] = []
-    skipped: list[str] = []
-    chunks: list[str] = []
-    total = 0
-
-    for relative_path in file_paths:
-        path = base_dir / relative_path
-        if not path.exists() or not path.is_file():
-            skipped.append(relative_path)
-            continue
-
-        content = path.read_text(encoding="utf-8", errors="replace")
-        if _contains_secret(relative_path, content):
-            skipped.append(relative_path)
-            continue
-
-        chunk = f"# {relative_path}\n{content.rstrip()}\n"
-        if total + len(chunk) > max_chars:
-            remaining = max_chars - total
-            if remaining <= 0:
-                break
-            chunk = chunk[: max(0, remaining - 16)] + "\n... [truncated]\n"
-        chunks.append(chunk)
-        included.append(relative_path)
-        total += len(chunk)
-        if total >= max_chars:
-            break
-
-    if skipped:
-        chunks.append("# excluded_files\n" + "\n".join(skipped) + "\n")
-
-    return "\n".join(chunks).strip(), skipped
-
-
-def repo_summary(repo_root: Path) -> str:
-    """Return the first non-empty README line, or a fallback marker."""
-    for name in ("README.md", "README.rst", "README.txt", "README"):
-        path = repo_root / name
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            stripped = line.strip()
-            if stripped:
-                return stripped
-    return "<no README>"
-
-
 def _review_heuristic_section(findings: list[dict[str, Any]] | None) -> str:
     if not findings:
         return ""
@@ -362,8 +255,6 @@ def json_block(data: Any) -> str:
 
 def _prescope_prompt(
     raw_task: str,
-    repo_summary: str,
-    directory_tree: str,
     *,
     canonical: bool,
 ) -> str:
@@ -397,57 +288,4 @@ def _prescope_prompt(
         "TASK:\n"
         f"{raw_task}\n\n"
         f"{output_rules}"
-        + (
-            ""
-            if not repo_summary and not directory_tree
-            else (
-                "REPOSITORY SUMMARY:\n"
-                f"{repo_summary}\n\n"
-                "REPOSITORY STRUCTURE:\n"
-                f"{directory_tree}\n"
-            )
-        )
     )
-
-
-def _contains_secret(path: str, content: str) -> bool:
-    if _is_sensitive_env_file(path):
-        return True
-    return any(pattern.search(content) for pattern in _SECRET_PATTERNS)
-
-
-def redact_secret_text(text: str) -> str:
-    """Redact inline secret-like content from prompt text."""
-    if not text:
-        return text
-
-    redacted_lines: list[str] = []
-    redact_current_file = False
-    for line in text.splitlines():
-        if line.startswith("diff --git "):
-            current_path = _diff_path(line)
-            redact_current_file = bool(current_path and _is_sensitive_env_file(current_path))
-            redacted_lines.append(line)
-            continue
-
-        if redact_current_file and line[:1] in {"+", "-", " "}:
-            redacted_lines.append(f"{line[:1]}[REDACTED SECRET-BEARING DIFF CONTENT]")
-            continue
-
-        redacted_line = line
-        for pattern in _SECRET_PATTERNS:
-            redacted_line = pattern.sub("[REDACTED SECRET]", redacted_line)
-        redacted_lines.append(redacted_line)
-
-    return "\n".join(redacted_lines)
-
-
-def _is_sensitive_env_file(path: str) -> bool:
-    return Path(path).name.startswith(".env")
-
-
-def _diff_path(line: str) -> str | None:
-    parts = line.split()
-    if len(parts) >= 4 and parts[-1].startswith("b/"):
-        return parts[-1][2:]
-    return None
