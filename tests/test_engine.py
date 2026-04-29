@@ -129,8 +129,8 @@ class FakeClaudeAdapter:
                 }
             return TextInvokeResult(_scope_md(self._last_scope), session_id="scoping-claude-session")
         if (
-            "Codex's scope and reasoning are ready" in prompt
-            or "Codex still disagrees with your scope" in prompt
+            "Codex reviewed your scope and has feedback:" in prompt
+            or "Codex still disagrees." in prompt
         ):
             return TextInvokeResult(
                 _scope_md(self._last_scope or {
@@ -431,18 +431,12 @@ def test_engine_happy_path(tmp_repo, artifact_root, default_config):
     assert state.normalized_task == "Implement feature"
     assert state.complexity_tier == "moderate"
     assert codex.executed_steps == [1, 2]
-    assert (tmp_repo / "step-1.txt").exists()
-    assert (tmp_repo / "step-2.txt").exists()
+    worktree = Path(state.worktree_path)
+    assert (worktree / "step-1.txt").exists()
+    assert (worktree / "step-2.txt").exists()
     assert len(state.step_results) == 1
     assert state.execution_result_ref == state.step_results[0]
-    assert state.commit_commands == [
-        "# Review staged changes:",
-        "git status",
-        "git diff --cached",
-        "",
-        'git commit -m "aio: Implement feature"',
-        f"git push origin {default_config.worktree.base_branch}",
-    ]
+    assert state.commit_commands[0] == "# Review changes on the worktree branch:"
 
 
 def test_skip_review_transitions_execution_to_merge(tmp_repo, artifact_root, default_config):
@@ -569,9 +563,8 @@ def test_review_prompt_includes_heuristics_categories_and_repo_context(tmp_repo,
     prompt = review_prompts[0]
     assert "HEURISTIC SCAN RESULTS:" in prompt
     assert "[placeholder] step-1.txt:1 ::" in prompt
-    assert "AI FAILURE CATEGORIES:" in prompt
-    assert "REPOSITORY CONTEXT:" in prompt
-    assert "Stack: python, fastapi" in prompt
+    assert "Inspect the worktree directly with your tools" in prompt
+    assert "Return ONLY valid JSON" in prompt
 
 
 def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_root, default_config, monkeypatch):
@@ -597,7 +590,7 @@ def test_review_changed_files_failure_degrades_gracefully(tmp_repo, artifact_roo
     assert state.status == "DONE"
     review_prompts = [item["prompt"] for item in claude.invocations if item["title"] == "Review"]
     assert review_prompts
-    assert "AI FAILURE CATEGORIES:" in review_prompts[0]
+    assert "Review the plan implementation." in review_prompts[0]
 
 
 def test_codex_review_prompt_uses_trimmed_context(tmp_repo, artifact_root, default_config):
@@ -630,9 +623,9 @@ def test_codex_review_prompt_uses_trimmed_context(tmp_repo, artifact_root, defau
     assert state.status == "DONE"
     codex_review_prompts = [item["prompt"] for item in codex.invocations if item["title"] == "Review"]
     assert codex_review_prompts
-    assert "IMPLEMENTATION DIFF:" in codex_review_prompts[0]
     assert "CLAUDE REVIEW REPORT:" in codex_review_prompts[0]
-    assert "TASK:\nNormalized implementation task" in codex_review_prompts[0]
+    assert "Task: Normalized implementation task" in codex_review_prompts[0]
+    assert "Inspect the code directly with your tools" in codex_review_prompts[0]
     assert "review_id (uuid), verdict (approve|request_changes|reject), score (1-10)" in codex_review_prompts[0]
     assert "ORIGINAL TASK:" not in codex_review_prompts[0]
 
@@ -722,7 +715,7 @@ def test_scoping_reuses_claude_session_and_passes_prescope_notes(
     assert state.session_ids["scoping_claude"] == "scope-session-1"
     assert any("Scope the request for implementation across this project" in str(item["prompt"]) for item in claude.text_invocations)
     codex_review_prompt = str(codex.text_invocations[1]["prompt"])
-    assert "CLAUDE CANONICAL SCOPE.MD:\n## Claude pre-scope" in codex_review_prompt
+    assert "I had another analysis of this task:\n\n## Claude pre-scope" in codex_review_prompt
 
 
 def test_scoping_debate_max_rounds_proceeds_without_agreement(
@@ -1094,7 +1087,7 @@ def test_review_fix_planning_preserves_existing_step_results(
     assert state.status == "DONE"
     assert state.fix_iteration_count == 1
     assert len(state.step_results) == 1
-    assert discard_phases == ["MERGING"]
+    assert discard_phases == []
 
 
 def test_review_session_id_stored_and_reused(tmp_repo, artifact_root, default_config):
