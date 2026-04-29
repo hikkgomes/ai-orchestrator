@@ -205,7 +205,7 @@ CODEX_MODELS = [
     "gpt-5.2",
 ]
 
-EFFORT_LEVELS = ["medium", "high", "xhigh", "max"]
+EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 
 
 def build_prompt_message(mode: str) -> FormattedText:

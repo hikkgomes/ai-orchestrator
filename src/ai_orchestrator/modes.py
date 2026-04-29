@@ -28,6 +28,10 @@ class AnalysisSettings:
 @dataclass
 class ReviewSettings:
     rounds: int = 3
+    claude_model: str = ""
+    codex_model: str = ""
+    claude_effort: str = "high"
+    codex_effort: str = "medium"
     escalation_model: str = ""
     escalation_effort: str = "xhigh"
 
@@ -35,6 +39,10 @@ class ReviewSettings:
 @dataclass
 class AutonomousSettings:
     max_iterations: int = 5
+    claude_model: str = ""
+    codex_model: str = ""
+    claude_effort: str = "high"
+    codex_effort: str = "medium"
 
 
 @dataclass

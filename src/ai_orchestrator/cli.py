@@ -275,33 +275,34 @@ def _mode_settings_summary(mode_state: dict[str, Any]) -> str:
         rounds = "unlimited" if s.rounds >= 999 else str(s.rounds)
         return (
             f"analysis · Claude: {s.claude_model or 'default'} ({s.claude_effort}) · "
-            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds} · /config to change"
+            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds}"
         )
     if mode == Mode.QUICK_EXECUTE:
         s = mode_state["execute"]
         return (
             f"execute · Executor: {s['cli']} · Model: {s['model'] or 'default'} ({s['effort'] or 'default'}) · "
-            f"Skip review: {'yes' if s['skip_review'] else 'no'} · /config to change"
+            f"Skip review: {'yes' if s['skip_review'] else 'no'}"
         )
     if mode == Mode.REVIEW:
         s = mode_state["review"]
         rounds = "unlimited" if s.rounds >= 999 else str(s.rounds)
         return (
             f"review · Claude: {s.claude_model or 'default'} ({s.claude_effort}) · "
-            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds} · /config to change"
+            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Rounds: {rounds}"
         )
     if mode == Mode.AUTONOMOUS:
         s = mode_state["autonomous"]
-        limit = "unlimited" if s["max_iterations"] >= 999 else str(s["max_iterations"])
+        limit = "unlimited" if s.max_iterations >= 999 else str(s.max_iterations)
         return (
-            f"auto · Claude: {s['claude_model'] or 'default'} ({s['claude_effort']}) · "
-            f"Codex: {s['codex_model'] or 'default'} ({s['codex_effort']}) · Max iterations: {limit} · /config to change"
+            f"auto · Claude: {s.claude_model or 'default'} ({s.claude_effort}) · "
+            f"Codex: {s.codex_model or 'default'} ({s.codex_effort}) · Max iterations: {limit}"
         )
-    return "default · Settings are adjusted at approval gates · /config for details"
+    return "default · Settings at approval gates"
 
 
-def _print_mode_settings_summary(ctx: click.Context, mode_state: dict[str, Any]) -> None:
-    ctx.obj["ui"].info(_mode_settings_summary(mode_state))
+def _print_mode_line(ctx: click.Context, mode_state: dict[str, Any]) -> None:
+    summary = _mode_settings_summary(mode_state)
+    ctx.obj["ui"].info(f"shift+tab {summary} · /config · /help")
 
 
 def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> None:
@@ -331,16 +332,20 @@ def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> 
         codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s.codex_effort)
         if codex_effort:
             s.codex_effort = codex_effort
-        esc_model = _select_choice(
-            "Escalation model (final round)",
-            _shell_model_choices(ctx, "claude"),
-            default=s.escalation_model or "(default)",
-        )
-        if esc_model:
-            s.escalation_model = "" if esc_model == "(default)" else esc_model
-        esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s.escalation_effort)
-        if esc_effort:
-            s.escalation_effort = esc_effort
+        if s.rounds < 999:
+            esc_model = _select_choice(
+                "Escalation model (final round)",
+                _shell_model_choices(ctx, "claude"),
+                default=s.escalation_model or "(default)",
+            )
+            if esc_model:
+                s.escalation_model = "" if esc_model == "(default)" else esc_model
+            esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s.escalation_effort)
+            if esc_effort:
+                s.escalation_effort = esc_effort
+        else:
+            s.escalation_model = ""
+            s.escalation_effort = ""
         ui.info(_mode_settings_summary(mode_state))
         return
     if mode == Mode.QUICK_EXECUTE:
@@ -358,45 +363,49 @@ def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> 
         ui.info(_mode_settings_summary(mode_state))
         return
     if mode == Mode.REVIEW:
-        s: dict[str, Any] = mode_state["review"]
-        rounds = click.prompt("Rounds (0 for unlimited)", type=int, default=(0 if s["rounds"] >= 999 else s["rounds"]))
-        s["rounds"] = _normalize_shell_count(rounds, 999)
-        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s["claude_model"] or "(default)")
+        s: ReviewSettings = mode_state["review"]
+        rounds = click.prompt("Rounds (0 for unlimited)", type=int, default=(0 if s.rounds >= 999 else s.rounds))
+        s.rounds = _normalize_shell_count(rounds, 999)
+        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s.claude_model or "(default)")
         if claude_model:
-            s["claude_model"] = "" if claude_model == "(default)" else claude_model
-        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s["claude_effort"])
+            s.claude_model = "" if claude_model == "(default)" else claude_model
+        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s.claude_effort)
         if claude_effort:
-            s["claude_effort"] = claude_effort
-        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s["codex_model"] or "(default)")
+            s.claude_effort = claude_effort
+        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s.codex_model or "(default)")
         if codex_model:
-            s["codex_model"] = "" if codex_model == "(default)" else codex_model
-        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s["codex_effort"])
+            s.codex_model = "" if codex_model == "(default)" else codex_model
+        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s.codex_effort)
         if codex_effort:
-            s["codex_effort"] = codex_effort
-        esc_model = _select_choice("Escalation model", _shell_model_choices(ctx, "claude"), default=s["escalation_model"] or "(default)")
-        if esc_model:
-            s["escalation_model"] = "" if esc_model == "(default)" else esc_model
-        esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s["escalation_effort"])
-        if esc_effort:
-            s["escalation_effort"] = esc_effort
+            s.codex_effort = codex_effort
+        if s.rounds < 999:
+            esc_model = _select_choice("Escalation model", _shell_model_choices(ctx, "claude"), default=s.escalation_model or "(default)")
+            if esc_model:
+                s.escalation_model = "" if esc_model == "(default)" else esc_model
+            esc_effort = _select_choice("Escalation effort", EFFORT_LEVELS, default=s.escalation_effort)
+            if esc_effort:
+                s.escalation_effort = esc_effort
+        else:
+            s.escalation_model = ""
+            s.escalation_effort = ""
         ui.info(_mode_settings_summary(mode_state))
         return
     if mode == Mode.AUTONOMOUS:
-        s: dict[str, Any] = mode_state["autonomous"]
-        limit = click.prompt("Max fix iterations (0 for unlimited)", type=int, default=(0 if s["max_iterations"] >= 999 else s["max_iterations"]))
-        s["max_iterations"] = _normalize_shell_count(limit, 999)
-        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s["claude_model"] or "(default)")
+        s: AutonomousSettings = mode_state["autonomous"]
+        limit = click.prompt("Max fix iterations (0 for unlimited)", type=int, default=(0 if s.max_iterations >= 999 else s.max_iterations))
+        s.max_iterations = _normalize_shell_count(limit, 999)
+        claude_model = _select_choice("Claude model", _shell_model_choices(ctx, "claude"), default=s.claude_model or "(default)")
         if claude_model:
-            s["claude_model"] = "" if claude_model == "(default)" else claude_model
-        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s["claude_effort"])
+            s.claude_model = "" if claude_model == "(default)" else claude_model
+        claude_effort = _select_choice("Claude effort", EFFORT_LEVELS, default=s.claude_effort)
         if claude_effort:
-            s["claude_effort"] = claude_effort
-        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s["codex_model"] or "(default)")
+            s.claude_effort = claude_effort
+        codex_model = _select_choice("Codex model", _shell_model_choices(ctx, "codex"), default=s.codex_model or "(default)")
         if codex_model:
-            s["codex_model"] = "" if codex_model == "(default)" else codex_model
-        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s["codex_effort"])
+            s.codex_model = "" if codex_model == "(default)" else codex_model
+        codex_effort = _select_choice("Codex effort", EFFORT_LEVELS, default=s.codex_effort)
         if codex_effort:
-            s["codex_effort"] = codex_effort
+            s.codex_effort = codex_effort
         ui.info(_mode_settings_summary(mode_state))
 
 
@@ -850,9 +859,7 @@ def _run_shell(ctx: click.Context) -> None:
     console.print(f"  [dim]Claude: {claude_label}  ·  Codex: {codex_label}[/dim]")
     console.print(f"  [dim]~/{repo_name}[/dim]")
     console.print()
-    console.print(
-        "  [dim]shift+tab[/dim] mode    [dim]/config[/dim] settings    [dim]/help[/dim] commands"
-    )
+    _print_mode_line(ctx, {"mode": Mode.DEFAULT})
     console.print()
     mode_state: dict[str, Any] = {
         "mode": Mode.DEFAULT,
@@ -866,22 +873,22 @@ def _run_shell(ctx: click.Context) -> None:
             escalation_model=config.modes.analysis_escalation_model,
             escalation_effort=config.modes.analysis_escalation_effort,
         ),
-        "review": {
-            "rounds": config.modes.review_rounds,
-            "claude_model": config.routing.claude.model,
-            "codex_model": config.routing.codex.model,
-            "claude_effort": config.routing.claude.reasoning_effort,
-            "codex_effort": config.routing.codex.reasoning_effort,
-            "escalation_model": config.modes.review_escalation_model,
-            "escalation_effort": config.modes.review_escalation_effort,
-        },
-        "autonomous": {
-            "max_iterations": config.modes.autonomous_max_iterations,
-            "claude_model": config.routing.claude.model,
-            "codex_model": config.routing.codex.model,
-            "claude_effort": config.routing.claude.reasoning_effort,
-            "codex_effort": config.routing.codex.reasoning_effort,
-        },
+        "review": ReviewSettings(
+            rounds=config.modes.review_rounds,
+            claude_model=config.routing.claude.model,
+            codex_model=config.routing.codex.model,
+            claude_effort=config.routing.claude.reasoning_effort,
+            codex_effort=config.routing.codex.reasoning_effort,
+            escalation_model=config.modes.review_escalation_model,
+            escalation_effort=config.modes.review_escalation_effort,
+        ),
+        "autonomous": AutonomousSettings(
+            max_iterations=config.modes.autonomous_max_iterations,
+            claude_model=config.routing.claude.model,
+            codex_model=config.routing.codex.model,
+            claude_effort=config.routing.claude.reasoning_effort,
+            codex_effort=config.routing.codex.reasoning_effort,
+        ),
         "execute": {"cli": "codex", "model": "", "effort": "", "skip_review": False},
     }
     session = _create_prompt_session(mode_state, ctx)
@@ -893,7 +900,7 @@ def _run_shell(ctx: click.Context) -> None:
             return
         if not task:
             if mode_state.pop("just_switched", False):
-                _print_mode_settings_summary(ctx, mode_state)
+                _print_mode_line(ctx, mode_state)
                 continue
             continue
         if task.startswith("/"):
@@ -940,17 +947,17 @@ def _run_shell(ctx: click.Context) -> None:
                 config=run_config,
             )
         elif mode == Mode.REVIEW:
-            review_settings = mode_state["review"]
+            review_settings: ReviewSettings = mode_state["review"]
             review_config = deepcopy(_require_config(ctx))
-            review_config.routing.claude.model = review_settings["claude_model"]
-            review_config.routing.claude.reasoning_effort = review_settings["claude_effort"]
-            review_config.routing.codex.model = review_settings["codex_model"]
-            review_config.routing.codex.reasoning_effort = review_settings["codex_effort"]
-            if review_settings["escalation_model"]:
-                review_config.debate.escalated_claude_model = review_settings["escalation_model"]
-            if review_settings["escalation_effort"]:
-                review_config.debate.escalated_claude_effort = review_settings["escalation_effort"]
-            engine = _build_engine(ctx, config=review_config, review_rounds=review_settings["rounds"])
+            review_config.routing.claude.model = review_settings.claude_model
+            review_config.routing.claude.reasoning_effort = review_settings.claude_effort
+            review_config.routing.codex.model = review_settings.codex_model
+            review_config.routing.codex.reasoning_effort = review_settings.codex_effort
+            if review_settings.escalation_model:
+                review_config.debate.escalated_claude_model = review_settings.escalation_model
+            if review_settings.escalation_effort:
+                review_config.debate.escalated_claude_effort = review_settings.escalation_effort
+            engine = _build_engine(ctx, config=review_config, review_rounds=review_settings.rounds)
             run_id = str(uuid4())
             state = engine.start(
                 task,
@@ -964,14 +971,14 @@ def _run_shell(ctx: click.Context) -> None:
             state = _drive_interactive_approvals(ctx, state.run_id)
             _render_run_snapshot(ctx, state.run_id, state=state)
         elif mode == Mode.AUTONOMOUS:
-            auto_settings = mode_state["autonomous"]
+            auto_settings: AutonomousSettings = mode_state["autonomous"]
             auto_config = deepcopy(_require_config(ctx))
             auto_config.approval.require_plan_approval = False
             auto_config.approval.require_merge_approval = False
-            auto_config.routing.claude.model = auto_settings["claude_model"]
-            auto_config.routing.claude.reasoning_effort = auto_settings["claude_effort"]
-            auto_config.routing.codex.model = auto_settings["codex_model"]
-            auto_config.routing.codex.reasoning_effort = auto_settings["codex_effort"]
+            auto_config.routing.claude.model = auto_settings.claude_model
+            auto_config.routing.claude.reasoning_effort = auto_settings.claude_effort
+            auto_config.routing.codex.model = auto_settings.codex_model
+            auto_config.routing.codex.reasoning_effort = auto_settings.codex_effort
             _start_run(
                 ctx,
                 task,
@@ -979,7 +986,7 @@ def _run_shell(ctx: click.Context) -> None:
                 skip_scoping=False,
                 mode=Mode.AUTONOMOUS.value,
                 config=auto_config,
-                autonomous_max_iterations=auto_settings["max_iterations"],
+                autonomous_max_iterations=auto_settings.max_iterations,
             )
         else:
             _start_run(ctx, task, True, skip_scoping=False)
