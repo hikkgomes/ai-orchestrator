@@ -167,7 +167,7 @@ class CodexAdapter(BaseAdapter):
         if result is not None:
             output_source = "result-file"
         else:
-            result = self._scan_stdout_for_json(stdout)
+            result = self._scan_stdout_for_json(stdout, required_keys=set(schema.get("required") or []))
 
         if schema_title == "StepResult":
             try:
@@ -426,7 +426,10 @@ class CodexAdapter(BaseAdapter):
             return None
 
     @staticmethod
-    def _scan_stdout_for_json(stdout: str) -> dict[str, Any] | None:
+    def _scan_stdout_for_json(
+        stdout: str,
+        required_keys: set[str] | None = None,
+    ) -> dict[str, Any] | None:
         """Scan stdout from the end for the last valid JSON object.
 
         Returns the parsed dict or None if no valid JSON found.
@@ -437,7 +440,7 @@ class CodexAdapter(BaseAdapter):
 
         jsonl_text = CodexAdapter._extract_text_from_jsonl(stripped)
         if jsonl_text:
-            parsed_jsonl = CodexAdapter._scan_stdout_for_json(jsonl_text)
+            parsed_jsonl = CodexAdapter._scan_stdout_for_json(jsonl_text, required_keys=required_keys)
             if parsed_jsonl is not None:
                 return parsed_jsonl
 
@@ -472,6 +475,11 @@ class CodexAdapter(BaseAdapter):
             if isinstance(parsed, dict) and "type" not in parsed:
                 last_dict = parsed
                 candidates.append(parsed)
+
+        if required_keys:
+            for candidate in candidates:
+                if required_keys.issubset(candidate):
+                    return candidate
 
         for candidate in candidates:
             if {"step_number", "status", "summary"}.issubset(candidate):

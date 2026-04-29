@@ -594,6 +594,27 @@ class TestCodexAdapter:
         stdout = 'noise\n{"first": true}\nmore\n{"second": true}\n'
         assert CodexAdapter._scan_stdout_for_json(stdout) == {"second": True}
 
+    def test_scan_stdout_for_json_prefers_required_schema_keys(self):
+        review = {
+            "review_id": "11111111-1111-4111-8111-111111111111",
+            "verdict": "approve",
+            "score": 9,
+            "findings": [],
+            "summary": "Looks good.",
+            "blocks_merge": False,
+        }
+        debate = {
+            "position": "issues_dismissed",
+            "reasoning": "No blocking issues.",
+            "issues": [],
+        }
+        stdout = "\n".join([json.dumps(review), json.dumps(debate)])
+
+        assert CodexAdapter._scan_stdout_for_json(
+            stdout,
+            required_keys=set(_schema("review.schema.json")["required"]),
+        ) == review
+
     def test_extracts_thread_id_from_jsonl(self):
         stdout = '\n'.join(
             [
