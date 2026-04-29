@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from ai_orchestrator.adapters.base import TextInvokeResult
-from ai_orchestrator.analysis import AnalysisRunner, DebateLoop
+from ai_orchestrator.adapters.base import BlockedOnCLI, TextInvokeResult
+from ai_orchestrator.analysis import AnalysisRunner, DebateLoop, _check_consensus, _safe_invoke_text
 from ai_orchestrator.artifacts import ArtifactStore
 from ai_orchestrator.config import Config, load_config
 from ai_orchestrator.models import AnalysisSession, RunState
@@ -89,7 +89,7 @@ class _TextAdapter:
 
 def test_debate_loop_stops_on_consensus(tmp_path):
     claude = _TextAdapter(["agreement: true\nI agree."])
-    codex = _TextAdapter(["agreement: false\nOne addition."])
+    codex = _TextAdapter(["agreement: true\nI agree too."])
     loop = DebateLoop(tmp_path, 30)
 
     rounds, _, _, consensus = loop.run(
@@ -107,6 +107,52 @@ def test_debate_loop_stops_on_consensus(tmp_path):
     assert codex.calls == 1
 
 
+def test_debate_loop_requires_both_speakers_for_consensus(tmp_path):
+    claude = _TextAdapter(
+        [
+            "agreement: true\nI agree.",
+            "agreement: true\nStill agreed.",
+        ]
+    )
+    codex = _TextAdapter(
+        [
+            "agreement: false\nOne addition.",
+            "agreement: true\nNow agreed.",
+        ]
+    )
+    loop = DebateLoop(tmp_path, 30)
+
+    rounds, _, _, consensus = loop.run(
+        claude,
+        codex,
+        "Claude initial",
+        "Codex initial",
+        3,
+        {"model": "", "effort": ""},
+    )
+
+    assert consensus is True
+    assert [(round_.round_number, round_.actor) for round_ in rounds] == [
+        (1, "codex"),
+        (1, "claude"),
+        (2, "claude"),
+        (2, "codex"),
+    ]
+
+
+def test_check_consensus_requires_exact_true_value():
+    assert _check_consensus("agreement: true") is True
+    assert _check_consensus("agreement: false") is False
+    assert _check_consensus("agreement: true, but with concerns") is False
+    assert _check_consensus("agreement: it is not true") is False
+
+
+def test_safe_invoke_text_catches_blocked_cli():
+    result = _safe_invoke_text(lambda: (_ for _ in ()).throw(BlockedOnCLI("login required")))
+
+    assert result.text == "Analysis failed: login required"
+
+
 def test_debate_loop_alternates_round_order(tmp_path):
     claude = _TextAdapter(["agreement: false\nClaude r1.", "agreement: false\nClaude r2."])
     codex = _TextAdapter(["agreement: false\nCodex r1.", "agreement: false\nCodex r2."])
@@ -122,7 +168,7 @@ def test_debate_loop_alternates_round_order(tmp_path):
     )
 
     assert consensus is False
-    assert [(round_ .round_number, round_.actor) for round_ in rounds] == [
+    assert [(round_.round_number, round_.actor) for round_ in rounds] == [
         (1, "codex"),
         (1, "claude"),
         (2, "claude"),

@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
-from .adapters.base import StepFailure, TextInvokeResult
+from .adapters.base import BlockedOnCLI, StepFailure, TextInvokeResult
 from .adapters.claude import ClaudeAdapter
 from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
@@ -86,7 +86,6 @@ class DebateLoop:
                 rows.append(Round(round_number, "claude", latest_claude))
                 if self._ui:
                     self._ui.print_analysis_round(round_number, "claude", latest_claude)
-                consensus_reached = _check_consensus(latest_claude)
             else:
                 claude_result = claude.invoke_text(
                     build_analysis_debate_prompt(latest_codex),
@@ -115,7 +114,7 @@ class DebateLoop:
                 rows.append(Round(round_number, "codex", latest_codex))
                 if self._ui:
                     self._ui.print_analysis_round(round_number, "codex", latest_codex)
-                consensus_reached = _check_consensus(latest_codex)
+            consensus_reached = _check_consensus(latest_claude) and _check_consensus(latest_codex)
             if consensus_reached:
                 break
         return rows, claude_session_id or "", codex_session_id or "", consensus_reached
@@ -135,6 +134,7 @@ class AnalysisRunner:
         session = self._execute_analysis(task, settings)
         self._artifacts.save_analysis_session(session)
         if self._ui:
+            self._print_session_detail(session)
             self._ui.print_analysis_result(session)
         return session
 
@@ -147,6 +147,7 @@ class AnalysisRunner:
         session.rounds = [*prior.rounds, *session.rounds]
         self._artifacts.save_analysis_session(session)
         if self._ui:
+            self._print_session_detail(session)
             self._ui.print_analysis_result(session)
         return session
 
@@ -175,11 +176,7 @@ class AnalysisRunner:
                 )),
             ]
         )
-        if self._ui:
-            self._ui.print_analysis_round(0, "claude", claude_result.text)
-            self._ui.print_analysis_round(0, "codex", codex_result.text)
-
-        loop = DebateLoop(self._repo_root, timeout, ui=self._ui)
+        loop = DebateLoop(self._repo_root, timeout)
         rounds, claude_session_id, _, consensus_reached = loop.run(
             claude,
             codex,
@@ -213,18 +210,33 @@ class AnalysisRunner:
         )
         return session
 
+    def _print_session_detail(self, session: AnalysisSession) -> None:
+        if not self._ui:
+            return
+        if session.claude_initial:
+            self._ui.print_analysis_round(0, "claude", session.claude_initial)
+        if session.codex_initial:
+            self._ui.print_analysis_round(0, "codex", session.codex_initial)
+        for round_ in session.rounds:
+            self._ui.print_analysis_round(
+                int(round_.get("round_number") or 0),
+                str(round_.get("actor") or "ai"),
+                str(round_.get("text") or ""),
+            )
+
 
 def _check_consensus(text: str) -> bool:
     for line in text.splitlines()[:10]:
         stripped = line.strip().lower()
         if stripped.startswith("agreement:"):
-            return "true" in stripped
+            value = stripped.split(":", 1)[1].strip()
+            return value == "true"
     return False
 
 
-def _safe_invoke_text(invoke: Any) -> TextInvokeResult:
+def _safe_invoke_text(invoke: Callable[[], TextInvokeResult]) -> TextInvokeResult:
     try:
         return invoke()
-    except StepFailure as exc:
-        detail = exc.validation_error or str(exc)
+    except (StepFailure, BlockedOnCLI) as exc:
+        detail = getattr(exc, "validation_error", None) or str(exc)
         return TextInvokeResult(text=f"Analysis failed: {detail}")

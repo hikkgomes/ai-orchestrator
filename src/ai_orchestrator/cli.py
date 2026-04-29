@@ -504,7 +504,6 @@ def cmd_review(
     config = deepcopy(_require_config(ctx))
     if settings.escalation_model:
         config.debate.escalated_claude_model = settings.escalation_model
-        config.debate.review_codex_model = settings.escalation_model
     if settings.escalation_effort:
         config.debate.escalated_claude_effort = settings.escalation_effort
     engine = _build_engine(ctx, config=config, review_rounds=settings.rounds)
