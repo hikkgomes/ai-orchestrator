@@ -837,7 +837,7 @@ def _create_prompt_session(mode_state: dict[str, Any] | None = None, ctx: click.
             mode_state["mode"] = new_mode
             mode_state["formatted_prompt"] = build_prompt_message(new_mode.value)
             mode_state["just_switched"] = True
-            event.app.invalidate()
+            event.app.exit(result="")
 
     return PromptSession(
         history=FileHistory(str(_HISTORY_FILE)),
@@ -852,14 +852,8 @@ def _run_shell(ctx: click.Context) -> None:
     repo_name = ctx.obj["repo_root"].name
     console = ui.stderr_console
     config = _require_config(ctx)
-    claude_label = f"{config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort})"
-    codex_label = f"{config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})"
     console.print()
-    console.print(f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]")
-    console.print(f"  [dim]Claude: {claude_label}  ·  Codex: {codex_label}[/dim]")
-    console.print(f"  [dim]~/{repo_name}[/dim]")
-    console.print()
-    _print_mode_line(ctx, {"mode": Mode.DEFAULT})
+    console.print(f"  [bold cyan]ai-orchestrator[/bold cyan] [dim]{__version__}[/dim]  [dim]·  ~/{repo_name}[/dim]")
     console.print()
     mode_state: dict[str, Any] = {
         "mode": Mode.DEFAULT,
@@ -891,6 +885,7 @@ def _run_shell(ctx: click.Context) -> None:
         ),
         "execute": {"cli": "codex", "model": "", "effort": "", "skip_review": False},
     }
+    _print_mode_line(ctx, mode_state)
     session = _create_prompt_session(mode_state, ctx)
     while True:
         try:
