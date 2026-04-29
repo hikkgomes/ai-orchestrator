@@ -18,7 +18,6 @@ class TestLoadConfig:
         cfg = load_config(repo_root=tmp_path)
         assert cfg.orchestrator.max_retries == 3
         assert cfg.orchestrator.watchdog_timeout == 3600
-        assert cfg.orchestrator.prompt_mode == "relay"
         assert cfg.routing.planner == "claude"
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
@@ -109,16 +108,6 @@ class TestLoadConfig:
 
     def test_invalid_type_raises(self, tmp_path):
         (tmp_path / "aio.toml").write_text("[orchestrator]\nmax_retries = \"many\"\n")
-        with pytest.raises(ConfigError):
-            load_config(repo_root=tmp_path)
-
-    def test_prompt_mode_structured_is_accepted(self, tmp_path):
-        (tmp_path / "aio.toml").write_text("[orchestrator]\nprompt_mode = \"structured\"\n")
-        cfg = load_config(repo_root=tmp_path)
-        assert cfg.orchestrator.prompt_mode == "structured"
-
-    def test_prompt_mode_invalid_raises(self, tmp_path):
-        (tmp_path / "aio.toml").write_text("[orchestrator]\nprompt_mode = \"invalid\"\n")
         with pytest.raises(ConfigError):
             load_config(repo_root=tmp_path)
 

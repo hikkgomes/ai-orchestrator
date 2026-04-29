@@ -37,7 +37,6 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for loc
 class OrchestratorConfig:
     max_retries: int = 3
     watchdog_timeout: int = 3600
-    prompt_mode: str = "relay"
 
 
 @dataclass
@@ -380,13 +379,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     ):
         if key in orchestrator:
             _validate_int(f"orchestrator.{key}", orchestrator[key], minimum=1)
-    if "prompt_mode" in orchestrator:
-        _validate_choice(
-            "orchestrator.prompt_mode",
-            orchestrator["prompt_mode"],
-            {"relay", "structured"},
-        )
-
     routing = _expect_mapping("routing", data.get("routing"))
     for key in ("planner", "worker", "reviewer", "scoper"):
         if key in routing:

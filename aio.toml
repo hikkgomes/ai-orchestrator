@@ -1,7 +1,6 @@
 [orchestrator]
 max_retries = 3
 watchdog_timeout = 3600
-prompt_mode = "relay"  # "relay" (lean, tool-assisted) or "structured" (full context in prompts)
 
 [routing]
 planner = "claude"

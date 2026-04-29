@@ -32,12 +32,8 @@ from .prompts.templates import (
     build_retry_prompt,
     build_review_prompt,
     json_block,
-    redact_secret_text,
-    render_directory_tree,
-    repo_summary,
 )
 from .reviewer import load_config as load_reviewer_config
-from .reviewer import load_rules as load_reviewer_rules
 from .reviewer import run_review_scan
 from .state import StateManager
 from .validator import load_bundled_schema
@@ -154,10 +150,6 @@ class Engine:
         self._skip_review = skip_review
         self._autonomous_max_iterations = autonomous_max_iterations
         self._review_rounds = review_rounds
-
-    @property
-    def _relay(self) -> bool:
-        return self._config.orchestrator.prompt_mode == "relay"
 
     def _log_prompt_size(self, label: str, prompt: str) -> None:
         if self._ui:
@@ -370,12 +362,6 @@ class Engine:
             raise EngineError(f"Unhandled engine status: {status.value}")
 
     def _run_scoping(self, state: RunState) -> RunState:
-        if self._relay:
-            directory_tree = ""
-            summary = ""
-        else:
-            directory_tree = render_directory_tree(self._repo_root, max_depth=2)
-            summary = repo_summary(self._repo_root)
         claude = self._adapter("claude")
         codex = self._adapter("codex")
         scoping_tools_claude = self._phase_allowed_tools("scoping", default=["Read", "Grep", "Glob"])
@@ -390,12 +376,7 @@ class Engine:
 
         try:
             claude_prompt = build_prescope_claude_prompt(state.task)
-            codex_prompt = build_prescope_codex_prompt(
-                state.task,
-                summary,
-                directory_tree,
-                relay=self._relay,
-            )
+            codex_prompt = build_prescope_codex_prompt(state.task)
             self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
             self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
             self._log_prompt_size("Prescope Claude prompt", claude_prompt)
@@ -437,7 +418,7 @@ class Engine:
             state.scoping_round = 2
             self._state_mgr.save(state)
 
-            prompt = build_scope_compare_codex_prompt(claude_scope, relay=self._relay)
+            prompt = build_scope_compare_codex_prompt(claude_scope)
             self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
             self._log_prompt_size("Scope compare (Codex r3) prompt", prompt)
             codex_result = self._invoke_adapter_text(
@@ -471,7 +452,7 @@ class Engine:
                 )
 
             if not state.scoping_agreed:
-                prompt = build_scope_respond_claude_prompt(codex_scope, relay=self._relay)
+                prompt = build_scope_respond_claude_prompt(codex_scope)
                 self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
                 self._log_prompt_size("Scope respond (Claude r4) prompt", prompt)
                 scope_result = self._invoke_adapter_text(
@@ -506,7 +487,7 @@ class Engine:
                         self._ui.info("Claude stands firm; sending reasoning back to Codex.")
 
             if not state.scoping_agreed:
-                prompt = build_scope_final_codex_prompt(claude_scope, relay=self._relay)
+                prompt = build_scope_final_codex_prompt(claude_scope)
                 self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
                 self._log_prompt_size("Scope final (Codex r5) prompt", prompt)
                 codex_result = self._invoke_adapter_text(
@@ -533,7 +514,7 @@ class Engine:
                         self._ui.info("Still no agreement; Claude Opus will make the final call.")
 
             if not state.scoping_agreed:
-                prompt = build_scope_final_claude_prompt(codex_scope, relay=self._relay)
+                prompt = build_scope_final_claude_prompt(codex_scope)
                 self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
                 self._log_prompt_size("Scope final (Claude r6) prompt", prompt)
                 scope_result = self._invoke_adapter_text(
@@ -739,8 +720,6 @@ class Engine:
         prompt = build_full_execution_prompt(
             plan_text=plan_text,
             result_file_path=pending_result_path,
-            schema_json=json_block(schema),
-            relay=self._relay,
         )
 
         def invoke(current_prompt: str) -> Any:
@@ -824,7 +803,6 @@ class Engine:
     def _run_review(self, state: RunState) -> RunState:
         schema = load_bundled_schema("review.schema.json")
         debate_schema = load_bundled_schema("debate_response.schema.json")
-        git_diff = "" if self._relay else redact_secret_text(self._implementation_diff(state))
         review_root = self._repo_root if state.is_workspace else self._ensure_worktree(state)
         try:
             changed_files = self._review_changed_files(state)
@@ -836,17 +814,11 @@ class Engine:
             changed_files=changed_files,
             reviewer_config=reviewer_config,
         )
-        reviewer_rules = self._load_reviewer_rules()
         review_tools = self._phase_allowed_tools("reviewing", default=["Read", "Grep", "Glob", "Bash"])
         review_timeout = self._phase_timeout("reviewing")
         review_prompt = build_review_prompt(
-            git_diff=git_diff,
             step_results_json=json_block(self._load_step_results(state)),
-            schema_json=json_block(schema),
             heuristic_findings=heuristic_findings,
-            review_categories=reviewer_rules.get("review_categories") or {},
-            reviewer_config=reviewer_config,
-            relay=self._relay,
         )
         self._artifacts.save_prompt(f"review-{state.run_id[:8]}.md", review_prompt)
         self._log_prompt_size("Review (Claude) prompt", review_prompt)
@@ -934,10 +906,7 @@ class Engine:
             if state.debate_state.debate_phase == ReviewDebatePhase.CODEX_REVIEW:
                 codex_prompt = build_review_codex_prompt(
                     task_description=state.normalized_task or state.task,
-                    git_diff=git_diff,
                     review_json=json_block(claude_review),
-                    schema_json=json_block(schema),
-                    relay=self._relay,
                 )
                 self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
                 self._log_prompt_size("Review (Codex) prompt", codex_prompt)
@@ -1040,8 +1009,6 @@ class Engine:
                 return self._debate_resolve_pass(state)
             final_prompt = build_review_final_claude_prompt(
                 codex_review_json=json_block(codex_review),
-                schema_json=json_block(debate_schema),
-                relay=self._relay,
             )
             self._artifacts.save_prompt(f"review-final-claude-{state.run_id[:8]}.md", final_prompt)
             self._log_prompt_size("Review final (Claude) prompt", final_prompt)
@@ -1139,12 +1106,6 @@ class Engine:
         if config is not None or root == self._repo_root:
             return config
         return load_reviewer_config(self._repo_root)
-
-    def _load_reviewer_rules(self) -> dict[str, Any]:
-        try:
-            return load_reviewer_rules()
-        except Exception:
-            return {"review_categories": []}
 
     def _review_changed_files(self, state: RunState) -> list[str]:
         if state.is_workspace:
@@ -1901,29 +1862,6 @@ class Engine:
         )
         if commit.returncode != 0 and "nothing to commit" not in commit.stderr.lower():
             raise EngineError(f"git commit failed: {commit.stderr.strip() or commit.stdout.strip()}")
-
-    def _implementation_diff(self, state: RunState) -> str:
-        if state.is_workspace:
-            aggregated = self._aggregate_workspace_diffs(state)
-            if aggregated:
-                return aggregated
-            return "\n\n".join(
-                f"--- {repo}/ ---\n{diff}"
-                for repo, diff in self._collect_workspace_diffs(state).items()
-            )
-        if not state.base_commit or not state.worktree_branch:
-            return ""
-        completed = subprocess.run(
-            ["git", "diff", f"{state.base_commit}...{state.worktree_branch}"],
-            cwd=self._repo_root,
-            capture_output=True,
-            text=True,
-            shell=False,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise EngineError(f"Failed to compute implementation diff: {completed.stderr.strip()}")
-        return completed.stdout
 
     def _load_step_results(self, state: RunState) -> list[dict[str, Any]]:
         return [self._artifacts.read_json(reference) for reference in state.step_results]

@@ -69,143 +69,54 @@ def build_prescope_claude_prompt(raw_task: str) -> str:
     )
 
 
-def build_prescope_codex_prompt(
-    raw_task: str,
-    repo_summary: str,
-    directory_tree: str,
-    *,
-    relay: bool = False,
-) -> str:
+def build_prescope_codex_prompt(raw_task: str) -> str:
     """Build Codex round-2 prompt that creates Codex's independent scope file."""
-    if relay:
-        return _prescope_prompt(
-            raw_task=raw_task,
-            repo_summary="",
-            directory_tree="",
-            canonical=False,
-        )
-    return _prescope_prompt(
-        raw_task=raw_task,
-        repo_summary=repo_summary,
-        directory_tree=directory_tree,
-        canonical=False,
-    )
+    return _prescope_prompt(raw_task=raw_task, repo_summary="", directory_tree="", canonical=False)
 
 
-def build_scope_compare_codex_prompt(
-    claude_scope_md: str,
-    *,
-    relay: bool = False,
-) -> str:
+def build_scope_compare_codex_prompt(claude_scope_md: str) -> str:
     """Build Codex round-3 prompt to compare both scopes."""
-    if relay:
-        return (
-            "I had another analysis of this task:\n\n"
-            f"{claude_scope_md}\n\n"
-            "Review it. Start with `agreement: true` or `agreement: false`.\n"
-            "If you disagree, explain why concisely.\n"
-        )
     return (
-        "Claude's canonical scope is ready. Review it against your independent scope.\n"
-        "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
-        "Start with YAML frontmatter containing exactly:\n"
-        "agreement: true|false\n\n"
-        "For it to be true, either your initial scope must fully align with Claude's scope or you must be convinced by Claude's reasoning that their scope is absolutely correct.\n"
-        "If you have any disagreements, notes, concerns or pushbacks, write concise reasoning that identifies what must change.\n\n"
-        "CLAUDE CANONICAL SCOPE.MD:\n"
+        "I had another analysis of this task:\n\n"
         f"{claude_scope_md}\n\n"
-        "Remember: You need to reach full agreement with Claude before proceeding to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
+        "Review it. Start with `agreement: true` or `agreement: false`.\n"
+        "If you disagree, explain why concisely.\n"
     )
 
 
-def build_scope_respond_claude_prompt(codex_scope_md: str, *, relay: bool = False) -> str:
+def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
     """Build Claude round-4 prompt to respond to Codex reasoning."""
-    if relay:
-        return (
-            "Codex reviewed your scope and has feedback:\n\n"
-            f"{codex_scope_md}\n\n"
-            "If you accept, update the canonical scope.md accordingly.\n"
-            "Start with `agreement: true` or `agreement: false`.\n"
-            "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
-        )
     return (
-        "Codex's scope and reasoning are ready. Review it against your independent scope.\n"
-        "Return ONLY markdown.\n\n"
-        "Start with YAML frontmatter containing these keys:\n"
-        "normalized_task, complexity_tier, actionable, key_files, context,\n"
-        "agreement: true|false\n"
-        "Set agreement true if you accept Codex's objection and have updated the canonical scope.md\n"
-        "Set agreement false if you have any pushbacks to Codex and include your reasoning in the body.\n\n"
-        "This must be a well-founded decision, so if you don't have a good reasoning to continue disagreeing with Codex, you should just update the canonical scope.md to align with Codex's scope and set agreement to true.\n\n"
-        "CODEX REASONING:\n"
-        f"{codex_scope_md}\n"
-        "Remember: You need to reach full agreement with Codex before proceeding to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
+        "Codex reviewed your scope and has feedback:\n\n"
+        f"{codex_scope_md}\n\n"
+        "If you accept, update the canonical scope.md accordingly.\n"
+        "Start with `agreement: true` or `agreement: false`.\n"
+        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
     )
 
 
-def build_scope_final_codex_prompt(claude_scope_md: str, *, relay: bool = False) -> str:
+def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
     """Build Codex round-5 prompt for final xhigh scope assessment."""
-    if relay:
-        return (
-            "Claude still disagrees. Make your final case:\n\n"
-            f"{claude_scope_md}\n\n"
-            "Start with `agreement: true` or `agreement: false`.\n"
-            "If you disagree, explain why concisely.\n"
-        )
     return (
-        "Claude disagrees with your review. Review its reasoning against your independent reviews.\n"
-        "Do not edit the canonical scope.md. Return ONLY markdown for codex-scope.md.\n\n"
-        "Start with YAML frontmatter containing exactly:\n"
-        "agreement: true|false\n\n"
-        "This must be a well-founded decision, so if you don't have a good reasoning to continue disagreeing with Claude, you should give in and set agreement to true.\n\n"
-        "CLAUDE CANONICAL SCOPE.MD:\n"
+        "Claude still disagrees. Make your final case:\n\n"
         f"{claude_scope_md}\n\n"
-        "Remember: You need to reach full agreement with Claude before we proceed to planning. If you still disagree, explain why clearly and concisely in the body. Make sure to address any concerns they raise and make a compelling case for yourself.\n\n"
+        "Start with `agreement: true` or `agreement: false`.\n"
+        "If you disagree, explain why concisely.\n"
     )
 
 
-def build_scope_final_claude_prompt(codex_scope_md: str, *, relay: bool = False) -> str:
+def build_scope_final_claude_prompt(codex_scope_md: str) -> str:
     """Build Claude round-6 prompt for final Opus/max scope decision."""
-    if relay:
-        return (
-            "Codex still disagrees. You have the final say on the scope.\n"
-            "Review their assessment and return the final canonical scope.md.\n\n"
-            f"{codex_scope_md}\n\n"
-            "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
-        )
     return (
-        "Codex still disagrees with your scope and you are going to make the final decision on the scope. Read their assessment, review its updated reasoning and return ONLY the final canonical scope.md.\n"
-        "If you are convinced by any of Codex's points, update the canonical scope.md accordingly. If you still disagree, keep the canonical scope.md as is.\n\n"
-        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n\n"
-        "CODEX FINAL ASSESSMENT:\n"
-        f"{codex_scope_md}\n"
+        "Codex still disagrees. You have the final say on the scope.\n"
+        "Review their assessment and return the final canonical scope.md.\n\n"
+        f"{codex_scope_md}\n\n"
+        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
     )
 
 
-def build_full_execution_prompt(
-    plan_text: str,
-    result_file_path: str,
-    schema_json: str,
-    *,
-    relay: bool = False,
-) -> str:
+def build_full_execution_prompt(plan_text: str, result_file_path: str) -> str:
     """Build a single-session execution prompt for the full plan."""
-    if relay:
-        return (
-            f"{plan_text}\n\n"
-            "FULLY IMPLEMENT THE PLAN ABOVE\n"
-            "- Do not commit or push any changes yet. Leave them for reviewing.\n"
-            "- Update the documentation accordingly if needed.\n"
-            "- If no changes are needed, explain that in the result summary.\n\n"
-            "After making changes, write your result JSON to:\n"
-            f"{result_file_path}\n\n"
-            "Required JSON fields (no extra fields allowed):\n"
-            '- status: "success", "partial", or "failed"\n'
-            "- files_changed: array of {path (relative), action (created|modified|deleted), summary}\n"
-            "- summary: string\n"
-            "Optional: issues (array of strings), test_commands (array of strings).\n\n"
-            "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
-        )
     return (
         f"{plan_text}\n\n"
         "FULLY IMPLEMENT THE PLAN ABOVE\n"
@@ -214,134 +125,73 @@ def build_full_execution_prompt(
         "- If no changes are needed, explain that in the result summary.\n\n"
         "After making changes, write your result JSON to:\n"
         f"{result_file_path}\n\n"
-        "The JSON must conform to this schema:\n"
-        f"{schema_json}\n\n"
+        "Required JSON fields (no extra fields allowed):\n"
+        '- status: "success", "partial", or "failed"\n'
+        "- files_changed: array of {path (relative), action (created|modified|deleted), summary}\n"
+        "- summary: string\n"
+        "Optional: issues (array of strings), test_commands (array of strings).\n\n"
         "If you cannot write the file, respond with ONLY the raw JSON. No markdown fences. No commentary.\n"
     )
 
 
 def build_review_prompt(
-    git_diff: str,
     step_results_json: str,
-    schema_json: str,
     heuristic_findings: list[dict[str, Any]] | None = None,
-    review_categories: dict[str, str] | list[tuple[str, str]] | None = None,
-    reviewer_config: dict[str, Any] | None = None,
-    *,
-    relay: bool = False,
 ) -> str:
     """Build the review phase prompt."""
     heuristic_section = _review_heuristic_section(heuristic_findings)
-    if relay:
-        return (
-            "Review the plan implementation.\n\n"
-            "EXECUTION RESULTS:\n"
-            f"{step_results_json}\n\n"
-            f"{heuristic_section}"
-            "Inspect the worktree directly with your tools and use /ai-review to consolidate findings.\n"
-            "If /ai-review is unavailable, continue with your own review.\n\n"
-            "If you cannot inspect the worktree, return verdict=request_changes with a finding explaining tool access failed. Do not invent findings from missing context.\n\n"
-            "Return ONLY valid JSON with fields:\n"
-            "- review_id (uuid)\n"
-            "- verdict (approve|request_changes|reject)\n"
-            "- score (1-10)\n"
-            "- findings (array)\n"
-            "- summary (string)\n"
-            "- blocks_merge (boolean)\n\n"
-            "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
-            "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
-            "reject requires blocks_merge=true and at least one critical or major finding.\n"
-            "No extra fields allowed.\n\n"
-            "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-        )
-    categories_section = _review_categories_section(review_categories)
-    repo_context_section = _reviewer_context_section(reviewer_config)
     return (
         "Review the plan implementation.\n\n"
-        "IMPLEMENTATION DIFF:\n"
-        f"{git_diff}\n\n"
         "EXECUTION RESULTS:\n"
         f"{step_results_json}\n\n"
         f"{heuristic_section}"
-        f"{categories_section}"
-        f"{repo_context_section}"
-        "Before writing the final JSON, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
-        "If it does not exist or cannot run, continue with the provided diff and heuristic scan.\n\n"
-        "Produce a JSON review conforming to this schema:\n"
-        f"{schema_json}\n\n"
-        "Codex is going to review your work afterwards.\n"
+        "Inspect the worktree directly with your tools and use /ai-review to consolidate findings.\n"
+        "If /ai-review is unavailable, continue with your own review.\n\n"
+        "If you cannot inspect the worktree, return verdict=request_changes with a finding explaining tool access failed. Do not invent findings from missing context.\n\n"
+        "Return ONLY valid JSON with fields:\n"
+        "- review_id (uuid)\n"
+        "- verdict (approve|request_changes|reject)\n"
+        "- score (1-10)\n"
+        "- findings (array)\n"
+        "- summary (string)\n"
+        "- blocks_merge (boolean)\n\n"
+        "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
+        "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
+        "reject requires blocks_merge=true and at least one critical or major finding.\n"
+        "No extra fields allowed.\n\n"
+        "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
     )
 
 
-def build_review_codex_prompt(
-    task_description: str,
-    git_diff: str,
-    review_json: str,
-    schema_json: str,
-    *,
-    relay: bool = False,
-) -> str:
+def build_review_codex_prompt(task_description: str, review_json: str) -> str:
     """Build Codex's independent review prompt inside the REVIEWING phase."""
-    if relay:
-        return (
-            f"Task: {task_description}\n\n"
-            "Review this implementation independently and evaluate Claude's review.\n"
-            "Inspect the code directly with your tools.\n\n"
-            "If you cannot inspect the worktree, return verdict=request_changes with a finding explaining tool access failed. Do not invent findings from missing context.\n\n"
-            "CLAUDE REVIEW REPORT:\n"
-            f"{review_json}\n\n"
-            "Return a JSON with these required fields: review_id (uuid), verdict (approve|request_changes|reject), score (1-10), findings (array), summary (string), blocks_merge (boolean).\n"
-            "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
-            "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
-            "reject requires blocks_merge=true and at least one critical or major finding.\n"
-            "No extra fields allowed.\n"
-            "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-        )
     return (
-        "The following task was implemented in my codebase and reviewed by Claude. Perform an independent review of both the implementation and Claude's review.\n"
-        "Additionally, invoke the AI review workflow using the /ai-review skill and consolidate its signal with your own review.\n"
-        "TASK:\n"
-        f"{task_description}\n\n"
-        "IMPLEMENTATION DIFF:\n"
-        f"{git_diff}\n\n"
+        f"Task: {task_description}\n\n"
+        "Review this implementation independently and evaluate Claude's review.\n"
+        "Inspect the code directly with your tools.\n\n"
+        "If you cannot inspect the worktree, return verdict=request_changes with a finding explaining tool access failed. Do not invent findings from missing context.\n\n"
         "CLAUDE REVIEW REPORT:\n"
         f"{review_json}\n\n"
         "Return a JSON with these required fields: review_id (uuid), verdict (approve|request_changes|reject), score (1-10), findings (array), summary (string), blocks_merge (boolean).\n"
+        "Each finding needs: severity (critical|major|minor|info), description. Optional: file, line, suggestion. No extra fields.\n"
         "Use verdict=approve and blocks_merge=false only if the implementation should proceed.\n"
-        "If fixes are needed, include specific findings and set blocks_merge=true.\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
+        "reject requires blocks_merge=true and at least one critical or major finding.\n"
+        "No extra fields allowed.\n"
         "Respond with ONLY valid JSON. No markdown fences. No commentary.\n"
-        "Claude is going to review your work afterwards.\n"
     )
 
 
-def build_review_final_claude_prompt(
-    codex_review_json: str,
-    schema_json: str,
-    *,
-    relay: bool = False,
-) -> str:
+def build_review_final_claude_prompt(codex_review_json: str) -> str:
     """Build Claude Opus/max final review-debate prompt."""
-    if relay:
-        return (
-            "Codex disagrees with your review.\n\n"
-            "Decide whether the implementation can pass or must be fixed.\n"
-            "Return ONLY JSON with fields:\n"
-            "- position (issues_confirmed|issues_dismissed|issues_accepted)\n"
-            "- reasoning (string)\n"
-            "- issues (array)\n\n"
-            "CODEX REVIEW REPORT AND PUSHBACK:\n"
-            f"{codex_review_json}\n\n"
-        )
     return (
         "Codex disagrees with your review.\n\n"
         "Decide whether the implementation can pass or must be fixed.\n"
-        "Return ONLY JSON matching the debate response schema. Use position=issues_confirmed when fixes are required, or position=issues_dismissed when the implementation can pass.\n\n"
+        "Return ONLY JSON with fields:\n"
+        "- position (issues_confirmed|issues_dismissed|issues_accepted)\n"
+        "- reasoning (string)\n"
+        "- issues (array)\n\n"
         "CODEX REVIEW REPORT AND PUSHBACK:\n"
         f"{codex_review_json}\n\n"
-        "OUTPUT SCHEMA:\n"
-        f"{schema_json}\n\n"
     )
 
 
@@ -505,71 +355,6 @@ def _review_heuristic_section(findings: list[dict[str, Any]] | None) -> str:
     )
 
 
-def _review_categories_section(categories: dict[str, str] | list[tuple[str, str]] | None) -> str:
-    if not categories:
-        return ""
-    entries = categories.items() if isinstance(categories, dict) else categories
-    lines = [
-        f"{index}. {category} - {description}"
-        for index, (category, description) in enumerate(entries, start=1)
-    ]
-    return (
-        "AI FAILURE CATEGORIES:\n"
-        "Review against these categories in order of priority:\n"
-        + "\n".join(lines)
-        + "\n\n"
-    )
-
-
-def _reviewer_context_section(config: dict[str, Any] | None) -> str:
-    if not config:
-        return ""
-
-    project = config.get("project") or {}
-    paths = config.get("paths") or {}
-    risk = config.get("risk") or {}
-    architecture = config.get("architecture") or {}
-    naming = architecture.get("naming") or {}
-    key_libraries = architecture.get("key_libraries") or {}
-
-    lines: list[str] = []
-    if project.get("stack"):
-        lines.append(f"Stack: {', '.join(project['stack'])}")
-    if paths.get("critical"):
-        lines.append(f"Critical paths: {', '.join(paths['critical'])}")
-
-    risk_parts = [
-        f"{name}=[{', '.join(values)}]"
-        for name, values in risk.items()
-        if values
-    ]
-    if risk_parts:
-        lines.append(f"Risk areas: {', '.join(risk_parts)}")
-
-    if architecture.get("patterns"):
-        lines.append(f"Architecture: {', '.join(architecture['patterns'])}")
-
-    library_parts = [
-        f"{category}=[{', '.join(values)}]"
-        for category, values in key_libraries.items()
-        if values
-    ]
-    if library_parts:
-        lines.append(f"Key libraries: {', '.join(library_parts)}")
-
-    naming_parts = [f"{key}={value}" for key, value in naming.items() if value]
-    if naming_parts:
-        lines.append(f"Naming: {', '.join(naming_parts)}")
-
-    if architecture.get("project_description"):
-        lines.append(f"Description: {architecture['project_description']}")
-
-    if not lines:
-        return ""
-
-    return "REPOSITORY CONTEXT:\n" + "\n".join(lines) + "\n\n"
-
-
 def json_block(data: Any) -> str:
     """Serialize a structure to stable, indented JSON for prompt inclusion."""
     return json.dumps(data, indent=2, sort_keys=True)
@@ -632,7 +417,7 @@ def _contains_secret(path: str, content: str) -> bool:
 
 
 def redact_secret_text(text: str) -> str:
-    """Redact inline secret-like content from unstructured prompt text."""
+    """Redact inline secret-like content from prompt text."""
     if not text:
         return text
 
