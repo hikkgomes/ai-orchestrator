@@ -131,10 +131,10 @@ class ClaudeAdapter(BaseAdapter):
         output_format: str = "json",
     ) -> tuple[list[str], str | None, str | None]:
         command = [self.CLI_NAME]
-        model = model_override or getattr(self._config.routing.claude, "model", "") or None
+        model = model_override or getattr(self._config.models.claude, "default", "") or None
         reasoning_effort = (
             reasoning_effort_override
-            or getattr(self._config.routing.claude, "reasoning_effort", "")
+            or getattr(self._config.efforts.claude, "default", "")
             or None
         )
         if model:

@@ -184,3 +184,15 @@ class StateManager:
         preview = ", ".join(match[:8] for match in matches[:5])
         suffix = "..." if len(matches) > 5 else ""
         raise StateError(f"Run ID prefix '{normalized}' is ambiguous: {preview}{suffix}")
+
+    def latest_run_timestamp(self) -> str | None:
+        if not self._state_dir.exists():
+            return None
+        latest_path = max(self._state_dir.glob("run-*.json"), key=lambda path: path.stat().st_mtime_ns, default=None)
+        if latest_path is None:
+            return None
+        try:
+            state = self.load(latest_path.stem[4:])
+        except StateError:
+            return None
+        return state.updated_at or state.created_at

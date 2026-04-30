@@ -16,33 +16,33 @@ class Mode(str, Enum):
 
 @dataclass
 class AnalysisSettings:
-    rounds: int = 3
+    rounds: int = 0
     claude_model: str = ""
     codex_model: str = ""
-    claude_effort: str = "high"
-    codex_effort: str = "high"
+    claude_effort: str = ""
+    codex_effort: str = ""
     escalation_model: str = ""
-    escalation_effort: str = "xhigh"
+    escalation_effort: str = ""
 
 
 @dataclass
 class ReviewSettings:
-    rounds: int = 3
+    rounds: int = 0
     claude_model: str = ""
     codex_model: str = ""
-    claude_effort: str = "high"
-    codex_effort: str = "medium"
+    claude_effort: str = ""
+    codex_effort: str = ""
     escalation_model: str = ""
-    escalation_effort: str = "xhigh"
+    escalation_effort: str = ""
 
 
 @dataclass
 class AutonomousSettings:
-    max_iterations: int = 5
+    max_iterations: int = 0
     claude_model: str = ""
     codex_model: str = ""
-    claude_effort: str = "high"
-    codex_effort: str = "medium"
+    claude_effort: str = ""
+    codex_effort: str = ""
 
 
 @dataclass

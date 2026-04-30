@@ -26,6 +26,8 @@ class TestLoadConfig:
         assert cfg.approval.require_plan_approval is True
         assert cfg.routing.claude.reasoning_effort == "high"
         assert cfg.routing.codex.reasoning_effort == "medium"
+        assert cfg.models.scoping.codex_light == "gpt-5.4-mini"
+        assert cfg.efforts.scoping.round_6_claude == "xhigh"
         assert cfg.complexity_routing.architectural["planning"] == "xhigh"
         assert cfg.complexity_routing.architectural["executing"] == "high"
         assert cfg.complexity_routing.extramax["planning"] == "max"
@@ -33,6 +35,8 @@ class TestLoadConfig:
         assert cfg.debate.escalated_claude_model == "claude-opus-4-7"
         assert cfg.debate.escalated_claude_effort == "xhigh"
         assert cfg.debate.review_codex_model == "gpt-5.4"
+        assert cfg.models.debate.escalated_claude == "claude-opus-4-7"
+        assert cfg.efforts.debate.escalated_claude == "xhigh"
 
     def test_repo_toml_overrides_defaults(self, tmp_path):
         """Repo-level aio.toml values override defaults."""
@@ -45,6 +49,8 @@ class TestLoadConfig:
         assert cfg.orchestrator.max_retries == 5
         assert cfg.routing.codex.model == "gpt-5"
         assert cfg.routing.codex.reasoning_effort == "high"
+        assert cfg.models.codex.default == "gpt-5"
+        assert cfg.efforts.codex.default == "high"
 
     def test_loads_phase_routing_scoping_and_complexity_sections(self, tmp_path):
         (tmp_path / "aio.toml").write_text(

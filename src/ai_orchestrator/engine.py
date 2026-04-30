@@ -366,13 +366,9 @@ class Engine:
         codex = self._adapter("codex")
         scoping_tools_claude = self._phase_allowed_tools("scoping", default=["Read", "Grep", "Glob"])
         scoping_timeout = self._phase_timeout("scoping")
-        claude_model = self._resolve_model_for_phase("scoping", "claude", state) or "claude-sonnet-4-6"
-        codex_model_light = self._config.scoping.codex_model_light or self._resolve_model_for_phase(
-            "scoping",
-            "codex",
-            state,
-        )
-        codex_model = self._config.scoping.codex_model or self._resolve_model_for_phase("scoping", "codex", state)
+        claude_model = self._config.models.scoping.claude or self._resolve_model_for_phase("scoping", "claude", state)
+        codex_model_light = self._config.models.scoping.codex_light or self._resolve_model_for_phase("scoping", "codex", state)
+        codex_model = self._config.models.scoping.codex or self._resolve_model_for_phase("scoping", "codex", state)
 
         try:
             claude_prompt = build_prescope_claude_prompt(state.task)
@@ -388,7 +384,7 @@ class Engine:
                         claude_prompt,
                         self._repo_root,
                         self._scoping_message("claude_creates", "Claude is drafting the scope..."),
-                        reasoning_effort_override="medium",
+                        reasoning_effort_override=self._config.efforts.scoping.round_1_claude,
                         model_override=claude_model,
                         allowed_tools=scoping_tools_claude,
                         timeout_seconds=scoping_timeout,
@@ -398,7 +394,7 @@ class Engine:
                         codex_prompt,
                         self._repo_root,
                         self._scoping_message("codex_creates", "Codex is forming its own opinion..."),
-                        reasoning_effort_override="medium",
+                        reasoning_effort_override=self._config.efforts.scoping.round_1_codex,
                         model_override=codex_model_light,
                         legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
                     ),
@@ -426,7 +422,7 @@ class Engine:
                 prompt,
                 self._repo_root,
                 self._scoping_message("codex_compares", "Codex is reviewing Claude's scope..."),
-                reasoning_effort_override="high",
+                reasoning_effort_override=self._config.efforts.scoping.round_3_codex,
                 model_override=codex_model,
                 resume_session_id=state.session_ids.get("scoping_codex"),
                 legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
@@ -460,7 +456,7 @@ class Engine:
                     prompt,
                     self._repo_root,
                     self._scoping_message("claude_responds", "Claude is considering Codex's feedback..."),
-                    reasoning_effort_override="high",
+                    reasoning_effort_override=self._config.efforts.scoping.round_4_claude,
                     model_override=claude_model,
                     resume_session_id=(
                         state.session_ids.get("claude_main")
@@ -495,7 +491,7 @@ class Engine:
                     prompt,
                     self._repo_root,
                     self._scoping_message("codex_final", "Codex is making its final case..."),
-                    reasoning_effort_override=self._config.debate.escalated_codex_effort or "high",
+                    reasoning_effort_override=self._config.efforts.scoping.round_5_codex,
                     model_override=codex_model,
                     resume_session_id=state.session_ids.get("scoping_codex"),
                     legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the final scope.",
@@ -522,8 +518,8 @@ class Engine:
                     prompt,
                     self._repo_root,
                     self._scoping_message("claude_final", "Claude has the final word (Opus xhigh)..."),
-                    reasoning_effort_override=self._config.debate.escalated_claude_effort,
-                    model_override=self._config.debate.escalated_claude_model or claude_model,
+                    reasoning_effort_override=self._config.efforts.scoping.round_6_claude,
+                    model_override=self._config.models.debate.escalated_claude or claude_model,
                     resume_session_id=(
                         state.session_ids.get("claude_main")
                         if self._config.sessions.enable_unified_session
@@ -824,7 +820,7 @@ class Engine:
         self._log_prompt_size("Review (Claude) prompt", review_prompt)
         adapter = self._adapter("claude")
         cli_name = "claude"
-        review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name) or "high"
+        review_effort = self._resolve_effort_for_phase(state, "reviewing", cli_name)
         review_model = self._resolve_model_for_phase("reviewing", cli_name, state)
         review_resume_session_id: str | None = None
         if self._config.sessions.enable_unified_session and self._config.sessions.enable_review_resume:
@@ -911,7 +907,7 @@ class Engine:
                 self._artifacts.save_prompt(f"review-codex-{state.run_id[:8]}.md", codex_prompt)
                 self._log_prompt_size("Review (Codex) prompt", codex_prompt)
                 codex = self._adapter("codex")
-                codex_model = self._config.debate.review_codex_model or self._resolve_model_for_phase(
+                codex_model = self._config.models.reviewing.codex or self._resolve_model_for_phase(
                     "reviewing",
                     "codex",
                     state,
@@ -932,7 +928,7 @@ class Engine:
                         current_prompt,
                         review_root,
                         schema,
-                        reasoning_effort_override="high",
+                        reasoning_effort_override=self._config.efforts.reviewing.codex,
                         model_override=codex_model,
                         resume_session_id=codex_review_resume_session_id,
                     ),
@@ -946,7 +942,7 @@ class Engine:
                     state,
                     actor="codex",
                     model_used=codex_model,
-                    effort_used="high",
+                    effort_used=self._config.efforts.reviewing.codex,
                     position="issues_confirmed" if self._review_has_issues(codex_review) else "issues_dismissed",
                     reasoning=str(codex_review.get("summary") or ""),
                     issues=self._issues_from_review(codex_review),
@@ -1035,7 +1031,7 @@ class Engine:
                     review_root,
                     debate_schema,
                     reasoning_effort_override=final_effort,
-                    model_override=self._config.debate.escalated_claude_model or review_model,
+                    model_override=self._config.models.debate.escalated_claude or review_model,
                     resume_session_id=final_review_resume_session_id,
                     allowed_tools=review_tools,
                     timeout_seconds=review_timeout,
@@ -1053,7 +1049,7 @@ class Engine:
             self._record_debate_round(
                 state,
                 actor="claude",
-                model_used=self._config.debate.escalated_claude_model or review_model,
+                model_used=self._config.models.debate.escalated_claude or review_model,
                 effort_used=final_effort,
                 position=final_position,
                 reasoning=str(final.get("reasoning") or ""),
@@ -1678,21 +1674,17 @@ class Engine:
 
         complexity_tier = state.complexity_tier
         if complexity_tier:
-            tier_map = getattr(self._config.complexity_routing, complexity_tier, {})
-            if phase_name in tier_map:
-                return tier_map[phase_name]
+            tier_map = getattr(self._config.efforts.complexity, complexity_tier, None)
+            if tier_map:
+                effort = getattr(tier_map, phase_name, "")
+                if effort:
+                    return effort
 
-        return getattr(getattr(self._config.routing, cli_name), "reasoning_effort", "") or None
+        return getattr(getattr(self._config.efforts, cli_name), "default", "") or None
 
-    @staticmethod
-    def _review_final_effort(state: RunState) -> str:
-        return {
-            "simple": "high",
-            "moderate": "high",
-            "complex": "high",
-            "architectural": "xhigh",
-            "extramax": "max",
-        }.get(state.complexity_tier or "moderate", "high")
+    def _review_final_effort(self, state: RunState) -> str:
+        tier = state.complexity_tier or "moderate"
+        return getattr(self._config.efforts.review_final, tier, "high")
 
     def _resolve_model_for_phase(
         self,
@@ -1708,7 +1700,25 @@ class Engine:
             tier_model = getattr(override, f"model_{complexity_tier}", "")
             if tier_model:
                 return tier_model
-        return getattr(getattr(self._config.routing, cli_name), "model", "") or None
+        if complexity_tier and phase_name in {"planning", "executing"}:
+            tier_models = getattr(self._config.models, phase_name, None)
+            if tier_models:
+                tier_model = getattr(tier_models, complexity_tier, "")
+                if tier_model:
+                    return tier_model
+        if phase_name == "reviewing" and cli_name == "codex":
+            codex_model = getattr(self._config.models.reviewing, "codex", "")
+            if codex_model:
+                return codex_model
+        if phase_name == "scoping":
+            if cli_name == "claude":
+                scoped_model = getattr(self._config.models.scoping, "claude", "")
+                if scoped_model:
+                    return scoped_model
+            scoped_codex = getattr(self._config.models.scoping, "codex", "")
+            if scoped_codex:
+                return scoped_codex
+        return getattr(getattr(self._config.models, cli_name), "default", "") or None
 
     def _phase_allowed_tools(self, phase_name: str, *, default: list[str]) -> list[str] | None:
         override = self._config.routing.phases.get(phase_name)

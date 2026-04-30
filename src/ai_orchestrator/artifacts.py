@@ -316,6 +316,12 @@ class ArtifactStore:
             raise ArtifactError(f"Analysis session prefix is ambiguous: {prefix}")
         raise ArtifactError(f"Analysis session does not exist: {prefix}")
 
+    def latest_analysis_session(self) -> AnalysisSession | None:
+        sessions = self.list_analysis_sessions()
+        if not sessions:
+            return None
+        return max(sessions, key=lambda item: item.updated_at or item.created_at)
+
     def _write_versioned_json(self, bucket: str, prefix: str, payload: dict[str, Any]) -> str:
         relative = Path(bucket) / f"{prefix}-{uuid4().hex[:8]}.json"
         self._write_json(relative, payload)

@@ -92,6 +92,72 @@ def test_version_smoke():
     assert "orch" in result.output
 
 
+def test_continue_dispatches_to_run_resume(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeEngine:
+        def resume(self, run_id):
+            captured["run_id"] = run_id
+            return RunState(run_id=run_id, task="x", status="DONE")
+
+    monkeypatch.setattr("ai_orchestrator.cli._resolve_session", lambda ctx, prefix: ("run-123", "run"))
+    monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx, **kwargs: FakeEngine())
+    monkeypatch.setattr("ai_orchestrator.cli._render_run_snapshot", lambda ctx, run_id, state=None: captured.setdefault("rendered", run_id))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["continue", "run-123", "followup"])
+
+    assert result.exit_code == 0
+    assert captured["run_id"] == "run-123"
+    assert captured["rendered"] == "run-123"
+    assert "ignored for pipeline runs" in result.output
+
+
+def test_continue_dispatches_to_analysis_runner(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def continue_session(self, session_id, follow_up, settings):
+            captured["session_id"] = session_id
+            captured["follow_up"] = follow_up
+            captured["rounds"] = settings.rounds
+
+    monkeypatch.setattr("ai_orchestrator.cli._resolve_session", lambda ctx, prefix: ("session-123", "analysis"))
+    monkeypatch.setattr("ai_orchestrator.cli.AnalysisRunner", FakeRunner)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["continue", "session-123", "followup"])
+
+    assert result.exit_code == 0
+    assert captured["session_id"] == "session-123"
+    assert captured["follow_up"] == "followup"
+    assert captured["rounds"] >= 1
+
+
+def test_resume_is_deprecated_alias_for_continue(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeEngine:
+        def resume(self, run_id):
+            captured["run_id"] = run_id
+            return RunState(run_id=run_id, task="x", status="DONE")
+
+    monkeypatch.setattr("ai_orchestrator.cli._resolve_session", lambda ctx, prefix: ("run-xyz", "run"))
+    monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx, **kwargs: FakeEngine())
+    monkeypatch.setattr("ai_orchestrator.cli._render_run_snapshot", lambda ctx, run_id, state=None: captured.setdefault("rendered", run_id))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["resume", "abc123"])
+
+    assert result.exit_code == 0
+    assert captured["run_id"] == "run-xyz"
+    assert captured["rendered"] == "run-xyz"
+    assert "deprecated" in result.output.lower()
+
+
 def test_init_scaffolds_repo_files():
     runner = CliRunner()
     with runner.isolated_filesystem():

@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -107,6 +108,40 @@ def _resolve_run_id_arg(ctx: click.Context, run_id: str | None) -> str:
     try:
         return state_mgr.resolve_run_id(run_id)
     except StateError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_session(ctx: click.Context, prefix: str | None) -> tuple[str, str]:
+    _ensure_runtime_gitignore(ctx)
+    state_mgr = StateManager(ctx.obj["artifact_root"])
+    artifacts = ArtifactStore(ctx.obj["artifact_root"])
+    normalized = (prefix or "").strip()
+
+    if not normalized or normalized == "latest":
+        latest_run_id = state_mgr.resolve_run_id(None) if state_mgr.list_runs() else None
+        latest_run_ts = state_mgr.latest_run_timestamp() if latest_run_id else None
+        latest_analysis = artifacts.latest_analysis_session()
+        latest_analysis_ts = latest_analysis.updated_at if latest_analysis else None
+        if latest_run_ts and latest_analysis_ts:
+            run_dt = datetime.fromisoformat(latest_run_ts.replace("Z", "+00:00"))
+            analysis_dt = datetime.fromisoformat(latest_analysis_ts.replace("Z", "+00:00"))
+            if analysis_dt >= run_dt:
+                return latest_analysis.session_id, "analysis"
+            return latest_run_id, "run"
+        if latest_analysis:
+            return latest_analysis.session_id, "analysis"
+        if latest_run_id:
+            return latest_run_id, "run"
+        raise click.ClickException("No sessions found.")
+
+    try:
+        return state_mgr.resolve_run_id(normalized), "run"
+    except StateError:
+        pass
+    try:
+        session = artifacts.load_analysis_session(normalized)
+        return session.session_id, "analysis"
+    except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
 
@@ -343,8 +378,8 @@ def _configure_mode_settings(ctx: click.Context, mode_state: dict[str, Any]) -> 
         config = _require_config(ctx)
         ui.info(
             "Current settings (change at plan approval gate) | "
-            f"Claude: {config.routing.claude.model or 'default'} ({config.routing.claude.reasoning_effort}) · "
-            f"Codex: {config.routing.codex.model or 'default'} ({config.routing.codex.reasoning_effort})"
+            f"Claude: {config.models.claude.default or 'default'} ({config.efforts.claude.default}) · "
+            f"Codex: {config.models.codex.default or 'default'} ({config.efforts.codex.default})"
         )
         return
     if mode == Mode.ANALYSIS:
@@ -692,17 +727,21 @@ def cmd_review(
     """Review the current branch diff without running planning or execution."""
     task = task or "Review the current branch diff."
     settings = ReviewSettings(
-        rounds=rounds or _require_config(ctx).modes.review_rounds,
-        escalation_model=escalation_model or _require_config(ctx).modes.review_escalation_model,
-        escalation_effort=escalation_effort or _require_config(ctx).modes.review_escalation_effort,
+        rounds=rounds or _require_config(ctx).modes.review.rounds,
+        claude_model=_require_config(ctx).modes.review.claude_model or _require_config(ctx).models.claude.default,
+        codex_model=_require_config(ctx).modes.review.codex_model or _require_config(ctx).models.codex.default,
+        claude_effort=_require_config(ctx).modes.review.claude_effort or _require_config(ctx).efforts.claude.default,
+        codex_effort=_require_config(ctx).modes.review.codex_effort or _require_config(ctx).efforts.codex.default,
+        escalation_model=escalation_model or _require_config(ctx).modes.review.escalation_model,
+        escalation_effort=escalation_effort or _require_config(ctx).modes.review.escalation_effort,
     )
     ctx.obj["ui"].print_mode_header(Mode.REVIEW.value, settings)
     interactive = interactive and not detach
     config = deepcopy(_require_config(ctx))
     if settings.escalation_model:
-        config.debate.escalated_claude_model = settings.escalation_model
+        config.models.debate.escalated_claude = settings.escalation_model
     if settings.escalation_effort:
-        config.debate.escalated_claude_effort = settings.escalation_effort
+        config.efforts.debate.escalated_claude = settings.escalation_effort
     engine = _build_engine(ctx, config=config, review_rounds=settings.rounds)
     run_id = str(uuid4())
     state = engine.start(
@@ -744,13 +783,13 @@ def cmd_analysis(
     task = task or _read_task_from_stdin_or_prompt()
     config = _require_config(ctx)
     settings = AnalysisSettings(
-        rounds=rounds or config.modes.analysis_rounds,
-        claude_model=claude_model or config.routing.claude.model,
-        codex_model=codex_model or config.routing.codex.model,
-        claude_effort=claude_effort or config.routing.claude.reasoning_effort,
-        codex_effort=codex_effort or config.routing.codex.reasoning_effort,
-        escalation_model=escalation_model or config.modes.analysis_escalation_model,
-        escalation_effort=escalation_effort or config.modes.analysis_escalation_effort,
+        rounds=rounds or config.modes.analysis.rounds,
+        claude_model=claude_model or config.modes.analysis.claude_model or config.models.claude.default,
+        codex_model=codex_model or config.modes.analysis.codex_model or config.models.codex.default,
+        claude_effort=claude_effort or config.modes.analysis.claude_effort or config.efforts.claude.default,
+        codex_effort=codex_effort or config.modes.analysis.codex_effort or config.efforts.codex.default,
+        escalation_model=escalation_model or config.modes.analysis.escalation_model,
+        escalation_effort=escalation_effort or config.modes.analysis.escalation_effort,
     )
     ctx.obj["ui"].print_mode_header(Mode.ANALYSIS.value, settings)
     AnalysisRunner(config, ctx.obj["repo_root"], ctx.obj["artifact_root"], ui=ctx.obj["ui"]).run(
@@ -773,7 +812,7 @@ def cmd_auto(
     config = deepcopy(_require_config(ctx))
     config.approval.require_plan_approval = False
     config.approval.require_merge_approval = False
-    limit = max_iterations or config.modes.autonomous_max_iterations
+    limit = max_iterations or config.modes.autonomous.max_iterations
     ctx.obj["ui"].print_mode_header(Mode.AUTONOMOUS.value, AutonomousSettings(max_iterations=limit))
     state = _start_run(
         ctx,
@@ -813,19 +852,34 @@ def cmd_sessions(ctx: click.Context, mode_filter: str) -> None:
 
 
 @main.command("continue")
-@click.argument("session_id")
+@click.argument("session_id", required=False, default=None)
 @click.argument("follow_up", required=False)
 @click.pass_context
-def cmd_continue(ctx: click.Context, session_id: str, follow_up: str | None) -> None:
-    """Continue a past analysis session."""
+def cmd_continue(ctx: click.Context, session_id: str | None, follow_up: str | None) -> None:
+    """Continue the latest or a specific session (run or analysis)."""
     config = _require_config(ctx)
+    resolved_id, kind = _resolve_session(ctx, session_id)
+    if kind == "run":
+        if follow_up:
+            ctx.obj["ui"].warning("follow_up is ignored for pipeline runs.")
+        engine = _build_engine(ctx)
+        try:
+            state = engine.resume(resolved_id)
+        except EngineError as exc:
+            raise click.ClickException(str(exc)) from exc
+        _render_run_snapshot(ctx, state.run_id, state=state)
+        return
     settings = AnalysisSettings(
-        rounds=config.modes.analysis_rounds,
-        escalation_model=config.modes.analysis_escalation_model,
-        escalation_effort=config.modes.analysis_escalation_effort,
+        rounds=config.modes.analysis.rounds,
+        claude_model=config.modes.analysis.claude_model or config.models.claude.default,
+        codex_model=config.modes.analysis.codex_model or config.models.codex.default,
+        claude_effort=config.modes.analysis.claude_effort or config.efforts.claude.default,
+        codex_effort=config.modes.analysis.codex_effort or config.efforts.codex.default,
+        escalation_model=config.modes.analysis.escalation_model,
+        escalation_effort=config.modes.analysis.escalation_effort,
     )
     AnalysisRunner(config, ctx.obj["repo_root"], ctx.obj["artifact_root"], ui=ctx.obj["ui"]).continue_session(
-        session_id,
+        resolved_id,
         follow_up or "",
         settings,
     )
@@ -897,29 +951,29 @@ def _run_shell(ctx: click.Context) -> None:
         "mode": Mode.DEFAULT,
         "formatted_prompt": build_prompt_message(Mode.DEFAULT.value),
         "analysis": AnalysisSettings(
-            rounds=config.modes.analysis_rounds,
-            claude_model=config.routing.claude.model,
-            codex_model=config.routing.codex.model,
-            claude_effort=config.routing.claude.reasoning_effort,
-            codex_effort=config.routing.codex.reasoning_effort,
-            escalation_model=config.modes.analysis_escalation_model,
-            escalation_effort=config.modes.analysis_escalation_effort,
+            rounds=config.modes.analysis.rounds,
+            claude_model=config.modes.analysis.claude_model or config.models.claude.default,
+            codex_model=config.modes.analysis.codex_model or config.models.codex.default,
+            claude_effort=config.modes.analysis.claude_effort or config.efforts.claude.default,
+            codex_effort=config.modes.analysis.codex_effort or config.efforts.codex.default,
+            escalation_model=config.modes.analysis.escalation_model,
+            escalation_effort=config.modes.analysis.escalation_effort,
         ),
         "review": ReviewSettings(
-            rounds=config.modes.review_rounds,
-            claude_model=config.routing.claude.model,
-            codex_model=config.routing.codex.model,
-            claude_effort=config.routing.claude.reasoning_effort,
-            codex_effort=config.routing.codex.reasoning_effort,
-            escalation_model=config.modes.review_escalation_model,
-            escalation_effort=config.modes.review_escalation_effort,
+            rounds=config.modes.review.rounds,
+            claude_model=config.modes.review.claude_model or config.models.claude.default,
+            codex_model=config.modes.review.codex_model or config.models.codex.default,
+            claude_effort=config.modes.review.claude_effort or config.efforts.claude.default,
+            codex_effort=config.modes.review.codex_effort or config.efforts.codex.default,
+            escalation_model=config.modes.review.escalation_model,
+            escalation_effort=config.modes.review.escalation_effort,
         ),
         "autonomous": AutonomousSettings(
-            max_iterations=config.modes.autonomous_max_iterations,
-            claude_model=config.routing.claude.model,
-            codex_model=config.routing.codex.model,
-            claude_effort=config.routing.claude.reasoning_effort,
-            codex_effort=config.routing.codex.reasoning_effort,
+            max_iterations=config.modes.autonomous.max_iterations,
+            claude_model=config.modes.autonomous.claude_model or config.models.claude.default,
+            codex_model=config.modes.autonomous.codex_model or config.models.codex.default,
+            claude_effort=config.modes.autonomous.claude_effort or config.efforts.claude.default,
+            codex_effort=config.modes.autonomous.codex_effort or config.efforts.codex.default,
         ),
         "execute": {"cli": "codex", "model": "", "effort": "", "skip_review": False},
     }
@@ -978,14 +1032,14 @@ def _run_shell(ctx: click.Context) -> None:
         elif mode == Mode.REVIEW:
             review_settings: ReviewSettings = mode_state["review"]
             review_config = deepcopy(_require_config(ctx))
-            review_config.routing.claude.model = review_settings.claude_model
-            review_config.routing.claude.reasoning_effort = review_settings.claude_effort
-            review_config.routing.codex.model = review_settings.codex_model
-            review_config.routing.codex.reasoning_effort = review_settings.codex_effort
+            review_config.models.claude.default = review_settings.claude_model
+            review_config.efforts.claude.default = review_settings.claude_effort
+            review_config.models.codex.default = review_settings.codex_model
+            review_config.efforts.codex.default = review_settings.codex_effort
             if review_settings.escalation_model:
-                review_config.debate.escalated_claude_model = review_settings.escalation_model
+                review_config.models.debate.escalated_claude = review_settings.escalation_model
             if review_settings.escalation_effort:
-                review_config.debate.escalated_claude_effort = review_settings.escalation_effort
+                review_config.efforts.debate.escalated_claude = review_settings.escalation_effort
             engine = _build_engine(ctx, config=review_config, review_rounds=review_settings.rounds)
             run_id = str(uuid4())
             state = engine.start(
@@ -1004,10 +1058,10 @@ def _run_shell(ctx: click.Context) -> None:
             auto_config = deepcopy(_require_config(ctx))
             auto_config.approval.require_plan_approval = False
             auto_config.approval.require_merge_approval = False
-            auto_config.routing.claude.model = auto_settings.claude_model
-            auto_config.routing.claude.reasoning_effort = auto_settings.claude_effort
-            auto_config.routing.codex.model = auto_settings.codex_model
-            auto_config.routing.codex.reasoning_effort = auto_settings.codex_effort
+            auto_config.models.claude.default = auto_settings.claude_model
+            auto_config.efforts.claude.default = auto_settings.claude_effort
+            auto_config.models.codex.default = auto_settings.codex_model
+            auto_config.efforts.codex.default = auto_settings.codex_effort
             _start_run(
                 ctx,
                 task,
@@ -1037,7 +1091,7 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         table.add_row("/sessions", "List analysis sessions")
         table.add_row("/continue [id]", "Continue an analysis session")
         table.add_row("/status [id]", "Show run status")
-        table.add_row("/resume [id]", "Resume a paused/failed run")
+        table.add_row("/resume [id]", "Deprecated alias for /continue")
         table.add_row("/approve [id] <gate>", "Approve a pending gate")
         table.add_row("/reject [id] <gate>", "Reject with feedback")
         table.add_row("/config", "Configure current mode settings")
@@ -1082,8 +1136,8 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
     if name == "/sessions":
         ctx.invoke(cmd_sessions, mode_filter="all")
         return False
-    if name == "/continue" and len(parts) >= 2:
-        ctx.invoke(cmd_continue, session_id=parts[1], follow_up=" ".join(parts[2:]) if len(parts) > 2 else None)
+    if name == "/continue":
+        ctx.invoke(cmd_continue, session_id=(parts[1] if len(parts) > 1 else None), follow_up=" ".join(parts[2:]) if len(parts) > 2 else None)
         return False
     if name == "/status":
         ctx.invoke(cmd_status, run_id=parts[1] if len(parts) > 1 else "latest", watch=False)
@@ -1132,14 +1186,9 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
 @click.argument("run_id", required=False, default=None)
 @click.pass_context
 def cmd_resume(ctx: click.Context, run_id: str | None) -> None:
-    """Resume a paused or crashed run."""
-    engine = _build_engine(ctx)
-    run_id = _resolve_run_id_arg(ctx, run_id)
-    try:
-        state = engine.resume(run_id)
-    except EngineError as exc:
-        raise click.ClickException(str(exc)) from exc
-    _render_run_snapshot(ctx, state.run_id, state=state)
+    """Deprecated alias for continue."""
+    ctx.obj["ui"].warning("`orch resume` is deprecated. Use `orch continue`.")
+    ctx.invoke(cmd_continue, session_id=run_id, follow_up=None)
 
 
 @main.command("approve")

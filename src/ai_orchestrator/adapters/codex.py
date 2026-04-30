@@ -352,10 +352,10 @@ class CodexAdapter(BaseAdapter):
         else:
             command.extend(["--skip-git-repo-check", "--sandbox", "workspace-write"])
         command.append("--json")
-        model = model_override or getattr(self._config.routing.codex, "model", "") or None
+        model = model_override or getattr(self._config.models.codex, "default", "") or None
         reasoning_effort = (
             reasoning_effort_override
-            or getattr(self._config.routing.codex, "reasoning_effort", "")
+            or getattr(self._config.efforts.codex, "default", "")
             or None
         )
         if model:
