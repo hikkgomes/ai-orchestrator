@@ -14,20 +14,22 @@ from ai_orchestrator.state import StateManager
 def test_mode_config_defaults_are_available():
     config = Config()
 
-    assert config.modes.analysis_rounds == 3
-    assert config.modes.autonomous_max_iterations == 5
-    assert config.modes.review_escalation_effort == "xhigh"
+    assert config.modes.analysis.rounds == 3
+    assert config.modes.autonomous.max_iterations == 5
+    assert config.modes.review.escalation_effort == "xhigh"
 
 
 def test_load_config_accepts_modes_section(tmp_path):
     (tmp_path / "aio.toml").write_text(
         "\n".join(
             [
-                "[modes]",
-                "analysis_rounds = 4",
-                'analysis_escalation_effort = "max"',
-                "autonomous_max_iterations = 7",
-                "review_rounds = 2",
+                "[modes.analysis]",
+                "rounds = 4",
+                'escalation_effort = "max"',
+                "[modes.autonomous]",
+                "max_iterations = 7",
+                "[modes.review]",
+                "rounds = 2",
             ]
         ),
         encoding="utf-8",
@@ -35,10 +37,10 @@ def test_load_config_accepts_modes_section(tmp_path):
 
     config = load_config(tmp_path)
 
-    assert config.modes.analysis_rounds == 4
-    assert config.modes.analysis_escalation_effort == "max"
-    assert config.modes.autonomous_max_iterations == 7
-    assert config.modes.review_rounds == 2
+    assert config.modes.analysis.rounds == 4
+    assert config.modes.analysis.escalation_effort == "max"
+    assert config.modes.autonomous.max_iterations == 7
+    assert config.modes.review.rounds == 2
 
 
 def test_run_state_persists_mode(tmp_path):

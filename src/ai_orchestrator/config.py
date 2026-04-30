@@ -85,16 +85,6 @@ class ApprovalConfig:
 @dataclass
 class ScopingConfig:
     enabled: bool = True
-    codex_model_light: str = "gpt-5.4-mini"
-    codex_model: str = "gpt-5.4"
-
-
-@dataclass
-class DebateConfig:
-    escalated_claude_model: str = "claude-opus-4-7"
-    escalated_claude_effort: str = "xhigh"
-    escalated_codex_effort: str = "high"
-    review_codex_model: str = "gpt-5.4"
 
 
 @dataclass
@@ -125,7 +115,7 @@ class ReviewingModelsConfig:
 
 @dataclass
 class DebateModelsConfig:
-    escalated_claude: str = "claude-opus-4-7"
+    escalated_claude: str = "claude-opus-4-6"
 
 
 @dataclass
@@ -238,58 +228,6 @@ class SessionConfig:
     enable_review_resume: bool = True
 
 
-def _default_complexity_phase_map(
-    *,
-    planning: str,
-    executing: str,
-    reviewing: str,
-) -> dict[str, str]:
-    return {
-        "planning": planning,
-        "executing": executing,
-        "reviewing": reviewing,
-    }
-
-
-@dataclass
-class ComplexityRoutingConfig:
-    simple: dict[str, str] = field(
-        default_factory=lambda: _default_complexity_phase_map(
-            planning="medium",
-            executing="medium",
-            reviewing="high",
-        )
-    )
-    moderate: dict[str, str] = field(
-        default_factory=lambda: _default_complexity_phase_map(
-            planning="high",
-            executing="high",
-            reviewing="high",
-        )
-    )
-    complex: dict[str, str] = field(
-        default_factory=lambda: _default_complexity_phase_map(
-            planning="high",
-            executing="xhigh",
-            reviewing="high",
-        )
-    )
-    architectural: dict[str, str] = field(
-        default_factory=lambda: _default_complexity_phase_map(
-            planning="xhigh",
-            executing="high",
-            reviewing="high",
-        )
-    )
-    extramax: dict[str, str] = field(
-        default_factory=lambda: _default_complexity_phase_map(
-            planning="max",
-            executing="xhigh",
-            reviewing="high",
-        )
-    )
-
-
 @dataclass
 class WorktreeConfig:
     base_branch: str = "main"
@@ -350,45 +288,15 @@ class ModesConfig:
     review: ReviewModeConfig = field(default_factory=ReviewModeConfig)
     autonomous: AutonomousModeConfig = field(default_factory=AutonomousModeConfig)
 
-    @property
-    def analysis_rounds(self) -> int:
-        return self.analysis.rounds
-
-    @property
-    def analysis_escalation_model(self) -> str:
-        return self.analysis.escalation_model
-
-    @property
-    def analysis_escalation_effort(self) -> str:
-        return self.analysis.escalation_effort
-
-    @property
-    def review_rounds(self) -> int:
-        return self.review.rounds
-
-    @property
-    def review_escalation_model(self) -> str:
-        return self.review.escalation_model
-
-    @property
-    def review_escalation_effort(self) -> str:
-        return self.review.escalation_effort
-
-    @property
-    def autonomous_max_iterations(self) -> int:
-        return self.autonomous.max_iterations
-
 
 @dataclass
 class Config:
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     scoping: ScopingConfig = field(default_factory=ScopingConfig)
-    debate: DebateConfig = field(default_factory=DebateConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     efforts: EffortsConfig = field(default_factory=EffortsConfig)
     sessions: SessionConfig = field(default_factory=SessionConfig)
-    complexity_routing: ComplexityRoutingConfig = field(default_factory=ComplexityRoutingConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
@@ -431,285 +339,6 @@ def _warn_unknown_keys(section_name: str, data: dict[str, Any], known: set[str])
         warnings.warn(
             f"Unknown config keys in '{section_name}': {', '.join(unknown)}",
             RuntimeWarning,
-            stacklevel=3,
-        )
-
-
-def _warn_and_strip_deprecated_keys(data: dict[str, Any]) -> None:
-    deprecated_keys: list[str] = []
-
-    def _ensure_path(root: dict[str, Any], *segments: str) -> dict[str, Any]:
-        current = root
-        for segment in segments:
-            value = current.get(segment)
-            if not isinstance(value, dict):
-                value = {}
-                current[segment] = value
-            current = value
-        return current
-
-    def _migrate_value(source: dict[str, Any], source_key: str, target: dict[str, Any], target_key: str, source_path: str, target_path: str) -> None:
-        if source_key not in source:
-            return
-        value = source.pop(source_key)
-        deprecated_keys.append(source_path)
-        if target_key not in target or target.get(target_key) in {"", None}:
-            target[target_key] = value
-
-    orchestrator = data.get("orchestrator")
-    if isinstance(orchestrator, dict):
-        for key in (
-            "prompt_mode",
-            "step_timeout",
-            "scoping_timeout",
-            "planning_timeout",
-            "execution_timeout_low",
-            "execution_timeout_medium",
-            "execution_timeout_high",
-            "review_timeout",
-            "adjudication_timeout",
-            "max_rework_loops",
-            "max_replan_loops",
-        ):
-            if key in orchestrator:
-                deprecated_keys.append(f"orchestrator.{key}")
-                orchestrator.pop(key, None)
-
-    feasibility = data.get("feasibility")
-    if isinstance(feasibility, dict):
-        deprecated_keys.append("feasibility")
-        data.pop("feasibility", None)
-
-    scoping = data.get("scoping")
-    if isinstance(scoping, dict) and "max_scoping_rounds" in scoping:
-        deprecated_keys.append("scoping.max_scoping_rounds")
-        scoping.pop("max_scoping_rounds", None)
-
-    routing = data.get("routing")
-    if isinstance(routing, dict):
-        claude = routing.get("claude")
-        if isinstance(claude, dict):
-            models_claude = _ensure_path(data, "models", "claude")
-            efforts_claude = _ensure_path(data, "efforts", "claude")
-            _migrate_value(claude, "model", models_claude, "default", "routing.claude.model", "models.claude.default")
-            _migrate_value(
-                claude,
-                "reasoning_effort",
-                efforts_claude,
-                "default",
-                "routing.claude.reasoning_effort",
-                "efforts.claude.default",
-            )
-        codex = routing.get("codex")
-        if isinstance(codex, dict):
-            models_codex = _ensure_path(data, "models", "codex")
-            efforts_codex = _ensure_path(data, "efforts", "codex")
-            _migrate_value(codex, "model", models_codex, "default", "routing.codex.model", "models.codex.default")
-            _migrate_value(
-                codex,
-                "reasoning_effort",
-                efforts_codex,
-                "default",
-                "routing.codex.reasoning_effort",
-                "efforts.codex.default",
-            )
-        if "feasibility_checker" in routing:
-            deprecated_keys.append("routing.feasibility_checker")
-            routing.pop("feasibility_checker", None)
-        if "adjudicator" in routing:
-            deprecated_keys.append("routing.adjudicator")
-            routing.pop("adjudicator", None)
-        phases = routing.get("phases")
-        if isinstance(phases, dict):
-            if "feasibility" in phases:
-                deprecated_keys.append("routing.phases.feasibility")
-                phases.pop("feasibility", None)
-            if "adjudicating" in phases:
-                deprecated_keys.append("routing.phases.adjudicating")
-                phases.pop("adjudicating", None)
-            for phase_name, phase_data in phases.items():
-                if isinstance(phase_data, dict) and "max_turns" in phase_data:
-                    deprecated_keys.append(f"routing.phases.{phase_name}.max_turns")
-                    phase_data.pop("max_turns", None)
-                if not isinstance(phase_data, dict):
-                    continue
-                if phase_name == "planning":
-                    target = _ensure_path(data, "models", "planning")
-                    for tier in ("simple", "moderate", "complex", "architectural", "extramax"):
-                        _migrate_value(
-                            phase_data,
-                            f"model_{tier}",
-                            target,
-                            tier,
-                            f"routing.phases.planning.model_{tier}",
-                            f"models.planning.{tier}",
-                        )
-                elif phase_name == "executing":
-                    target = _ensure_path(data, "models", "executing")
-                    for tier in ("simple", "moderate", "complex", "architectural", "extramax"):
-                        _migrate_value(
-                            phase_data,
-                            f"model_{tier}",
-                            target,
-                            tier,
-                            f"routing.phases.executing.model_{tier}",
-                            f"models.executing.{tier}",
-                        )
-                elif phase_name == "reviewing":
-                    efforts_reviewing = _ensure_path(data, "efforts", "reviewing")
-                    _migrate_value(
-                        phase_data,
-                        "reasoning_effort",
-                        efforts_reviewing,
-                        "codex",
-                        "routing.phases.reviewing.reasoning_effort",
-                        "efforts.reviewing.codex",
-                    )
-                elif phase_name == "scoping" and "reasoning_effort" in phase_data:
-                    deprecated_keys.append("routing.phases.scoping.reasoning_effort")
-                    phase_data.pop("reasoning_effort", None)
-
-    complexity_routing = data.get("complexity_routing")
-    if isinstance(complexity_routing, dict):
-        efforts_complexity = _ensure_path(data, "efforts", "complexity")
-        for tier_name, tier_data in complexity_routing.items():
-            if isinstance(tier_data, dict) and "feasibility" in tier_data:
-                deprecated_keys.append(f"complexity_routing.{tier_name}.feasibility")
-                tier_data.pop("feasibility", None)
-            if isinstance(tier_data, dict) and "adjudicating" in tier_data:
-                deprecated_keys.append(f"complexity_routing.{tier_name}.adjudicating")
-                tier_data.pop("adjudicating", None)
-            if isinstance(tier_data, dict):
-                target_tier = _ensure_path(efforts_complexity, tier_name)
-                for phase in ("planning", "executing", "reviewing"):
-                    _migrate_value(
-                        tier_data,
-                        phase,
-                        target_tier,
-                        phase,
-                        f"complexity_routing.{tier_name}.{phase}",
-                        f"efforts.complexity.{tier_name}.{phase}",
-                    )
-
-    scoping = data.get("scoping")
-    if isinstance(scoping, dict):
-        models_scoping = _ensure_path(data, "models", "scoping")
-        _migrate_value(
-            scoping,
-            "codex_model_light",
-            models_scoping,
-            "codex_light",
-            "scoping.codex_model_light",
-            "models.scoping.codex_light",
-        )
-        _migrate_value(
-            scoping,
-            "codex_model",
-            models_scoping,
-            "codex",
-            "scoping.codex_model",
-            "models.scoping.codex",
-        )
-
-    debate = data.get("debate")
-    if isinstance(debate, dict):
-        models_debate = _ensure_path(data, "models", "debate")
-        efforts_debate = _ensure_path(data, "efforts", "debate")
-        models_reviewing = _ensure_path(data, "models", "reviewing")
-        _migrate_value(
-            debate,
-            "escalated_claude_model",
-            models_debate,
-            "escalated_claude",
-            "debate.escalated_claude_model",
-            "models.debate.escalated_claude",
-        )
-        _migrate_value(
-            debate,
-            "escalated_claude_effort",
-            efforts_debate,
-            "escalated_claude",
-            "debate.escalated_claude_effort",
-            "efforts.debate.escalated_claude",
-        )
-        _migrate_value(
-            debate,
-            "escalated_codex_effort",
-            efforts_debate,
-            "escalated_codex",
-            "debate.escalated_codex_effort",
-            "efforts.debate.escalated_codex",
-        )
-        _migrate_value(
-            debate,
-            "review_codex_model",
-            models_reviewing,
-            "codex",
-            "debate.review_codex_model",
-            "models.reviewing.codex",
-        )
-
-    modes = data.get("modes")
-    if isinstance(modes, dict):
-        analysis = _ensure_path(modes, "analysis")
-        review = _ensure_path(modes, "review")
-        autonomous = _ensure_path(modes, "autonomous")
-        _migrate_value(modes, "analysis_rounds", analysis, "rounds", "modes.analysis_rounds", "modes.analysis.rounds")
-        _migrate_value(
-            modes,
-            "analysis_escalation_model",
-            analysis,
-            "escalation_model",
-            "modes.analysis_escalation_model",
-            "modes.analysis.escalation_model",
-        )
-        _migrate_value(
-            modes,
-            "analysis_escalation_effort",
-            analysis,
-            "escalation_effort",
-            "modes.analysis_escalation_effort",
-            "modes.analysis.escalation_effort",
-        )
-        _migrate_value(
-            modes,
-            "review_rounds",
-            review,
-            "rounds",
-            "modes.review_rounds",
-            "modes.review.rounds",
-        )
-        _migrate_value(
-            modes,
-            "review_escalation_model",
-            review,
-            "escalation_model",
-            "modes.review_escalation_model",
-            "modes.review.escalation_model",
-        )
-        _migrate_value(
-            modes,
-            "review_escalation_effort",
-            review,
-            "escalation_effort",
-            "modes.review_escalation_effort",
-            "modes.review.escalation_effort",
-        )
-        _migrate_value(
-            modes,
-            "autonomous_max_iterations",
-            autonomous,
-            "max_iterations",
-            "modes.autonomous_max_iterations",
-            "modes.autonomous.max_iterations",
-        )
-
-    if deprecated_keys:
-        warnings.warn(
-            "Deprecated config keys are ignored or migrated: "
-            + ", ".join(deprecated_keys)
-            + ". Update the file to the current aio.toml schema.",
-            DeprecationWarning,
             stacklevel=3,
         )
 
@@ -822,30 +451,11 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
-    for key in ("codex_model_light", "codex_model"):
-        if key in scoping:
-            _validate_string(f"scoping.{key}", scoping[key])
-
-    debate = _expect_mapping("debate", data.get("debate"))
-    for key in (
-        "escalated_claude_model",
-        "escalated_claude_effort",
-        "escalated_codex_effort",
-        "review_codex_model",
-    ):
-        if key in debate:
-            _validate_string(f"debate.{key}", debate[key])
 
     sessions = _expect_mapping("sessions", data.get("sessions"))
     for key in ("enable_unified_session", "enable_planning_resume", "enable_review_resume"):
         if key in sessions:
             _validate_bool(f"sessions.{key}", sessions[key])
-
-    complexity_routing = _expect_mapping("complexity_routing", data.get("complexity_routing"))
-    for tier_name, tier_data in complexity_routing.items():
-        tier_mapping = _expect_mapping(f"complexity_routing.{tier_name}", tier_data)
-        for phase_name, effort in tier_mapping.items():
-            _validate_string(f"complexity_routing.{tier_name}.{phase_name}", effort)
 
     approval = _expect_mapping("approval", data.get("approval"))
     for key in ("require_plan_approval", "require_merge_approval"):
@@ -977,7 +587,6 @@ def load_config(repo_root: Path | None = None) -> Config:
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 
-    _warn_and_strip_deprecated_keys(merged)
     _validate_config_tree(merged)
 
     routing_data = _expect_mapping("routing", merged.get("routing"))
@@ -988,11 +597,9 @@ def load_config(repo_root: Path | None = None) -> Config:
             "orchestrator",
             "routing",
             "scoping",
-            "debate",
             "models",
             "efforts",
             "sessions",
-            "complexity_routing",
             "approval",
             "worktree",
             "workspace",
@@ -1057,24 +664,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             section_name=f"routing.phases.{phase_name}",
         )
 
-    complexity_routing_data = _expect_mapping("complexity_routing", merged.get("complexity_routing"))
-    _warn_unknown_keys(
-        "complexity_routing",
-        complexity_routing_data,
-        {"simple", "moderate", "complex", "architectural", "extramax"},
-    )
-    complexity_routing = _apply_section(
-        ComplexityRoutingConfig,
-        complexity_routing_data,
-        section_name="complexity_routing",
-    )
-    for tier_name in ("simple", "moderate", "complex", "architectural", "extramax"):
-        _warn_unknown_keys(
-            f"complexity_routing.{tier_name}",
-            getattr(complexity_routing, tier_name),
-            {"planning", "executing", "reviewing"},
-        )
-
     modes_data = _expect_mapping("modes", merged.get("modes"))
     _warn_unknown_keys("modes", modes_data, {"analysis", "review", "autonomous"})
 
@@ -1088,15 +677,6 @@ def load_config(repo_root: Path | None = None) -> Config:
         _expect_mapping("routing.codex", routing_data.get("codex")),
         section_name="routing.codex",
     )
-    if not claude_routing.model:
-        claude_routing.model = str(_expect_mapping("models.claude", models_data.get("claude")).get("default") or "")
-    if not claude_routing.reasoning_effort:
-        claude_routing.reasoning_effort = str(_expect_mapping("efforts.claude", efforts_data.get("claude")).get("default") or "high")
-    if not codex_routing.model:
-        codex_routing.model = str(_expect_mapping("models.codex", models_data.get("codex")).get("default") or "")
-    if not codex_routing.reasoning_effort:
-        codex_routing.reasoning_effort = str(_expect_mapping("efforts.codex", efforts_data.get("codex")).get("default") or "medium")
-
     config = Config(
         orchestrator=_apply_section(
             OrchestratorConfig,
@@ -1116,11 +696,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             ScopingConfig,
             _expect_mapping("scoping", merged.get("scoping")),
             section_name="scoping",
-        ),
-        debate=_apply_section(
-            DebateConfig,
-            _expect_mapping("debate", merged.get("debate")),
-            section_name="debate",
         ),
         models=ModelsConfig(
             claude=_apply_section(
@@ -1238,7 +813,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             _expect_mapping("sessions", merged.get("sessions")),
             section_name="sessions",
         ),
-        complexity_routing=complexity_routing,
         approval=_apply_section(
             ApprovalConfig,
             _expect_mapping("approval", merged.get("approval")),

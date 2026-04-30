@@ -21,21 +21,16 @@ class TestLoadConfig:
         assert cfg.routing.planner == "claude"
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
-        assert cfg.scoping.codex_model_light == "gpt-5.4-mini"
-        assert cfg.scoping.codex_model == "gpt-5.4"
         assert cfg.approval.require_plan_approval is True
         assert cfg.routing.claude.reasoning_effort == "high"
         assert cfg.routing.codex.reasoning_effort == "medium"
         assert cfg.models.scoping.codex_light == "gpt-5.4-mini"
         assert cfg.efforts.scoping.round_6_claude == "xhigh"
-        assert cfg.complexity_routing.architectural["planning"] == "xhigh"
-        assert cfg.complexity_routing.architectural["executing"] == "high"
-        assert cfg.complexity_routing.extramax["planning"] == "max"
-        assert cfg.complexity_routing.extramax["executing"] == "xhigh"
-        assert cfg.debate.escalated_claude_model == "claude-opus-4-7"
-        assert cfg.debate.escalated_claude_effort == "xhigh"
-        assert cfg.debate.review_codex_model == "gpt-5.4"
-        assert cfg.models.debate.escalated_claude == "claude-opus-4-7"
+        assert cfg.efforts.complexity.architectural.planning == "xhigh"
+        assert cfg.efforts.complexity.architectural.executing == "high"
+        assert cfg.efforts.complexity.extramax.planning == "max"
+        assert cfg.efforts.complexity.extramax.executing == "xhigh"
+        assert cfg.models.debate.escalated_claude == "claude-opus-4-6"
         assert cfg.efforts.debate.escalated_claude == "xhigh"
 
     def test_repo_toml_overrides_defaults(self, tmp_path):
@@ -67,10 +62,9 @@ class TestLoadConfig:
                     'model_extramax = "claude-opus"',
                     "[scoping]",
                     "enabled = false",
-                    'codex_model_light = "gpt-5.4-mini"',
-                    "[complexity_routing.simple]",
+                    "[efforts.complexity.simple]",
                     'reviewing = "max"',
-                    "[complexity_routing.extramax]",
+                    "[efforts.complexity.extramax]",
                     'planning = "max"',
                 ]
             )
@@ -85,9 +79,8 @@ class TestLoadConfig:
         assert cfg.routing.phases["executing"].model == "claude-sonnet"
         assert cfg.routing.phases["executing"].model_extramax == "claude-opus"
         assert cfg.scoping.enabled is False
-        assert cfg.scoping.codex_model_light == "gpt-5.4-mini"
-        assert cfg.complexity_routing.simple["reviewing"] == "max"
-        assert cfg.complexity_routing.extramax["planning"] == "max"
+        assert cfg.efforts.complexity.simple.reviewing == "max"
+        assert cfg.efforts.complexity.extramax.planning == "max"
 
     def test_global_toml_is_merged_before_repo_overrides(self, tmp_path, monkeypatch):
         global_root = tmp_path / "global"
@@ -127,68 +120,3 @@ class TestLoadConfig:
             cfg = load_config(repo_root=tmp_path)
 
         assert cfg.orchestrator.max_retries == 5
-
-    def test_deprecated_orchestrator_timeouts_warn_and_are_ignored(self, tmp_path):
-        (tmp_path / "aio.toml").write_text(
-            "\n".join(
-                [
-                    "[orchestrator]",
-                    "watchdog_timeout = 900",
-                    "step_timeout = 300",
-                    "scoping_timeout = 60",
-                    "planning_timeout = 120",
-                    "execution_timeout_low = 180",
-                    "execution_timeout_medium = 300",
-                    "execution_timeout_high = 600",
-                    "review_timeout = 180",
-                    "adjudication_timeout = 120",
-                ]
-            )
-        )
-
-        with pytest.warns(
-            DeprecationWarning,
-            match="orchestrator\\.step_timeout|orchestrator\\.adjudication_timeout|watchdog_timeout",
-        ):
-            cfg = load_config(repo_root=tmp_path)
-
-        assert cfg.orchestrator.watchdog_timeout == 900
-
-    def test_deprecated_feasibility_section_warns_and_is_ignored(self, tmp_path):
-        (tmp_path / "aio.toml").write_text(
-            "\n".join(
-                [
-                    "[feasibility]",
-                    "enabled = false",
-                    "timeout = 45",
-                ]
-            )
-        )
-
-        with pytest.warns(
-            DeprecationWarning,
-            match="feasibility|watchdog_timeout",
-        ):
-            cfg = load_config(repo_root=tmp_path)
-
-        assert cfg.scoping.enabled is True
-
-    def test_deprecated_phase_max_turns_warns_and_is_ignored(self, tmp_path):
-        (tmp_path / "aio.toml").write_text(
-            "\n".join(
-                [
-                    "[routing.phases.executing]",
-                    'cli = "claude"',
-                    "max_turns = 7",
-                ]
-            )
-        )
-
-        with pytest.warns(
-            DeprecationWarning,
-            match=r"routing\.phases\.executing\.max_turns|watchdog_timeout",
-        ):
-            cfg = load_config(repo_root=tmp_path)
-
-        assert cfg.routing.phases["executing"].cli == "claude"
-        assert not hasattr(cfg.routing.phases["executing"], "max_turns")

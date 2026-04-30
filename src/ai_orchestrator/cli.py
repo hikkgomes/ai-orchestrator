@@ -1091,7 +1091,6 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         table.add_row("/sessions", "List analysis sessions")
         table.add_row("/continue [id]", "Continue an analysis session")
         table.add_row("/status [id]", "Show run status")
-        table.add_row("/resume [id]", "Deprecated alias for /continue")
         table.add_row("/approve [id] <gate>", "Approve a pending gate")
         table.add_row("/reject [id] <gate>", "Reject with feedback")
         table.add_row("/config", "Configure current mode settings")
@@ -1142,9 +1141,6 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
     if name == "/status":
         ctx.invoke(cmd_status, run_id=parts[1] if len(parts) > 1 else "latest", watch=False)
         return False
-    if name == "/resume":
-        ctx.invoke(cmd_resume, run_id=parts[1] if len(parts) >= 2 else None)
-        return False
     if name == "/approve":
         if len(parts) == 2:
             ctx.invoke(cmd_approve, run_id=None, gate=parts[1], force=False, decision=None)
@@ -1180,15 +1176,6 @@ def _handle_shell_command(ctx: click.Context, command: str, mode_state: dict[str
         return False
     ui.warning(f"Unknown shell command: {command}")
     return False
-
-
-@main.command("resume")
-@click.argument("run_id", required=False, default=None)
-@click.pass_context
-def cmd_resume(ctx: click.Context, run_id: str | None) -> None:
-    """Deprecated alias for continue."""
-    ctx.obj["ui"].warning("`orch resume` is deprecated. Use `orch continue`.")
-    ctx.invoke(cmd_continue, session_id=run_id, follow_up=None)
 
 
 @main.command("approve")

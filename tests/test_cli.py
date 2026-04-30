@@ -43,7 +43,6 @@ def test_root_help_lists_primary_commands():
         "status",
         "approve",
         "reject",
-        "resume",
         "show",
         "logs",
         "doctor",
@@ -68,7 +67,6 @@ def test_command_help_smoke():
         "auto",
         "sessions",
         "continue",
-        "resume",
         "approve",
         "reject",
         "status",
@@ -135,27 +133,6 @@ def test_continue_dispatches_to_analysis_runner(monkeypatch):
     assert captured["session_id"] == "session-123"
     assert captured["follow_up"] == "followup"
     assert captured["rounds"] >= 1
-
-
-def test_resume_is_deprecated_alias_for_continue(monkeypatch):
-    captured: dict[str, object] = {}
-
-    class FakeEngine:
-        def resume(self, run_id):
-            captured["run_id"] = run_id
-            return RunState(run_id=run_id, task="x", status="DONE")
-
-    monkeypatch.setattr("ai_orchestrator.cli._resolve_session", lambda ctx, prefix: ("run-xyz", "run"))
-    monkeypatch.setattr("ai_orchestrator.cli._build_engine", lambda ctx, **kwargs: FakeEngine())
-    monkeypatch.setattr("ai_orchestrator.cli._render_run_snapshot", lambda ctx, run_id, state=None: captured.setdefault("rendered", run_id))
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["resume", "abc123"])
-
-    assert result.exit_code == 0
-    assert captured["run_id"] == "run-xyz"
-    assert captured["rendered"] == "run-xyz"
-    assert "deprecated" in result.output.lower()
 
 
 def test_init_scaffolds_repo_files():
@@ -578,7 +555,7 @@ def test_available_models_for_cli_collects_default_and_phase_overrides():
     )
     cfg.routing.phases["planning"] = PhaseRoutingOverride(
         cli="claude",
-        model="claude-opus-4-7",
+        model="claude-opus-4-6",
     )
     cfg.routing.phases["reviewing"] = PhaseRoutingOverride(
         cli="claude",
@@ -593,12 +570,12 @@ def test_available_models_for_cli_collects_default_and_phase_overrides():
     assert "gpt-5.4" in codex_models
     assert "gpt-5.4-mini" in codex_models
     assert "gpt-5.3-codex" in codex_models
-    assert "claude-opus-4-7" not in codex_models
+    assert "claude-opus-4-6" not in codex_models
 
     claude_models = _available_models_for_cli(StubEngine(), "claude")
     assert claude_models[0] == "(default)"
     assert "claude-sonnet-4-6" in claude_models
-    assert "claude-opus-4-7" in claude_models
+    assert "claude-opus-4-6" in claude_models
     assert "gpt-5.3-codex" not in claude_models
 
 
