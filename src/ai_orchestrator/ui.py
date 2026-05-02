@@ -265,13 +265,13 @@ def _next_step_info(state: RunState) -> tuple[str, str]:
     if phase == WorkflowStatus.DONE.value:
         return "Run complete! Review the suggested commands below.", "green"
     if phase == WorkflowStatus.FAILED.value:
-        return "This run failed. Use `orch resume` to retry, or start a new run.", "red"
+        return "This run failed. Use `orch continue` to retry, or start a new run.", "red"
     if phase == WorkflowStatus.TERMINATED.value:
         return "This run was stopped.", "dim"
     if phase == WorkflowStatus.BLOCKED_ON_CLI.value:
         return "A CLI tool is unavailable. Run `orch doctor` to check.", "red"
     if phase == WorkflowStatus.CONFLICT.value:
-        return "Merge conflict detected. Resolve manually, then `orch resume`.", "red"
+        return "Merge conflict detected. Resolve manually, then `orch continue`.", "red"
     return "No action needed right now.", "dim"
 
 

@@ -249,7 +249,7 @@ Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth re
 
 **Resume semantics by state:**
 
-| State | `orch resume` behavior |
+| State | `orch continue` behavior |
 |---|---|
 | `PAUSED` | Re-enter at the approval gate |
 | `FAILED` | Not resumable. User must `orch clean` and re-run. |
@@ -290,7 +290,7 @@ resume one unified session across phases:
 
 ## Resuming Failed Runs
 
-`FAILED` runs can be resumed with `orch resume <run-id>`:
+`FAILED` runs can be resumed with `orch continue <session-id>`:
 
 - `SCOPING` and `PLANNING` failures resume at the failed phase.
 - `EXECUTING`, `REVIEWING`, and `MERGING` failures resume at the failed phase when the managed worktree still exists.

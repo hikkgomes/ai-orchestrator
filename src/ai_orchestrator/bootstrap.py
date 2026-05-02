@@ -17,44 +17,117 @@ worker = "codex"
 reviewer = "claude"
 scoper = "claude"
 
-[routing.claude]
-model = ""
-reasoning_effort = "high"
+[models.claude]
+default = ""
 
-[routing.codex]
-model = ""
-reasoning_effort = "medium"
+[models.codex]
+default = ""
 
-[routing.phases.scoping]
-reasoning_effort = "high"
+[models.scoping]
+claude = "claude-sonnet-4-6"
+codex_light = "gpt-5.4-mini"
+codex = "gpt-5.4"
 
-[routing.phases.planning]
-model_simple = "claude-sonnet-4-6"
-model_moderate = "claude-sonnet-4-6"
-model_complex = "claude-opus-4-7"
-model_architectural = "claude-opus-4-7"
-model_extramax = "claude-opus-4-7"
+[models.planning]
+simple = "claude-sonnet-4-6"
+moderate = "claude-sonnet-4-6"
+complex = "claude-opus-4-6"
+architectural = "claude-opus-4-6"
+extramax = "claude-opus-4-6"
 
-[routing.phases.executing]
-model_simple = "gpt-5.4-mini"
-model_moderate = "gpt-5.3-codex"
-model_complex = "gpt-5.3-codex"
-model_architectural = "gpt-5.4"
-model_extramax = "gpt-5.4"
+[models.executing]
+simple = "gpt-5.4-mini"
+moderate = "gpt-5.3-codex"
+complex = "gpt-5.3-codex"
+architectural = "gpt-5.4"
+extramax = "gpt-5.4"
 
-[routing.phases.reviewing]
-reasoning_effort = "high"
+[models.reviewing]
+codex = "gpt-5.4"
+
+[models.debate]
+escalated_claude = "claude-opus-4-6"
+
+[efforts.claude]
+default = "high"
+
+[efforts.codex]
+default = "medium"
+
+[efforts.scoping]
+round_1_claude = "medium"
+round_1_codex = "medium"
+round_3_codex = "high"
+round_4_claude = "high"
+round_5_codex = "high"
+round_6_claude = "xhigh"
+
+[efforts.complexity.simple]
+planning = "medium"
+executing = "medium"
+reviewing = "high"
+
+[efforts.complexity.moderate]
+planning = "high"
+executing = "high"
+reviewing = "high"
+
+[efforts.complexity.complex]
+planning = "high"
+executing = "xhigh"
+reviewing = "high"
+
+[efforts.complexity.architectural]
+planning = "xhigh"
+executing = "high"
+reviewing = "high"
+
+[efforts.complexity.extramax]
+planning = "max"
+executing = "xhigh"
+reviewing = "high"
+
+[efforts.review_final]
+simple = "high"
+moderate = "high"
+complex = "high"
+architectural = "xhigh"
+extramax = "max"
+
+[efforts.reviewing]
+codex = "high"
+
+[efforts.debate]
+escalated_claude = "xhigh"
+escalated_codex = "high"
 
 [scoping]
 enabled = true
-codex_model_light = "gpt-5.4-mini"
-codex_model = "gpt-5.4"
 
-[debate]
-escalated_claude_model = "claude-opus-4-7"
-escalated_claude_effort = "xhigh"
-escalated_codex_effort = "high"
-review_codex_model = "gpt-5.4"
+[modes.analysis]
+rounds = 3
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "high"
+escalation_model = ""
+escalation_effort = "xhigh"
+
+[modes.review]
+rounds = 3
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "medium"
+escalation_model = ""
+escalation_effort = "xhigh"
+
+[modes.autonomous]
+max_iterations = 5
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "medium"
 
 [sessions]
 enable_planning_resume = true

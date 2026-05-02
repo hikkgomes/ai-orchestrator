@@ -545,8 +545,8 @@ def test_self_update_pip_user_falls_back_to_pip(monkeypatch):
 def test_available_models_for_cli_collects_default_and_phase_overrides():
     cfg = Config()
     cfg.routing.worker = "codex"
-    cfg.routing.codex.model = "gpt-5.4"
-    cfg.routing.claude.model = "claude-sonnet-4-6"
+    cfg.models.codex.default = "gpt-5.4"
+    cfg.models.claude.default = "claude-sonnet-4-6"
     cfg.routing.phases["executing"] = PhaseRoutingOverride(
         model="gpt-5.4-mini",
         model_simple="gpt-5.4-mini",
@@ -582,7 +582,7 @@ def test_available_models_for_cli_collects_default_and_phase_overrides():
 def test_adjust_execution_settings_model_override(monkeypatch):
     cfg = Config()
     cfg.routing.worker = "codex"
-    cfg.routing.codex.model = "gpt-5.4"
+    cfg.models.codex.default = "gpt-5.4"
 
     class StubEngine:
         _config = cfg
@@ -617,7 +617,7 @@ def test_adjust_execution_settings_model_override(monkeypatch):
 def test_adjust_execution_settings_executor_swap(monkeypatch):
     cfg = Config()
     cfg.routing.worker = "codex"
-    cfg.routing.claude.model = "claude-sonnet-4-6"
+    cfg.models.claude.default = "claude-sonnet-4-6"
 
     class StubEngine:
         _config = cfg

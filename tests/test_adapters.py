@@ -78,8 +78,8 @@ class TestClaudeAdapter:
         monkeypatch,
     ):
         calls = []
-        default_config.routing.claude.model = "claude-sonnet"
-        default_config.routing.claude.reasoning_effort = "high"
+        default_config.models.claude.default = "claude-sonnet"
+        default_config.efforts.claude.default = "high"
         schema = _schema("plan.schema.json")
         fake_popen, _ = _fake_popen_factory(
             [

@@ -22,8 +22,8 @@ class TestLoadConfig:
         assert cfg.routing.scoper == "claude"
         assert cfg.scoping.enabled is True
         assert cfg.approval.require_plan_approval is True
-        assert cfg.routing.claude.reasoning_effort == "high"
-        assert cfg.routing.codex.reasoning_effort == "medium"
+        assert cfg.efforts.claude.default == "high"
+        assert cfg.efforts.codex.default == "medium"
         assert cfg.models.scoping.codex_light == "gpt-5.4-mini"
         assert cfg.efforts.scoping.round_6_claude == "xhigh"
         assert cfg.efforts.complexity.architectural.planning == "xhigh"
@@ -38,12 +38,11 @@ class TestLoadConfig:
         toml = tmp_path / "aio.toml"
         toml.write_text(
             "[orchestrator]\nmax_retries = 5\n"
-            "[routing.codex]\nmodel = \"gpt-5\"\nreasoning_effort = \"high\"\n"
+            "[models.codex]\ndefault = \"gpt-5\"\n"
+            "[efforts.codex]\ndefault = \"high\"\n"
         )
         cfg = load_config(repo_root=tmp_path)
         assert cfg.orchestrator.max_retries == 5
-        assert cfg.routing.codex.model == "gpt-5"
-        assert cfg.routing.codex.reasoning_effort == "high"
         assert cfg.models.codex.default == "gpt-5"
         assert cfg.efforts.codex.default == "high"
 
@@ -88,15 +87,15 @@ class TestLoadConfig:
         config_dir.mkdir(parents=True)
         (config_dir / "config.toml").write_text(
             "[logging]\nretain_raw_output = true\n"
-            "[routing.claude]\nmodel = \"claude-opus\"\n"
+            "[models.claude]\ndefault = \"claude-opus\"\n"
         )
         monkeypatch.setattr(Path, "home", lambda: global_root)
-        (tmp_path / "aio.toml").write_text("[routing.claude]\nreasoning_effort = \"medium\"\n")
+        (tmp_path / "aio.toml").write_text("[efforts.claude]\ndefault = \"medium\"\n")
 
         cfg = load_config(repo_root=tmp_path)
         assert cfg.logging.retain_raw_output is True
-        assert cfg.routing.claude.model == "claude-opus"
-        assert cfg.routing.claude.reasoning_effort == "medium"
+        assert cfg.models.claude.default == "claude-opus"
+        assert cfg.efforts.claude.default == "medium"
 
     def test_invalid_toml_raises(self, tmp_path):
         """Invalid TOML raises ValueError."""

@@ -40,18 +40,6 @@ class OrchestratorConfig:
 
 
 @dataclass
-class ClaudeRoutingConfig:
-    model: str = ""
-    reasoning_effort: str = "high"
-
-
-@dataclass
-class CodexRoutingConfig:
-    model: str = ""
-    reasoning_effort: str = "medium"
-
-
-@dataclass
 class PhaseRoutingOverride:
     cli: str = ""
     reasoning_effort: str = ""
@@ -71,8 +59,6 @@ class RoutingConfig:
     worker: str = "codex"
     reviewer: str = "claude"
     scoper: str = "claude"
-    claude: ClaudeRoutingConfig = field(default_factory=ClaudeRoutingConfig)
-    codex: CodexRoutingConfig = field(default_factory=CodexRoutingConfig)
     phases: dict[str, PhaseRoutingOverride] = field(default_factory=dict)
 
 
@@ -411,16 +397,6 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
         if key in routing:
             _validate_choice(f"routing.{key}", routing[key], {"claude", "codex"})
 
-    claude = _expect_mapping("routing.claude", routing.get("claude"))
-    for key in ("model", "reasoning_effort"):
-        if key in claude:
-            _validate_string(f"routing.claude.{key}", claude[key])
-
-    codex = _expect_mapping("routing.codex", routing.get("codex"))
-    for key in ("model", "reasoning_effort"):
-        if key in codex:
-            _validate_string(f"routing.codex.{key}", codex[key])
-
     phases = _expect_mapping("routing.phases", routing.get("phases"))
     for phase_name, phase_data in phases.items():
         phase_mapping = _expect_mapping(f"routing.phases.{phase_name}", phase_data)
@@ -628,8 +604,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             "worker",
             "reviewer",
             "scoper",
-            "claude",
-            "codex",
             "phases",
         },
     )
@@ -667,16 +641,6 @@ def load_config(repo_root: Path | None = None) -> Config:
     modes_data = _expect_mapping("modes", merged.get("modes"))
     _warn_unknown_keys("modes", modes_data, {"analysis", "review", "autonomous"})
 
-    claude_routing = _apply_section(
-        ClaudeRoutingConfig,
-        _expect_mapping("routing.claude", routing_data.get("claude")),
-        section_name="routing.claude",
-    )
-    codex_routing = _apply_section(
-        CodexRoutingConfig,
-        _expect_mapping("routing.codex", routing_data.get("codex")),
-        section_name="routing.codex",
-    )
     config = Config(
         orchestrator=_apply_section(
             OrchestratorConfig,
@@ -688,8 +652,6 @@ def load_config(repo_root: Path | None = None) -> Config:
             worker=routing_data.get("worker", "codex"),
             reviewer=routing_data.get("reviewer", "claude"),
             scoper=routing_data.get("scoper", "claude"),
-            claude=claude_routing,
-            codex=codex_routing,
             phases=phase_overrides,
         ),
         scoping=_apply_section(
