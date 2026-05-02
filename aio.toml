@@ -22,22 +22,22 @@ codex = "gpt-5.4"
 [models.planning]
 simple = "claude-sonnet-4-6"
 moderate = "claude-sonnet-4-6"
-complex = "claude-opus-4-7"
-architectural = "claude-opus-4-7"
-extramax = "claude-opus-4-7"
+complex = "claude-opus-4-6"
+architectural = "claude-opus-4-6"
+extramax = "claude-opus-4-6"
 
 [models.executing]
 simple = "gpt-5.4-mini"
 moderate = "gpt-5.3-codex"
 complex = "gpt-5.3-codex"
-architectural = "gpt-5.4"
-extramax = "gpt-5.4"
+architectural = "gpt-5.3-codex"
+extramax = "gpt-5.5"
 
 [models.reviewing]
 codex = "gpt-5.4"
 
 [models.debate]
-escalated_claude = "claude-opus-4-7"
+escalated_claude = "claude-opus-4-6"
 
 [efforts.claude]
 default = "high"

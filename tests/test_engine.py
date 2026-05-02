@@ -770,7 +770,7 @@ def test_scoping_debate_max_rounds_proceeds_without_agreement(
     assert codex.text_invocations[2]["model_override"] == "gpt-5.4"
     assert codex.text_invocations[2]["reasoning_effort_override"] == "high"
     assert any(
-        invocation["model_override"] == "claude-opus-4-7"
+        invocation["model_override"] == "claude-opus-4-6"
         and invocation["reasoning_effort_override"] == "xhigh"
         for invocation in claude.text_invocations
     )
@@ -1036,7 +1036,7 @@ def test_review_disagreement_final_claude_decision_passes(tmp_repo, artifact_roo
     assert state.debate_state.final_verdict == "pass"
     assert len(state.debate_state.rounds) == 3
     assert state.debate_state.rounds[1].model_used == "gpt-5.4"
-    assert state.debate_state.rounds[2].model_used == "claude-opus-4-7"
+    assert state.debate_state.rounds[2].model_used == "claude-opus-4-6"
     assert state.debate_state.rounds[2].effort_used == "high"
     assert engine is not None
 
@@ -1857,14 +1857,14 @@ def test_resolve_execution_settings_reflects_overrides(tmp_repo, artifact_root, 
     state.complexity_tier = "complex"
     state.execution_overrides = {
         "cli": "claude",
-        "model": "claude-opus-4-7",
+        "model": "claude-opus-4-6",
         "effort": "max",
     }
 
     settings = engine.resolve_execution_settings(state)
 
     assert settings["cli"] == "claude"
-    assert settings["model"] == "claude-opus-4-7"
+    assert settings["model"] == "claude-opus-4-6"
     assert settings["effort"] == "max"
     assert settings["complexity_tier"] == "complex"
     assert settings["has_overrides"] is True

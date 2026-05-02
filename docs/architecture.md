@@ -220,7 +220,7 @@ enable_planning_resume = true
 enable_review_resume = true
 
 [debate]
-escalated_claude_model = "claude-opus-4-7"
+escalated_claude_model = "claude-opus-4-6"
 escalated_claude_effort = "xhigh"
 escalated_codex_effort = "high"
 review_codex_model = "gpt-5.4"

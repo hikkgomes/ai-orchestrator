@@ -247,9 +247,9 @@ scoper = "claude"
 [routing.phases.planning]
 model_simple = "claude-sonnet-4-6"
 model_moderate = "claude-sonnet-4-6"
-model_complex = "claude-opus-4-7"
-model_architectural = "claude-opus-4-7"
-model_extramax = "claude-opus-4-7"
+model_complex = "claude-opus-4-6"
+model_architectural = "claude-opus-4-6"
+model_extramax = "claude-opus-4-6"
 
 [routing.phases.executing]
 model_simple = "gpt-5.4-mini"
@@ -268,7 +268,7 @@ enable_planning_resume = true
 enable_review_resume = true
 
 [debate]
-escalated_claude_model = "claude-opus-4-7"
+escalated_claude_model = "claude-opus-4-6"
 escalated_claude_effort = "xhigh"
 escalated_codex_effort = "high"
 review_codex_model = "gpt-5.4"
