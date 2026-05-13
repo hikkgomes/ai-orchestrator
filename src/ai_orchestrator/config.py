@@ -1,8 +1,8 @@
 """Configuration loader for ai-orchestrator.
 
-Reads aio.toml at the repo root (current working directory) and merges with
-global defaults from ~/.config/ai-orchestrator/config.toml on macOS/Linux or
-%APPDATA%\\ai-orchestrator\\config.toml on Windows.
+Reads .ai-orchestrator/config.toml at the repo root (current working directory)
+and merges with global defaults from ~/.config/ai-orchestrator/config.toml on
+macOS/Linux or %APPDATA%\\ai-orchestrator\\config.toml on Windows.
 
 Uses tomllib (stdlib in Python 3.11+) — no external TOML dependency.
 
@@ -29,8 +29,10 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for loc
 
 
 # ---------------------------------------------------------------------------
-# Config section dataclasses (mirrors aio.toml structure)
+# Config section dataclasses (mirrors config.toml structure)
 # ---------------------------------------------------------------------------
+
+ARTIFACT_DIR = ".ai-orchestrator"
 
 
 @dataclass
@@ -559,7 +561,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     if global_path.exists():
         merged = _merge(merged, _load_toml(global_path))
 
-    repo_path = root / "aio.toml"
+    repo_path = root / ARTIFACT_DIR / "config.toml"
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 

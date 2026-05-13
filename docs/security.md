@@ -135,5 +135,5 @@ All dependencies are pinned in lock files for reproducible installs.
 4. **Use `.gitignore`** — ensure `.ai-orchestrator/` runtime directories are ignored.
 5. **Keep `logging.retain_raw_output` off** unless debugging — avoids local copies of prompt context.
 6. **Pin dependencies** — use `pip install ai-orchestrator==X.Y.Z` in shared environments.
-7. **Audit `aio.toml` changes** — treat orchestrator config as security-relevant.
+7. **Audit `.ai-orchestrator/config.toml` changes** — treat orchestrator config as security-relevant.
 8. **Evaluate vendor data policies** — understand where your code goes when sent to Claude/Codex APIs.

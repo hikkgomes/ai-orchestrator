@@ -1,6 +1,8 @@
 # ai-orchestrator runtime artifacts
 .ai-orchestrator/
 .ai-review/
+!.ai-orchestrator/config.toml
+!.ai-orchestrator/workflow.yaml
 
 # Local AI CLI settings
 .claude/settings.local.json

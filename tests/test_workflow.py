@@ -15,9 +15,9 @@ def test_parse_scalar_supports_simple_floats():
 
 
 def test_load_workflow_definition_ignores_legacy_phase_keys(tmp_path):
-    workflow_dir = tmp_path / "workflows"
+    workflow_dir = tmp_path / ".ai-orchestrator"
     workflow_dir.mkdir()
-    (workflow_dir / "default.yaml").write_text(
+    (workflow_dir / "workflow.yaml").write_text(
         "\n".join(
             [
                 "name: default",

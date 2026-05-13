@@ -51,9 +51,11 @@ def test_doctor_reports_expected_checks(monkeypatch, tmp_path):
 def test_doctor_detects_invalid_repo_config(monkeypatch, tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    (repo_root / "aio.toml").write_text("[orchestrator]\nmax_retries = 'bad'\n", encoding="utf-8")
+    config_dir = repo_root / ".ai-orchestrator"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 'bad'\n", encoding="utf-8")
     artifact_root = repo_root / ".ai-orchestrator"
-    artifact_root.mkdir()
+    artifact_root.mkdir(exist_ok=True)
 
     monkeypatch.setattr("ai_orchestrator.doctor.which", lambda name: None)
 

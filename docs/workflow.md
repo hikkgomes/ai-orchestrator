@@ -6,7 +6,7 @@
 
 Every orchestrated run moves through these phases in order. Each phase is a distinct CLI subprocess invocation. Claude phases can share one unified `claude_main` session across scoping, planning, and reviewing when enabled. Review contains its own bounded Claude/Codex debate. All mutating phases operate within a single preserved worktree branch per run.
 
-`workflows/default.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
+`.ai-orchestrator/workflow.yaml` is the authoritative definition of this phase structure and its default phase-level settings. `.ai-orchestrator/config.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 ## Modes
 
@@ -265,7 +265,7 @@ Any state ──▶ BLOCKED_ON_CLI (vendor CLI needs interactive input / auth re
 
 A workspace root is a directory without its own `.git/` that contains one or more git repos as subdirectories.
 
-- Detection: use `[workspace] repos = [...]` from `aio.toml`, or auto-detect git subdirectories when the current directory is not a repo.
+- Detection: use `[workspace] repos = [...]` from `.ai-orchestrator/config.toml`, or auto-detect git subdirectories when the current directory is not a repo.
 - Working directory: all AI phases run from the workspace root.
 - Execution: no orchestrator-managed worktrees; the worker runs in place across configured repos.
 - Retry/reset: execution retries reset the current execution baseline. Replan and fix cycles preserve existing worktree changes.

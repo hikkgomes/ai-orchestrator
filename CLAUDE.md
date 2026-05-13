@@ -33,7 +33,7 @@ docs/                   # architecture, workflow, contracts, install, security
 tests/                  # unit + integration tests
 ```
 
-`workflows/default.yaml` is the authoritative workflow definition; `aio.toml` only overrides supported settings.
+`.ai-orchestrator/workflow.yaml` is the authoritative workflow definition; `.ai-orchestrator/config.toml` only overrides supported settings.
 
 ## CLI commands
 
@@ -81,7 +81,7 @@ SCOPING is a Claude/Codex debate that produces `scope.md`. Claude can carry a un
 
 ## Config
 
-- Repo-level: `aio.toml`
+- Repo-level: `.ai-orchestrator/config.toml`
 - Global: `~/.config/ai-orchestrator/config.toml` (macOS/Linux) or `%APPDATA%\ai-orchestrator\config.toml` (Windows)
 
 ## When working on this codebase

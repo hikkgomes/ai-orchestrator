@@ -90,7 +90,7 @@ Built with `click` for command parsing and `rich` for terminal UI. Entry points:
 
 ### 2. Orchestrator Engine
 
-The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `workflows/default.yaml` defines the phase structure and default phase-level settings; `aio.toml` overrides supported routing, retry, session, debate, and watchdog values.
+The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `.ai-orchestrator/workflow.yaml` defines the phase structure and default phase-level settings; `.ai-orchestrator/config.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 #### Canonical State Machine
 
@@ -195,7 +195,7 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 
 ## Configuration
 
-`aio.toml` at repo root (or `~/.config/ai-orchestrator/config.toml` for global defaults):
+`.ai-orchestrator/config.toml` at repo root (or `~/.config/ai-orchestrator/config.toml` for global defaults):
 
 ```toml
 [orchestrator]

@@ -14,7 +14,7 @@ from ai_orchestrator.config import ConfigError, load_config
 
 class TestLoadConfig:
     def test_defaults_when_no_toml(self, tmp_path):
-        """load_config returns default values when no aio.toml exists."""
+        """load_config returns default values when no .ai-orchestrator/config.toml exists."""
         cfg = load_config(repo_root=tmp_path)
         assert cfg.orchestrator.max_retries == 3
         assert cfg.orchestrator.watchdog_timeout == 3600
@@ -34,8 +34,10 @@ class TestLoadConfig:
         assert cfg.efforts.debate.escalated_claude == "xhigh"
 
     def test_repo_toml_overrides_defaults(self, tmp_path):
-        """Repo-level aio.toml values override defaults."""
-        toml = tmp_path / "aio.toml"
+        """Repo-level .ai-orchestrator/config.toml values override defaults."""
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir()
+        toml = config_dir / "config.toml"
         toml.write_text(
             "[orchestrator]\nmax_retries = 5\n"
             "[models.codex]\ndefault = \"gpt-5\"\n"
@@ -47,7 +49,9 @@ class TestLoadConfig:
         assert cfg.efforts.codex.default == "high"
 
     def test_loads_phase_routing_scoping_and_complexity_sections(self, tmp_path):
-        (tmp_path / "aio.toml").write_text(
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.toml").write_text(
             "\n".join(
                 [
                     "[routing]",
@@ -90,7 +94,9 @@ class TestLoadConfig:
             "[models.claude]\ndefault = \"claude-opus\"\n"
         )
         monkeypatch.setattr(Path, "home", lambda: global_root)
-        (tmp_path / "aio.toml").write_text("[efforts.claude]\ndefault = \"medium\"\n")
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.toml").write_text("[efforts.claude]\ndefault = \"medium\"\n")
 
         cfg = load_config(repo_root=tmp_path)
         assert cfg.logging.retain_raw_output is True
@@ -99,18 +105,24 @@ class TestLoadConfig:
 
     def test_invalid_toml_raises(self, tmp_path):
         """Invalid TOML raises ValueError."""
-        toml = tmp_path / "aio.toml"
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir()
+        toml = config_dir / "config.toml"
         toml.write_text("this is not [ valid toml !!!\n")
         with pytest.raises(ConfigError):
             load_config(repo_root=tmp_path)
 
     def test_invalid_type_raises(self, tmp_path):
-        (tmp_path / "aio.toml").write_text("[orchestrator]\nmax_retries = \"many\"\n")
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = \"many\"\n")
         with pytest.raises(ConfigError):
             load_config(repo_root=tmp_path)
 
     def test_unknown_keys_warn(self, tmp_path):
-        (tmp_path / "aio.toml").write_text(
+        config_dir = tmp_path / ".ai-orchestrator"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.toml").write_text(
             "[orchestrator]\nmax_retries = 5\nunknown_key = 42\n"
             "[routing]\nextra = \"unused\"\n"
         )

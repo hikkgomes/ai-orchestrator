@@ -57,7 +57,8 @@ include = [
     "README.md",
     "CLAUDE.md",
     "AGENTS.md",
-    "aio.toml",
+    ".ai-orchestrator/config.toml",
+    ".ai-orchestrator/workflow.yaml",
 ]
 
 [tool.pytest.ini_options]

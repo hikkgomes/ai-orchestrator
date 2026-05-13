@@ -100,7 +100,7 @@ def test_print_doctor_report_renders_all_checks():
     report = DoctorReport(
         checks=[
             DoctorCheck(name="python", status="pass", summary="Python 3.11.9 is supported."),
-            DoctorCheck(name="repo-config", status="warn", summary="aio.toml is missing.", hint="Run `orch init`."),
+            DoctorCheck(name="repo-config", status="warn", summary=".ai-orchestrator/config.toml is missing.", hint="Run `orch init`."),
         ]
     )
 

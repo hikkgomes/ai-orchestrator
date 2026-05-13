@@ -40,7 +40,7 @@ from .bootstrap import (
     refresh_workflow,
     scaffold_repository,
 )
-from .config import Config, ConfigError, load_config
+from .config import ARTIFACT_DIR, Config, ConfigError, load_config
 from .doctor import run_doctor, run_doctor_fix
 from .engine import Engine, EngineError
 from .models import RunState
@@ -189,7 +189,7 @@ def main(ctx: click.Context) -> None:
     """Coordinate Claude Code and Codex as workflow agents."""
     ctx.ensure_object(dict)
     repo_root = Path.cwd()
-    artifact_root = repo_root / ".ai-orchestrator"
+    artifact_root = repo_root / ARTIFACT_DIR
     ui = OrchestratorUI()
 
     ctx.obj["repo_root"] = repo_root
@@ -302,7 +302,11 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
             add(getattr(engine._config.models.executing, tier))
 
     phase_override = engine._config.routing.phases.get("executing")
-    if phase_override and phase_override.cli in {"", cli_name}:
+    if phase_override:
+        override_cli = phase_override.cli or engine._config.routing.worker
+    else:
+        override_cli = ""
+    if phase_override and override_cli == cli_name:
         add(phase_override.model)
         for tier_field in (
             "model_simple",

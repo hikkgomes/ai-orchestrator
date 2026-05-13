@@ -20,7 +20,9 @@ def test_mode_config_defaults_are_available():
 
 
 def test_load_config_accepts_modes_section(tmp_path):
-    (tmp_path / "aio.toml").write_text(
+    config_dir = tmp_path / ".ai-orchestrator"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
         "\n".join(
             [
                 "[modes.analysis]",

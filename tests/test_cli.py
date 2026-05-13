@@ -141,11 +141,11 @@ def test_init_scaffolds_repo_files():
         result = runner.invoke(main, ["init"])
 
         assert result.exit_code == 0
-        assert Path("aio.toml").exists()
-        assert Path("workflows/default.yaml").exists()
+        assert Path(".ai-orchestrator/config.toml").exists()
+        assert Path(".ai-orchestrator/workflow.yaml").exists()
         assert Path(".ai-review/config.json").exists()
         assert Path(".ai-review/rules.yaml").exists()
-        workflow_text = Path("workflows/default.yaml").read_text(encoding="utf-8")
+        workflow_text = Path(".ai-orchestrator/workflow.yaml").read_text(encoding="utf-8")
         assert "authoritative workflow definition" in workflow_text
         assert "scoping:\n    cli: claude\n    retries: 2" in workflow_text
         assert "reviewing:\n    cli: claude\n    retries: 3" in workflow_text
@@ -163,7 +163,7 @@ def test_init_can_skip_review_setup():
         result = runner.invoke(main, ["init", "--skip-review-setup"])
 
         assert result.exit_code == 0
-        assert Path("aio.toml").exists()
+        assert Path(".ai-orchestrator/config.toml").exists()
         assert not Path(".ai-review/config.json").exists()
         assert not Path(".ai-review/rules.yaml").exists()
 
@@ -439,15 +439,15 @@ dependencies = ["fastapi>=0.1"]
             + "\n",
             encoding="utf-8",
         )
-        Path("workflows").mkdir()
+        Path(".ai-orchestrator").mkdir()
         stale_workflow = DEFAULT_WORKFLOW.replace("    retries: 3\n", "    retries: 4\n", 1)
-        Path("workflows/default.yaml").write_text(stale_workflow, encoding="utf-8")
+        Path(".ai-orchestrator/workflow.yaml").write_text(stale_workflow, encoding="utf-8")
 
         result = runner.invoke(main, ["sync"])
 
         assert result.exit_code == 0
-        assert Path("workflows/default.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
-        assert "workflows/default.yaml" in result.output
+        assert Path(".ai-orchestrator/workflow.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
+        assert ".ai-orchestrator/workflow.yaml" in result.output
         assert "updated" in result.output
 
 
@@ -463,14 +463,14 @@ dependencies = ["fastapi>=0.1"]
             + "\n",
             encoding="utf-8",
         )
-        Path("workflows").mkdir()
-        Path("workflows/default.yaml").write_text(DEFAULT_WORKFLOW, encoding="utf-8")
+        Path(".ai-orchestrator").mkdir()
+        Path(".ai-orchestrator/workflow.yaml").write_text(DEFAULT_WORKFLOW, encoding="utf-8")
 
         result = runner.invoke(main, ["sync"])
 
         assert result.exit_code == 0
-        assert Path("workflows/default.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
-        assert "workflows/default.yaml" not in result.output
+        assert Path(".ai-orchestrator/workflow.yaml").read_text(encoding="utf-8") == DEFAULT_WORKFLOW
+        assert ".ai-orchestrator/workflow.yaml" not in result.output
 
 
 def test_self_update_local_pipx_pulls_and_reinstalls(monkeypatch):

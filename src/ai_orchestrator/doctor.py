@@ -11,7 +11,7 @@ from pathlib import Path
 from shutil import which
 
 from .bootstrap import ensure_runtime_gitignore, scaffold_repository
-from .config import Config, ConfigError, load_config
+from .config import ARTIFACT_DIR, Config, ConfigError, load_config
 
 
 @dataclass(frozen=True)
@@ -211,12 +211,12 @@ def _check_write_permissions(repo_root: Path, artifact_root: Path) -> DoctorChec
 
 
 def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
-    config_path = repo_root / "aio.toml"
+    config_path = repo_root / ARTIFACT_DIR / "config.toml"
     if not config_path.exists():
         return DoctorCheck(
             name="repo-config",
             status="warn",
-            summary="Repo-level aio.toml is missing.",
+            summary="Repo-level .ai-orchestrator/config.toml is missing.",
             hint="Run `orch init` in the repository root to scaffold the config.",
         )
 
@@ -226,16 +226,16 @@ def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
         return DoctorCheck(
             name="repo-config",
             status="fail",
-            summary="aio.toml exists but is invalid.",
+            summary=".ai-orchestrator/config.toml exists but is invalid.",
             hint=str(exc),
         )
 
-    workflow_path = repo_root / "workflows" / "default.yaml"
+    workflow_path = repo_root / ARTIFACT_DIR / "workflow.yaml"
     if not workflow_path.exists():
         return DoctorCheck(
             name="repo-config",
             status="warn",
-            summary="aio.toml is valid, but workflows/default.yaml is missing.",
+            summary=".ai-orchestrator/config.toml is valid, but .ai-orchestrator/workflow.yaml is missing.",
             hint="Run `orch init --force` to restore default workflow files if needed.",
         )
 
@@ -249,14 +249,14 @@ def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
             return DoctorCheck(
                 name="repo-config",
                 status="warn",
-                summary="aio.toml is valid, but some configured workspace repos are missing or not git repos.",
+                summary=".ai-orchestrator/config.toml is valid, but some configured workspace repos are missing or not git repos.",
                 hint=f"Check [workspace].repos entries: {', '.join(missing)}",
             )
 
     return DoctorCheck(
         name="repo-config",
         status="pass",
-        summary="aio.toml and workflows/default.yaml are present.",
+        summary=".ai-orchestrator/config.toml and .ai-orchestrator/workflow.yaml are present.",
     )
 
 

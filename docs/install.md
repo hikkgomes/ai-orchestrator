@@ -72,8 +72,8 @@ orch doctor
 
 `orch init` creates:
 
-- `aio.toml`
-- `workflows/default.yaml`
+- `.ai-orchestrator/config.toml`
+- `.ai-orchestrator/workflow.yaml`
 - `.gitignore` entries for `.ai-orchestrator/` and `.ai-review/`
 
 `orch install-shell` installs a small shell integration file and an `aio` alias for `orch`.
@@ -87,8 +87,8 @@ orch doctor
 - `claude` availability and an auth refresh hint
 - `codex` availability and an auth refresh hint
 - write permission for `.ai-orchestrator/`
-- presence and validity of `aio.toml`
-- presence of `workflows/default.yaml`
+- presence and validity of `.ai-orchestrator/config.toml`
+- presence of `.ai-orchestrator/workflow.yaml`
 
 ## Packaging Notes
 
@@ -109,7 +109,7 @@ On a fresh machine:
 4. Install and authenticate Codex CLI.
 5. Install ai-orchestrator with `pipx` or editable mode.
 6. Clone the repository you want to operate on.
-7. Run `orch init` if the repo does not already have `aio.toml`.
+7. Run `orch init` if the repo does not already have `.ai-orchestrator/config.toml`.
 8. Run `orch doctor`.
 
 ## Windows Notes
