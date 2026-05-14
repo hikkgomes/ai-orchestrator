@@ -75,32 +75,6 @@ def build_scoping_user_reply_prompt(user_input: str, previous_scope: str) -> str
     )
 
 
-def build_prescope_claude_prompt(raw_task: str) -> str:
-    """Backward-compatible alias for old callers."""
-    return build_scoping_initial_prompt(raw_task)
-
-
-def build_prescope_codex_prompt(raw_task: str) -> str:
-    """Backward-compatible alias for old callers."""
-    return build_scoping_initial_prompt(raw_task)
-
-
-def build_scope_compare_codex_prompt(claude_scope_md: str) -> str:
-    return build_scoping_cross_review_prompt({"claude": claude_scope_md})
-
-
-def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
-    return build_scoping_cross_review_prompt({"codex": codex_scope_md})
-
-
-def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
-    return build_scoping_cross_review_prompt({"claude": claude_scope_md})
-
-
-def build_scope_final_claude_prompt(codex_scope_md: str) -> str:
-    return build_scoping_cross_review_prompt({"codex": codex_scope_md})
-
-
 def build_planning_revision_prompt(user_feedback: str) -> str:
     return (
         "Revise the existing implementation plan based on user feedback.\n\n"

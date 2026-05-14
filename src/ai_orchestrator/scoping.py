@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .adapters.base import BlockedOnCLI, TextInvokeResult
+from .adapters.base import BlockedOnCLI, StepFailure, TextInvokeResult
 from .models import RunState, WorkflowStatus
 from .parallel import invoke_parallel
 from .prompts.templates import (
@@ -117,7 +117,8 @@ class ScopingConversation:
         results = invoke_parallel(tasks)
         out: dict[str, str] = {}
         for cli_name, result in zip(participants, results):
-            assert isinstance(result, TextInvokeResult)
+            if not isinstance(result, TextInvokeResult):
+                raise StepFailure(f"Unexpected scoping result type from {cli_name}: {type(result).__name__}")
             out[cli_name] = result.text
             if result.session_id:
                 state.session_ids[f"scoping_{cli_name}"] = result.session_id
@@ -159,7 +160,8 @@ class ScopingConversation:
         results = invoke_parallel(tasks)
         out: dict[str, str] = {}
         for cli_name, result in zip(participants, results):
-            assert isinstance(result, TextInvokeResult)
+            if not isinstance(result, TextInvokeResult):
+                raise StepFailure(f"Unexpected scoping result type from {cli_name}: {type(result).__name__}")
             out[cli_name] = result.text
             if result.session_id:
                 state.session_ids[f"scoping_{cli_name}"] = result.session_id

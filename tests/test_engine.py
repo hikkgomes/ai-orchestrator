@@ -1618,7 +1618,7 @@ def test_resume_failed_reviewing_at_codex_review_skips_claude_review(
             step_results=[execution_ref],
             review_id=review_ref,
             retry_counts={"reviewing-codex": 3},
-            debate_state=DebateState(debate_phase=ReviewDebatePhase.CODEX_REVIEW),
+            debate_state=DebateState(debate_phase=ReviewDebatePhase.CROSS_REVIEW),
             is_workspace=True,
             error="'verdict' is a required property",
         )

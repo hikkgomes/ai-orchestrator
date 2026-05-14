@@ -301,10 +301,12 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
         add(engine._config.models.reviewing.codex)
         for tier in ("simple", "moderate", "complex", "architectural", "extramax"):
             add(getattr(engine._config.models.executing, tier))
-    else:
+    elif cli_name == "gemini":
         add(engine._config.models.gemini.default)
         add(engine._config.models.scoping.gemini)
         add(engine._config.models.reviewing.gemini)
+    else:
+        raise ValueError(f"Unsupported CLI for model listing: {cli_name}")
 
     phase_override = engine._config.routing.phases.get("executing")
     if phase_override:

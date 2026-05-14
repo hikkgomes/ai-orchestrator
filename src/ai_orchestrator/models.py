@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +87,6 @@ class ReviewDebatePhase(str, Enum):
     CROSS_REVIEW = "cross_review"
     ESCALATION = "escalation"
     RESOLVED = "resolved"
-    CLAUDE_REVIEW = "initial_reviews"
-    CODEX_REVIEW = "cross_review"
 
 
 DebatePhase = ReviewDebatePhase
@@ -245,52 +243,6 @@ class RunState(BaseModel):
     workspace_repos: list[str] = Field(default_factory=list)
 
     model_config = {"use_enum_values": True}
-
-    @property
-    def claude_scope_ref(self) -> str | None:
-        return self.ai_scope_refs.get("claude")
-
-    @claude_scope_ref.setter
-    def claude_scope_ref(self, value: str | None) -> None:
-        if value:
-            self.ai_scope_refs["claude"] = value
-        else:
-            self.ai_scope_refs.pop("claude", None)
-
-    @property
-    def codex_scope_ref(self) -> str | None:
-        return self.ai_scope_refs.get("codex")
-
-    @codex_scope_ref.setter
-    def codex_scope_ref(self, value: str | None) -> None:
-        if value:
-            self.ai_scope_refs["codex"] = value
-        else:
-            self.ai_scope_refs.pop("codex", None)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_scope_fields(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        refs = dict(data.get("ai_scope_refs") or {})
-        legacy_claude = data.get("claude_scope_ref")
-        legacy_codex = data.get("codex_scope_ref")
-        if legacy_claude and "claude" not in refs:
-            refs["claude"] = legacy_claude
-        if legacy_codex and "codex" not in refs:
-            refs["codex"] = legacy_codex
-        if refs:
-            data["ai_scope_refs"] = refs
-
-        debate_state = data.get("debate_state")
-        if isinstance(debate_state, dict):
-            phase = debate_state.get("debate_phase")
-            if phase == "claude_review":
-                debate_state["debate_phase"] = ReviewDebatePhase.INITIAL_REVIEWS.value
-            elif phase == "codex_review":
-                debate_state["debate_phase"] = ReviewDebatePhase.CROSS_REVIEW.value
-        return data
 
 
 class AnalysisSession(BaseModel):

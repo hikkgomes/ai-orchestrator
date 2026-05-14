@@ -48,11 +48,32 @@ def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = Non
         _check_git(),
         _check_cli("claude", minimum=getattr(effective_config.cli_compat, "claude_min_version", "")),
         _check_cli("codex", minimum=getattr(effective_config.cli_compat, "codex_min_version", "")),
-        _check_cli("gemini", minimum=""),
         _check_write_permissions(repo_root, artifact_root),
         _check_repo_config(repo_root, effective_config),
     ]
+    if _gemini_configured(effective_config):
+        checks.insert(
+            4,
+            _check_cli("gemini", minimum=""),
+        )
     return DoctorReport(checks=checks)
+
+
+def _gemini_configured(config: Config) -> bool:
+    if "gemini" in (config.scoping.participants or []):
+        return True
+    if config.routing.worker == "gemini":
+        return True
+    if config.routing.planner == "gemini":
+        return True
+    if config.routing.reviewer == "gemini":
+        return True
+    if config.routing.scoper == "gemini":
+        return True
+    return any(
+        (override.cli or "") == "gemini"
+        for override in config.routing.phases.values()
+    )
 
 
 def run_doctor_fix(

@@ -632,7 +632,7 @@ def test_adjust_execution_settings_executor_swap(monkeypatch):
         def save(self, state):
             self.called += 1
 
-    call_seq = iter(["Executor (Claude/Codex)", "claude-sonnet-4-6"])
+    call_seq = iter(["Executor (Claude/Codex/Gemini)", "claude", "claude-sonnet-4-6"])
     monkeypatch.setattr("ai_orchestrator.cli._select_choice", lambda *a, **kw: next(call_seq))
     monkeypatch.setattr("ai_orchestrator.cli._confirm_choice", lambda *a, **kw: True)
 

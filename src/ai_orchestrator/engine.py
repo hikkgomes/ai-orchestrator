@@ -360,8 +360,10 @@ class Engine:
     def _run_scoping(self, state: RunState) -> RunState:
         try:
             return ScopingConversation(self).run(state)
-        except StepFailure as exc:
-            return self._fail_run(state, self._format_step_failure(exc))
+        except (StepFailure, EngineError) as exc:
+            return self._fail_run(state, self._format_step_failure(exc) if isinstance(exc, StepFailure) else str(exc))
+        except Exception as exc:
+            return self._fail_run(state, str(exc))
 
     def _run_planning(self, state: RunState) -> RunState:
         task_description = state.normalized_task or state.task
@@ -1121,13 +1123,15 @@ class Engine:
                 delivery_prompt,
                 self._repo_root,
                 spinner_label="Preparing delivery summary...",
-                reasoning_effort_override=self._resolve_effort_for_phase(state, "reviewing", planner_cli),
-                model_override=self._resolve_model_for_phase("reviewing", planner_cli, state),
+                reasoning_effort_override=self._resolve_effort_for_phase(state, "planning", planner_cli),
+                model_override=self._resolve_model_for_phase("planning", planner_cli, state),
                 resume_session_id=state.session_ids.get("claude_main"),
-                timeout_seconds=self._phase_timeout("reviewing"),
+                timeout_seconds=self._phase_timeout("planning"),
             )
             delivery_message = delivery_result.text.strip()
-        except Exception:
+        except Exception as exc:
+            if self._ui:
+                self._ui.warn(f"Delivery summary skipped: {exc}")
             delivery_message = ""
 
         if not state.is_workspace:
@@ -1190,6 +1194,13 @@ class Engine:
                             shell=False,
                             check=True,
                         )
+                    commands = [
+                        "# Changes were committed automatically.",
+                        "# Review the commit before sharing.",
+                        "git show --stat",
+                    ]
+                    if self._config.delivery.auto_push:
+                        commands.append("# Changes were pushed to remote.")
                 except subprocess.CalledProcessError as exc:
                     return self._fail_run(state, f"Delivery auto-commit/push failed: {exc.stderr.strip() or exc.stdout.strip()}")
         else:

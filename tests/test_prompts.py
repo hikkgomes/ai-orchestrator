@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 from ai_orchestrator.prompts.templates import (
-    build_prescope_codex_prompt,
-    build_scope_compare_codex_prompt,
-    build_scope_respond_claude_prompt,
-    build_scope_final_codex_prompt,
-    build_scope_final_claude_prompt,
+    build_scoping_cross_review_prompt,
+    build_scoping_initial_prompt,
     build_full_execution_prompt,
     build_review_prompt,
     build_review_codex_prompt,
@@ -71,40 +68,18 @@ def test_build_review_prompt_renders_optional_reviewer_sections():
     assert "REPOSITORY CONTEXT:" not in prompt
 
 
-def test_build_prescope_codex_prompt_omits_repo_tree():
-    prompt = build_prescope_codex_prompt("Implement health checks")
+def test_build_scoping_initial_prompt_omits_repo_tree():
+    prompt = build_scoping_initial_prompt("Implement health checks")
     assert "Repository summary block" not in prompt
     assert "TREE DATA BLOCK" not in prompt
 
 
-def test_scope_compare_codex_prompt_is_lean():
+def test_scope_cross_review_prompt_is_lean():
     other_output = "---\nagreement: false\n---\nneeds changes"
-    prompt = build_scope_compare_codex_prompt(other_output)
-    assert "I had another analysis of this task:" in prompt
+    prompt = build_scoping_cross_review_prompt({"claude": other_output})
+    assert "Review the following peer AI responses:" in prompt
     assert other_output in prompt
     assert "agreement: true" in prompt
-
-
-def test_scope_respond_claude_prompt_requires_frontmatter():
-    other_output = "---\nagreement: false\n---\nneeds changes"
-    prompt = build_scope_respond_claude_prompt(other_output)
-    assert "Codex reviewed your scope and has feedback:" in prompt
-    assert "agreement: true" in prompt
-    assert "Preserve YAML frontmatter" in prompt
-
-
-def test_scope_final_codex_prompt_is_final_case():
-    other_output = "---\nagreement: false\n---\nneeds changes"
-    prompt = build_scope_final_codex_prompt(other_output)
-    assert "Claude still disagrees. Make your final case:" in prompt
-    assert "agreement: true" in prompt
-
-
-def test_scope_final_claude_prompt_requires_canonical_scope():
-    other_output = "---\nagreement: false\n---\nneeds changes"
-    prompt = build_scope_final_claude_prompt(other_output)
-    assert "You have the final say on the scope." in prompt
-    assert "Preserve YAML frontmatter" in prompt
 
 
 def test_build_review_prompt_omits_heavy_sections_and_keeps_heuristics():
