@@ -80,6 +80,13 @@ class ArtifactStore:
             content,
         )
 
+    def save_ai_scope(self, run_id: str, ai_name: str, round_num: int, content: str) -> str:
+        return self._write_versioned_text(
+            "scoping",
+            f"{ai_name}-scope-r{round_num}-{run_id[:8]}",
+            content,
+        )
+
     def save_debate_round(self, run_id: str, round_number: int, payload: dict[str, Any]) -> str:
         return self._write_versioned_json(
             "reviews",

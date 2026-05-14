@@ -100,7 +100,7 @@ _FRIENDLY_PHASE_NAMES = {
 }
 
 _PHASE_SUBTITLES = {
-    WorkflowStatus.SCOPING.value: "Claude and Codex are sizing up the task",
+    WorkflowStatus.SCOPING.value: "Multiple AIs are sizing up the task",
     WorkflowStatus.PLANNING.value: "Claude is designing the approach",
     WorkflowStatus.APPROVAL_PLAN.value: "Your turn to review",
     WorkflowStatus.EXECUTING.value: "Codex is building",
@@ -110,45 +110,13 @@ _PHASE_SUBTITLES = {
 }
 
 _SCOPING_MESSAGES = {
-    "claude_creates": [
-        "Claude is drafting the scope...",
-        "Claude is sizing up the task...",
-        "Claude is mapping out the work...",
+    "initial": [
+        "AIs are drafting their initial scope...",
+        "Participants are independently sizing up the task...",
     ],
-    "codex_creates": [
-        "Codex is forming its own opinion...",
-        "Codex is doing independent research...",
-        "Codex is building a second perspective...",
-    ],
-    "codex_compares": [
-        "Codex is reviewing Claude's scope...",
-        "Codex is looking for blind spots...",
-        "Codex is cross-checking the scope...",
-    ],
-    "codex_agrees": [
-        "Codex signs off on the scope.",
-        "Codex gives the green light.",
-        "Codex and Claude are aligned.",
-    ],
-    "codex_disagrees": [
-        "Codex pushes back on Claude's scope.",
-        "Codex has a different take...",
-        "Codex spotted some issues.",
-    ],
-    "claude_responds": [
-        "Claude is considering Codex's feedback...",
-        "Claude is defending its position...",
-        "Claude is reviewing the pushback...",
-    ],
-    "codex_final": [
-        "Codex is making its final case (xhigh)...",
-        "Codex digs deeper on the disagreement...",
-        "Codex escalates its reasoning...",
-    ],
-    "claude_final": [
-        "Claude has the final word (Opus max)...",
-        "Claude is making the call...",
-        "Final scope decision by Claude Opus...",
+    "cross_review": [
+        "AIs are cross-reviewing each other...",
+        "Participants are reconciling differences...",
     ],
 }
 
@@ -219,6 +187,13 @@ CODEX_MODELS = [
     "gpt-5.4-mini",
     "gpt-5.3-codex",
     "gpt-5.2",
+]
+
+GEMINI_MODELS = [
+    "(default)",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
 ]
 
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
@@ -349,6 +324,16 @@ class OrchestratorUI:
         """Render the scoping output."""
         self.console.print(self._render_scoping_result(result))
 
+    def print_scoping_conversation(self, responses: dict[str, str], round_num: int) -> None:
+        for ai_name, response in responses.items():
+            self.console.print(
+                Panel(
+                    Markdown(response or "_No response_"),
+                    title=f"Scoping Round {round_num} · {ai_name}",
+                    border_style="cyan",
+                )
+            )
+
     def print_status(
         self,
         state: RunState,
@@ -443,7 +428,7 @@ class OrchestratorUI:
             panels.append(Panel(event_table, title="Recent Events"))
         if state.debate_state and self._enum_value(
             state.debate_state.debate_phase
-        ) != "claude_review":
+        ) != "initial_reviews":
             debate = state.debate_state
             debate_table = Table.grid(expand=True)
             debate_table.add_column(justify="left", ratio=1)

@@ -25,8 +25,12 @@ default = ""
 [models.codex]
 default = ""
 
+[models.gemini]
+default = ""
+
 [models.scoping]
 claude = "claude-sonnet-4-6"
+gemini = "gemini-2.5-pro"
 codex_light = "gpt-5.4-mini"
 codex = "gpt-5.4"
 
@@ -46,6 +50,7 @@ extramax = "gpt-5.4"
 
 [models.reviewing]
 codex = "gpt-5.4"
+gemini = "gemini-2.5-pro"
 
 [models.debate]
 escalated_claude = "claude-opus-4-6"
@@ -56,13 +61,13 @@ default = "high"
 [efforts.codex]
 default = "medium"
 
+[efforts.gemini]
+default = "high"
+
 [efforts.scoping]
-round_1_claude = "medium"
-round_1_codex = "medium"
-round_3_codex = "high"
-round_4_claude = "high"
-round_5_codex = "high"
-round_6_claude = "xhigh"
+initial = "medium"
+comparison = "high"
+escalation = "xhigh"
 
 [efforts.complexity.simple]
 planning = "medium"
@@ -105,6 +110,10 @@ escalated_codex = "high"
 
 [scoping]
 enabled = true
+participants = ["claude", "codex"]
+max_rounds = 6
+designated_decider = ""
+require_user_approval = true
 
 [modes.analysis]
 rounds = 3
@@ -138,6 +147,11 @@ enable_review_resume = true
 [approval]
 require_plan_approval = true
 require_merge_approval = true
+
+[delivery]
+auto_commit = false
+auto_push = false
+commit_message_from_ai = true
 
 [worktree]
 base_branch = "main"

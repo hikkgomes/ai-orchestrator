@@ -48,6 +48,7 @@ def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = Non
         _check_git(),
         _check_cli("claude", minimum=getattr(effective_config.cli_compat, "claude_min_version", "")),
         _check_cli("codex", minimum=getattr(effective_config.cli_compat, "codex_min_version", "")),
+        _check_cli("gemini", minimum=""),
         _check_write_permissions(repo_root, artifact_root),
         _check_repo_config(repo_root, effective_config),
     ]
@@ -76,7 +77,7 @@ def fix_check(check: DoctorCheck, repo_root: Path, artifact_root: Path) -> dict[
     if check.name == "write-permissions" and check.status == "fail":
         artifact_root.mkdir(parents=True, exist_ok=True)
         return {"name": check.name, "status": "fixed", "detail": f"Created {artifact_root}."}
-    if check.name in {"claude", "codex"} and check.status == "warn" and "not available on PATH" in check.summary:
+    if check.name in {"claude", "codex", "gemini"} and check.status == "warn" and "not available on PATH" in check.summary:
         return {
             "name": check.name,
             "status": "manual",

@@ -71,8 +71,19 @@ class ApprovalConfig:
 
 
 @dataclass
+class DeliveryConfig:
+    auto_commit: bool = False
+    auto_push: bool = False
+    commit_message_from_ai: bool = True
+
+
+@dataclass
 class ScopingConfig:
     enabled: bool = True
+    participants: list[str] = field(default_factory=lambda: ["claude", "codex"])
+    max_rounds: int = 6
+    designated_decider: str = ""
+    require_user_approval: bool = True
 
 
 @dataclass
@@ -83,6 +94,7 @@ class DefaultModelConfig:
 @dataclass
 class ScopingModelsConfig:
     claude: str = "claude-sonnet-4-6"
+    gemini: str = "gemini-2.5-pro"
     codex_light: str = "gpt-5.4-mini"
     codex: str = "gpt-5.4"
 
@@ -99,6 +111,7 @@ class TierModelsConfig:
 @dataclass
 class ReviewingModelsConfig:
     codex: str = "gpt-5.4"
+    gemini: str = "gemini-2.5-pro"
 
 
 @dataclass
@@ -110,6 +123,7 @@ class DebateModelsConfig:
 class ModelsConfig:
     claude: DefaultModelConfig = field(default_factory=DefaultModelConfig)
     codex: DefaultModelConfig = field(default_factory=DefaultModelConfig)
+    gemini: DefaultModelConfig = field(default_factory=DefaultModelConfig)
     scoping: ScopingModelsConfig = field(default_factory=ScopingModelsConfig)
     planning: TierModelsConfig = field(default_factory=TierModelsConfig)
     executing: TierModelsConfig = field(default_factory=TierModelsConfig)
@@ -124,12 +138,9 @@ class DefaultEffortConfig:
 
 @dataclass
 class ScopingEffortsConfig:
-    round_1_claude: str = "medium"
-    round_1_codex: str = "medium"
-    round_3_codex: str = "high"
-    round_4_claude: str = "high"
-    round_5_codex: str = "high"
-    round_6_claude: str = "xhigh"
+    initial: str = "medium"
+    comparison: str = "high"
+    escalation: str = "xhigh"
 
 
 @dataclass
@@ -202,6 +213,7 @@ class DebateEffortsConfig:
 class EffortsConfig:
     claude: DefaultEffortConfig = field(default_factory=lambda: DefaultEffortConfig(default="high"))
     codex: DefaultEffortConfig = field(default_factory=lambda: DefaultEffortConfig(default="medium"))
+    gemini: DefaultEffortConfig = field(default_factory=lambda: DefaultEffortConfig(default="high"))
     scoping: ScopingEffortsConfig = field(default_factory=ScopingEffortsConfig)
     complexity: ComplexityEffortsConfig = field(default_factory=ComplexityEffortsConfig)
     review_final: ReviewFinalEffortsConfig = field(default_factory=ReviewFinalEffortsConfig)
@@ -286,6 +298,7 @@ class Config:
     efforts: EffortsConfig = field(default_factory=EffortsConfig)
     sessions: SessionConfig = field(default_factory=SessionConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
+    delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -397,7 +410,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     routing = _expect_mapping("routing", data.get("routing"))
     for key in ("planner", "worker", "reviewer", "scoper"):
         if key in routing:
-            _validate_choice(f"routing.{key}", routing[key], {"claude", "codex"})
+            _validate_choice(f"routing.{key}", routing[key], {"claude", "codex", "gemini"})
 
     phases = _expect_mapping("routing.phases", routing.get("phases"))
     for phase_name, phase_data in phases.items():
@@ -423,12 +436,20 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
                     _validate_choice(
                         f"routing.phases.{phase_name}.cli",
                         value,
-                        {"claude", "codex"},
+                        {"claude", "codex", "gemini"},
                     )
 
     scoping = _expect_mapping("scoping", data.get("scoping"))
     if "enabled" in scoping:
         _validate_bool("scoping.enabled", scoping["enabled"])
+    if "participants" in scoping:
+        _validate_string_list("scoping.participants", scoping["participants"])
+    if "max_rounds" in scoping:
+        _validate_int("scoping.max_rounds", scoping["max_rounds"], minimum=1)
+    if "designated_decider" in scoping:
+        _validate_string("scoping.designated_decider", scoping["designated_decider"])
+    if "require_user_approval" in scoping:
+        _validate_bool("scoping.require_user_approval", scoping["require_user_approval"])
 
     sessions = _expect_mapping("sessions", data.get("sessions"))
     for key in ("enable_unified_session", "enable_planning_resume", "enable_review_resume"):
@@ -439,6 +460,10 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
     for key in ("require_plan_approval", "require_merge_approval"):
         if key in approval:
             _validate_bool(f"approval.{key}", approval[key])
+    delivery = _expect_mapping("delivery", data.get("delivery"))
+    for key in ("auto_commit", "auto_push", "commit_message_from_ai"):
+        if key in delivery:
+            _validate_bool(f"delivery.{key}", delivery[key])
 
     worktree = _expect_mapping("worktree", data.get("worktree"))
     for key in ("base_branch", "branch_prefix"):
@@ -460,7 +485,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             _validate_string(f"cli_compat.{key}", compat[key])
 
     models = _expect_mapping("models", data.get("models"))
-    for cli in ("claude", "codex"):
+    for cli in ("claude", "codex", "gemini"):
         section = _expect_mapping(f"models.{cli}", models.get(cli))
         if "default" in section:
             _validate_string(f"models.{cli}.default", section["default"])
@@ -470,30 +495,25 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
             if tier in section:
                 _validate_string(f"models.{phase}.{tier}", section[tier])
     scoping_models = _expect_mapping("models.scoping", models.get("scoping"))
-    for key in ("claude", "codex_light", "codex"):
+    for key in ("claude", "gemini", "codex_light", "codex"):
         if key in scoping_models:
             _validate_string(f"models.scoping.{key}", scoping_models[key])
     reviewing_models = _expect_mapping("models.reviewing", models.get("reviewing"))
     if "codex" in reviewing_models:
         _validate_string("models.reviewing.codex", reviewing_models["codex"])
+    if "gemini" in reviewing_models:
+        _validate_string("models.reviewing.gemini", reviewing_models["gemini"])
     debate_models = _expect_mapping("models.debate", models.get("debate"))
     if "escalated_claude" in debate_models:
         _validate_string("models.debate.escalated_claude", debate_models["escalated_claude"])
 
     efforts = _expect_mapping("efforts", data.get("efforts"))
-    for cli in ("claude", "codex"):
+    for cli in ("claude", "codex", "gemini"):
         section = _expect_mapping(f"efforts.{cli}", efforts.get(cli))
         if "default" in section:
             _validate_string(f"efforts.{cli}.default", section["default"])
     scoping_efforts = _expect_mapping("efforts.scoping", efforts.get("scoping"))
-    for key in (
-        "round_1_claude",
-        "round_1_codex",
-        "round_3_codex",
-        "round_4_claude",
-        "round_5_codex",
-        "round_6_claude",
-    ):
+    for key in ("initial", "comparison", "escalation"):
         if key in scoping_efforts:
             _validate_string(f"efforts.scoping.{key}", scoping_efforts[key])
     complexity = _expect_mapping("efforts.complexity", efforts.get("complexity"))
@@ -565,6 +585,24 @@ def load_config(repo_root: Path | None = None) -> Config:
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 
+    # Backward compatibility: map legacy per-round scoping effort keys.
+    scoping_efforts = _expect_mapping(
+        "efforts.scoping",
+        _expect_mapping("efforts", merged.get("efforts")).get("scoping"),
+    )
+    if "initial" not in scoping_efforts:
+        if scoping_efforts.get("round_1_claude"):
+            scoping_efforts["initial"] = scoping_efforts["round_1_claude"]
+        elif scoping_efforts.get("round_1_codex"):
+            scoping_efforts["initial"] = scoping_efforts["round_1_codex"]
+    if "comparison" not in scoping_efforts:
+        for key in ("round_3_codex", "round_4_claude", "round_5_codex"):
+            if scoping_efforts.get(key):
+                scoping_efforts["comparison"] = scoping_efforts[key]
+                break
+    if "escalation" not in scoping_efforts and scoping_efforts.get("round_6_claude"):
+        scoping_efforts["escalation"] = scoping_efforts["round_6_claude"]
+
     _validate_config_tree(merged)
 
     routing_data = _expect_mapping("routing", merged.get("routing"))
@@ -579,6 +617,7 @@ def load_config(repo_root: Path | None = None) -> Config:
             "efforts",
             "sessions",
             "approval",
+            "delivery",
             "worktree",
             "workspace",
             "logging",
@@ -590,13 +629,13 @@ def load_config(repo_root: Path | None = None) -> Config:
     _warn_unknown_keys(
         "models",
         models_data,
-        {"claude", "codex", "scoping", "planning", "executing", "reviewing", "debate"},
+        {"claude", "codex", "gemini", "scoping", "planning", "executing", "reviewing", "debate"},
     )
     efforts_data = _expect_mapping("efforts", merged.get("efforts"))
     _warn_unknown_keys(
         "efforts",
         efforts_data,
-        {"claude", "codex", "scoping", "complexity", "review_final", "reviewing", "debate"},
+        {"claude", "codex", "gemini", "scoping", "complexity", "review_final", "reviewing", "debate"},
     )
     _warn_unknown_keys(
         "routing",
@@ -672,6 +711,11 @@ def load_config(repo_root: Path | None = None) -> Config:
                 _expect_mapping("models.codex", models_data.get("codex")),
                 section_name="models.codex",
             ),
+            gemini=_apply_section(
+                DefaultModelConfig,
+                _expect_mapping("models.gemini", models_data.get("gemini")),
+                section_name="models.gemini",
+            ),
             scoping=_apply_section(
                 ScopingModelsConfig,
                 _expect_mapping("models.scoping", models_data.get("scoping")),
@@ -708,6 +752,11 @@ def load_config(repo_root: Path | None = None) -> Config:
                 DefaultEffortConfig,
                 _expect_mapping("efforts.codex", efforts_data.get("codex")),
                 section_name="efforts.codex",
+            ),
+            gemini=_apply_section(
+                DefaultEffortConfig,
+                _expect_mapping("efforts.gemini", efforts_data.get("gemini")),
+                section_name="efforts.gemini",
             ),
             scoping=_apply_section(
                 ScopingEffortsConfig,
@@ -781,6 +830,11 @@ def load_config(repo_root: Path | None = None) -> Config:
             ApprovalConfig,
             _expect_mapping("approval", merged.get("approval")),
             section_name="approval",
+        ),
+        delivery=_apply_section(
+            DeliveryConfig,
+            _expect_mapping("delivery", merged.get("delivery")),
+            section_name="delivery",
         ),
         worktree=_apply_section(
             WorktreeConfig,

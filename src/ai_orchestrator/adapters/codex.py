@@ -53,6 +53,20 @@ class CodexAdapter(BaseAdapter):
     CLI_NAME = "codex"
     _MODEL_FLAG = "--model"
 
+    @classmethod
+    def supports_session_resume(cls) -> bool:
+        return True
+
+    @classmethod
+    def list_available_models(cls) -> list[str]:
+        return [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex",
+            "gpt-5.2",
+        ]
+
     def invoke(
         self,
         prompt: str,

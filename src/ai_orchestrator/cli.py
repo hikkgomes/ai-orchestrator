@@ -52,6 +52,7 @@ from .ui import (
     CLAUDE_MODELS,
     CODEX_MODELS,
     EFFORT_LEVELS,
+    GEMINI_MODELS,
     MODE_LABELS,
     OrchestratorUI,
     TERMINAL_STATES,
@@ -293,13 +294,17 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
         add(engine._config.models.debate.escalated_claude)
         for tier in ("simple", "moderate", "complex", "architectural", "extramax"):
             add(getattr(engine._config.models.planning, tier))
-    else:
+    elif cli_name == "codex":
         add(engine._config.models.codex.default)
         add(engine._config.models.scoping.codex_light)
         add(engine._config.models.scoping.codex)
         add(engine._config.models.reviewing.codex)
         for tier in ("simple", "moderate", "complex", "architectural", "extramax"):
             add(getattr(engine._config.models.executing, tier))
+    else:
+        add(engine._config.models.gemini.default)
+        add(engine._config.models.scoping.gemini)
+        add(engine._config.models.reviewing.gemini)
 
     phase_override = engine._config.routing.phases.get("executing")
     if phase_override:
@@ -321,7 +326,12 @@ def _available_models_for_cli(engine: Engine, cli_name: str) -> list[str]:
 
 
 def _shell_model_choices(ctx: click.Context, cli_name: str) -> list[str]:
-    base = CLAUDE_MODELS if cli_name == "claude" else CODEX_MODELS
+    if cli_name == "claude":
+        base = CLAUDE_MODELS
+    elif cli_name == "codex":
+        base = CODEX_MODELS
+    else:
+        base = GEMINI_MODELS
     merged = [*base]
     for model in _available_models_for_cli(_build_engine(ctx), cli_name):
         if model not in merged:
@@ -492,7 +502,7 @@ def _adjust_execution_settings(
 
     what = _select_choice(
         "What would you like to adjust?",
-        ["Model", "Reasoning level", "Both", "Executor (Claude/Codex)", "Cancel"],
+        ["Model", "Reasoning level", "Both", "Executor (Claude/Codex/Gemini)", "Cancel"],
         default="Cancel",
     )
     if not what or what == "Cancel":
@@ -522,9 +532,13 @@ def _adjust_execution_settings(
         if selected_effort:
             overrides["effort"] = selected_effort
 
-    if what == "Executor (Claude/Codex)":
-        target_cli = "claude" if current_cli == "codex" else "codex"
-        if _confirm_choice(
+    if what == "Executor (Claude/Codex/Gemini)":
+        target_cli = _select_choice(
+            "Select executor:",
+            ["codex", "claude", "gemini"],
+            default=current_cli,
+        )
+        if target_cli and target_cli != current_cli and _confirm_choice(
             f"Switch executor from {current_cli} to {target_cli}?",
             default=False,
         ):
@@ -1491,14 +1505,21 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
         else:
             return state
         if gate == "scope":
-            if state.normalized_task or state.complexity_tier:
-                ui.print_scoping_result(
-                    {
-                        "normalized_task": state.normalized_task or state.task,
-                        "complexity_tier": state.complexity_tier or "unknown",
-                        "blocking_reason": state.error,
-                    }
-                )
+            responses: dict[str, str] = {}
+            for ai_name, reference in (state.ai_scope_refs or {}).items():
+                try:
+                    responses[ai_name] = ArtifactStore(ctx.obj["artifact_root"]).read_text(reference)
+                except Exception:
+                    continue
+            if responses:
+                ui.print_scoping_conversation(responses, state.scoping_round or 1)
+            ui.print_scoping_result(
+                {
+                    "normalized_task": state.normalized_task or state.task,
+                    "complexity_tier": state.complexity_tier or "unknown",
+                    "blocking_reason": state.error,
+                }
+            )
         elif gate == "plan" and state.plan_id:
             plan = _load_plan_artifact(ArtifactStore(ctx.obj["artifact_root"]), state.plan_id)
             ui.print_plan(plan, run_id=state.run_id, detailed=True)
@@ -1511,13 +1532,25 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                     "  [bold]Approve[/bold]          Start building with this plan\n"
                     "  [bold]Request changes[/bold]  Send feedback — Claude will revise\n"
                     "  [bold]Reject[/bold]           Stop this run\n"
-                    "  [bold]Adjust settings[/bold]  Change executor, model, or effort"
+                    "  [bold]Adjust settings[/bold]  Change executor, model, or effort\n"
+                    "  [bold]Reassess complexity[/bold]  Override complexity tier"
                 ),
-                choices=["approve", "soft-reject", "full-reject", "adjust"],
+                choices=["approve", "soft-reject", "full-reject", "adjust", "reassess-complexity"],
                 default="approve",
             )
             if choice == "adjust":
                 _adjust_execution_settings(ui, engine, state_mgr, state, run_id)
+                continue
+            if choice == "reassess-complexity":
+                tier = _select_choice(
+                    "Complexity tier:",
+                    ["simple", "moderate", "complex", "architectural", "extramax"],
+                    default=(state.complexity_tier or "moderate"),
+                )
+                if tier:
+                    state.execution_overrides["complexity_tier"] = tier
+                    state.complexity_tier = tier
+                    state_mgr.save(state)
                 continue
             if choice == "approve":
                 state = engine.approve(run_id, gate)
@@ -1527,11 +1560,36 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 reason = ui.rejection_reason("Rejected in interactive mode")
                 state = engine.reject(run_id, gate, reason, full=False)
             continue
-        if ui.approval_prompt(gate, f"Run {run_id[:8]} has finished scoping. Approve to proceed to planning."):
+        scope_choice = ui.approval_choice(
+            gate,
+            (
+                f"Run {run_id[:8]} has finished scoping.\n\n"
+                "  [bold]Accept scope & plan[/bold]   Proceed to planning\n"
+                "  [bold]Reply to AIs[/bold]          Continue scoping with feedback\n"
+                "  [bold]Adjust complexity[/bold]     Override complexity tier\n"
+                "  [bold]Reject[/bold]                Stop this run"
+            ),
+            choices=["accept", "reply", "adjust-complexity", "reject"],
+            default="accept",
+        )
+        if scope_choice == "accept":
             state = engine.approve(run_id, gate)
-        else:
-            reason = ui.rejection_reason("Rejected in interactive mode")
+        elif scope_choice == "reply":
+            reason = ui.rejection_reason("Provide scoping feedback")
             state = engine.reject(run_id, gate, reason)
+        elif scope_choice == "adjust-complexity":
+            tier = _select_choice(
+                "Complexity tier:",
+                ["simple", "moderate", "complex", "architectural", "extramax"],
+                default=(state.complexity_tier or "moderate"),
+            )
+            if tier:
+                state.execution_overrides["complexity_tier"] = tier
+                state.complexity_tier = tier
+                state_mgr.save(state)
+            continue
+        else:
+            state = engine._terminate_run(state, "Scope rejected by user")
 
 
 def _render_status(ctx: click.Context, run_id: str) -> RenderableType:

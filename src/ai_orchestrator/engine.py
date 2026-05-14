@@ -9,32 +9,26 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .adapters import AdapterRegistry
 from .adapters.base import BlockedOnCLI, InvokeResult, StepFailure, TextInvokeResult
-from .adapters.claude import ClaudeAdapter
-from .adapters.codex import CodexAdapter
 from .artifacts import ArtifactStore
 from .bootstrap import ensure_runtime_gitignore
 from .config import Config
 from .models import DebateRound, DebateState, ReviewDebatePhase, RunState, WorkflowStatus
-from .parallel import invoke_parallel
 from .prompts.templates import (
+    build_delivery_prompt,
     build_fix_planning_prompt,
     build_full_execution_prompt,
     build_planning_prompt,
-    build_prescope_claude_prompt,
-    build_prescope_codex_prompt,
     build_review_codex_prompt,
     build_review_final_claude_prompt,
-    build_scope_final_claude_prompt,
-    build_scope_final_codex_prompt,
-    build_scope_compare_codex_prompt,
-    build_scope_respond_claude_prompt,
     build_retry_prompt,
     build_review_prompt,
     json_block,
 )
 from .reviewer import load_config as load_reviewer_config
 from .reviewer import run_review_scan
+from .scoping import ScopingConversation
 from .state import StateManager
 from .validator import load_bundled_schema
 from .workflow import WorkflowDefinition, load_workflow_definition
@@ -146,6 +140,7 @@ class Engine:
         self._worktrees = WorktreeManager(self._repo_root, artifact_root)
         self._workflow = workflow or load_workflow_definition(self._repo_root)
         self._adapters = adapters or {}
+        self._adapter_registry = AdapterRegistry(self._config, self._artifact_root)
         self._ui = ui
         self._skip_review = skip_review
         self._autonomous_max_iterations = autonomous_max_iterations
@@ -300,11 +295,12 @@ class Engine:
             state.normalized_task = None
             state.complexity_tier = None
             state.scope_md_ref = None
-            state.claude_scope_ref = None
-            state.codex_scope_ref = None
+            state.ai_scope_refs = {}
+            state.scoping_participants = []
             state.scoping_round = 0
             state.scoping_agreed = False
             state.error = None
+            self._artifacts.save_feedback(run_id, "scoping", reason)
             self._state_mgr.save(state)
             state = self._transition(
                 state,
@@ -362,211 +358,10 @@ class Engine:
             raise EngineError(f"Unhandled engine status: {status.value}")
 
     def _run_scoping(self, state: RunState) -> RunState:
-        claude = self._adapter("claude")
-        codex = self._adapter("codex")
-        scoping_tools_claude = self._phase_allowed_tools("scoping", default=["Read", "Grep", "Glob"])
-        scoping_timeout = self._phase_timeout("scoping")
-        claude_model = self._config.models.scoping.claude or self._resolve_model_for_phase("scoping", "claude", state)
-        codex_model_light = self._config.models.scoping.codex_light or self._resolve_model_for_phase("scoping", "codex", state)
-        codex_model = self._config.models.scoping.codex or self._resolve_model_for_phase("scoping", "codex", state)
-
         try:
-            claude_prompt = build_prescope_claude_prompt(state.task)
-            codex_prompt = build_prescope_codex_prompt(state.task)
-            self._artifacts.save_prompt(f"prescope-claude-{state.run_id[:8]}.md", claude_prompt)
-            self._artifacts.save_prompt(f"prescope-codex-{state.run_id[:8]}.md", codex_prompt)
-            self._log_prompt_size("Prescope Claude prompt", claude_prompt)
-            self._log_prompt_size("Prescope Codex prompt", codex_prompt)
-            claude_text_result, codex_text_result = invoke_parallel(
-                [
-                    lambda: self._invoke_adapter_text(
-                        claude,
-                        claude_prompt,
-                        self._repo_root,
-                        self._scoping_message("claude_creates", "Claude is drafting the scope..."),
-                        reasoning_effort_override=self._config.efforts.scoping.round_1_claude,
-                        model_override=claude_model,
-                        allowed_tools=scoping_tools_claude,
-                        timeout_seconds=scoping_timeout,
-                    ),
-                    lambda: self._invoke_adapter_text(
-                        codex,
-                        codex_prompt,
-                        self._repo_root,
-                        self._scoping_message("codex_creates", "Codex is forming its own opinion..."),
-                        reasoning_effort_override=self._config.efforts.scoping.round_1_codex,
-                        model_override=codex_model_light,
-                        legacy_fallback_text="## Codex pre-scope\n\nNo text-mode Codex adapter was provided.",
-                    ),
-                ]
-            )
-            claude_scope = claude_text_result.text
-            codex_scope = codex_text_result.text
-            if claude_text_result.session_id:
-                state.session_ids["scoping_claude"] = claude_text_result.session_id
-                if self._config.sessions.enable_unified_session:
-                    state.session_ids["claude_main"] = claude_text_result.session_id
-            if codex_text_result.session_id:
-                state.session_ids["scoping_codex"] = codex_text_result.session_id
-            state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 1, claude_scope)
-            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 2, codex_scope)
-            state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, claude_scope)
-            state.scoping_round = 2
-            self._state_mgr.save(state)
-
-            prompt = build_scope_compare_codex_prompt(claude_scope)
-            self._artifacts.save_prompt(f"scope-compare-codex-r3-{state.run_id[:8]}.md", prompt)
-            self._log_prompt_size("Scope compare (Codex r3) prompt", prompt)
-            codex_result = self._invoke_adapter_text(
-                codex,
-                prompt,
-                self._repo_root,
-                self._scoping_message("codex_compares", "Codex is reviewing Claude's scope..."),
-                reasoning_effort_override=self._config.efforts.scoping.round_3_codex,
-                model_override=codex_model,
-                resume_session_id=state.session_ids.get("scoping_codex"),
-                legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the scope.",
-            )
-            codex_scope = codex_result.text
-            if codex_result.session_id:
-                state.session_ids["scoping_codex"] = codex_result.session_id
-            state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 3, codex_scope)
-            state.scoping_agreed = self._scope_review_agreed(codex_scope)
-            state.scoping_round = 3
-            self._state_mgr.save(state)
-            if self._ui:
-                message_key = "codex_agrees" if state.scoping_agreed else "codex_disagrees"
-                self._ui.info(
-                    self._scoping_message(
-                        message_key,
-                        (
-                            "Codex signs off on the scope."
-                            if state.scoping_agreed
-                            else "Codex pushes back on Claude's scope."
-                        ),
-                    )
-                )
-
-            if not state.scoping_agreed:
-                prompt = build_scope_respond_claude_prompt(codex_scope)
-                self._artifacts.save_prompt(f"scope-respond-claude-r4-{state.run_id[:8]}.md", prompt)
-                self._log_prompt_size("Scope respond (Claude r4) prompt", prompt)
-                scope_result = self._invoke_adapter_text(
-                    claude,
-                    prompt,
-                    self._repo_root,
-                    self._scoping_message("claude_responds", "Claude is considering Codex's feedback..."),
-                    reasoning_effort_override=self._config.efforts.scoping.round_4_claude,
-                    model_override=claude_model,
-                    resume_session_id=(
-                        state.session_ids.get("claude_main")
-                        if self._config.sessions.enable_unified_session
-                        else state.session_ids.get("scoping_claude")
-                    ),
-                    allowed_tools=scoping_tools_claude,
-                    timeout_seconds=scoping_timeout,
-                )
-                scope_md = scope_result.text
-                if scope_result.session_id:
-                    state.session_ids["scoping_claude"] = scope_result.session_id
-                    if self._config.sessions.enable_unified_session:
-                        state.session_ids["claude_main"] = scope_result.session_id
-                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 4, scope_md)
-                state.scoping_agreed = self._scope_review_agreed(scope_md)
-                state.scoping_round = 4
-                self._state_mgr.save(state)
-                if self._ui:
-                    if state.scoping_agreed:
-                        self._ui.info("Claude accepts Codex's feedback and updates the scope.")
-                    else:
-                        self._ui.info("Claude stands firm; sending reasoning back to Codex.")
-
-            if not state.scoping_agreed:
-                prompt = build_scope_final_codex_prompt(claude_scope)
-                self._artifacts.save_prompt(f"scope-final-codex-r5-{state.run_id[:8]}.md", prompt)
-                self._log_prompt_size("Scope final (Codex r5) prompt", prompt)
-                codex_result = self._invoke_adapter_text(
-                    codex,
-                    prompt,
-                    self._repo_root,
-                    self._scoping_message("codex_final", "Codex is making its final case..."),
-                    reasoning_effort_override=self._config.efforts.scoping.round_5_codex,
-                    model_override=codex_model,
-                    resume_session_id=state.session_ids.get("scoping_codex"),
-                    legacy_fallback_text="---\nagreement: true\n---\n\nLegacy Codex adapter accepted the final scope.",
-                )
-                codex_scope = codex_result.text
-                if codex_result.session_id:
-                    state.session_ids["scoping_codex"] = codex_result.session_id
-                state.codex_scope_ref = self._artifacts.save_codex_scope(state.run_id, 5, codex_scope)
-                state.scoping_agreed = self._scope_review_agreed(codex_scope)
-                state.scoping_round = 5
-                self._state_mgr.save(state)
-                if self._ui:
-                    if state.scoping_agreed:
-                        self._ui.info(self._scoping_message("codex_agrees", "Codex gives the green light."))
-                    else:
-                        self._ui.info("Still no agreement; Claude Opus will make the final call.")
-
-            if not state.scoping_agreed:
-                prompt = build_scope_final_claude_prompt(codex_scope)
-                self._artifacts.save_prompt(f"scope-final-claude-r6-{state.run_id[:8]}.md", prompt)
-                self._log_prompt_size("Scope final (Claude r6) prompt", prompt)
-                scope_result = self._invoke_adapter_text(
-                    claude,
-                    prompt,
-                    self._repo_root,
-                    self._scoping_message("claude_final", "Claude has the final word (Opus xhigh)..."),
-                    reasoning_effort_override=self._config.efforts.scoping.round_6_claude,
-                    model_override=self._config.models.debate.escalated_claude or claude_model,
-                    resume_session_id=(
-                        state.session_ids.get("claude_main")
-                        if self._config.sessions.enable_unified_session
-                        else state.session_ids.get("scoping_claude")
-                    ),
-                    allowed_tools=scoping_tools_claude,
-                    timeout_seconds=scoping_timeout,
-                )
-                scope_md = scope_result.text
-                if scope_result.session_id:
-                    state.session_ids["scoping_claude"] = scope_result.session_id
-                    if self._config.sessions.enable_unified_session:
-                        state.session_ids["claude_main"] = scope_result.session_id
-                state.scope_md_ref = self._artifacts.save_scope_md(state.run_id, scope_md)
-                state.claude_scope_ref = self._artifacts.save_claude_scope(state.run_id, 6, scope_md)
-                state.scoping_round = 6
-                self._state_mgr.save(state)
-                if self._ui:
-                    self._ui.info("Claude Opus has made the final scope decision.")
-        except BlockedOnCLI as exc:
-            return self._transition(
-                state,
-                WorkflowStatus.BLOCKED_ON_CLI,
-                current_phase=WorkflowStatus.SCOPING.value,
-                error=str(exc),
-            )
+            return ScopingConversation(self).run(state)
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
-
-        scope_md = self._artifacts.read_text(state.scope_md_ref)
-        frontmatter = self._parse_scope_frontmatter(scope_md)
-        state.normalized_task = str(frontmatter.get("normalized_task") or state.task)
-        state.complexity_tier = str(frontmatter.get("complexity_tier") or "moderate")
-        actionable = self._coerce_bool(frontmatter.get("actionable"), default=True)
-        state.error = None
-        self._state_mgr.save(state)
-        if self._ui and state.complexity_tier:
-            self._ui.info(f"Complexity assessed as: {state.complexity_tier}")
-
-        if actionable:
-            return self._transition(state, WorkflowStatus.PLANNING)
-        return self._transition(
-            state,
-            WorkflowStatus.PAUSED,
-            current_phase=WorkflowStatus.SCOPING.value,
-            error=str(frontmatter.get("context") or "Task requires scoping review"),
-        )
 
     def _run_planning(self, state: RunState) -> RunState:
         task_description = state.normalized_task or state.task
@@ -719,6 +514,9 @@ class Engine:
         )
 
         def invoke(current_prompt: str) -> Any:
+            resume_session_id = None
+            if state.fix_iteration_count > 0:
+                resume_session_id = state.session_ids.get("execution")
             return self._invoke_adapter_json(
                 worker,
                 current_prompt,
@@ -726,6 +524,7 @@ class Engine:
                 schema,
                 reasoning_effort_override=execution_effort,
                 model_override=execution_model,
+                resume_session_id=resume_session_id,
             )
 
         attempt_number = 0
@@ -790,6 +589,8 @@ class Engine:
         reference = self._artifacts.save_execution_result(state.run_id, result)
         state.execution_result_ref = reference
         state.step_results = [reference]
+        if invoke_result.session_id:
+            state.session_ids["execution"] = invoke_result.session_id
         state.error = None
         self._state_mgr.save(state)
         if self._skip_review:
@@ -825,9 +626,9 @@ class Engine:
         review_resume_session_id: str | None = None
         if self._config.sessions.enable_unified_session and self._config.sessions.enable_review_resume:
             review_resume_session_id = state.session_ids.get("claude_main")
-        if not state.debate_state or state.debate_state.debate_phase == ReviewDebatePhase.CLAUDE_REVIEW:
+        if not state.debate_state or state.debate_state.debate_phase == ReviewDebatePhase.INITIAL_REVIEWS:
             state.session_ids.pop("reviewing", None)
-            state.debate_state = DebateState(debate_phase=ReviewDebatePhase.CLAUDE_REVIEW)
+            state.debate_state = DebateState(debate_phase=ReviewDebatePhase.INITIAL_REVIEWS)
         self._state_mgr.save(state)
 
         def clear_review_resume_on_retry() -> None:
@@ -836,7 +637,7 @@ class Engine:
 
         try:
             assert state.debate_state is not None
-            if state.debate_state.debate_phase == ReviewDebatePhase.CLAUDE_REVIEW:
+            if state.debate_state.debate_phase == ReviewDebatePhase.INITIAL_REVIEWS:
                 invoke_result = self._invoke_with_retries(
                     state,
                     retry_key="reviewing",
@@ -879,7 +680,7 @@ class Engine:
                     else:
                         self._ui.info("Claude's review came back clean.")
                 if state.debate_state:
-                    state.debate_state.debate_phase = ReviewDebatePhase.CODEX_REVIEW
+                    state.debate_state.debate_phase = ReviewDebatePhase.CROSS_REVIEW
                 self._state_mgr.save(state)
             else:
                 claude_review = self._load_saved_claude_review(state)
@@ -899,7 +700,7 @@ class Engine:
                 self._state_mgr.save(state)
                 return self._debate_resolve_pass(state)
 
-            if state.debate_state.debate_phase == ReviewDebatePhase.CODEX_REVIEW:
+            if state.debate_state.debate_phase == ReviewDebatePhase.CROSS_REVIEW:
                 codex_prompt = build_review_codex_prompt(
                     task_description=state.normalized_task or state.task,
                     review_json=json_block(claude_review),
@@ -1293,6 +1094,41 @@ class Engine:
     def _run_merge(self, state: RunState) -> RunState:
         base_branch = self._config.worktree.base_branch
         task_summary = self._commit_summary_for_state(state)
+        execution_summary = ""
+        review_summary = ""
+        if state.execution_result_ref:
+            try:
+                execution_summary = str(self._artifacts.read_json(state.execution_result_ref).get("summary") or "")
+            except Exception:
+                execution_summary = ""
+        if state.review_id:
+            try:
+                review_summary = str(self._artifacts.read_json(state.review_id).get("summary") or "")
+            except Exception:
+                review_summary = ""
+        delivery_message = ""
+        try:
+            planner_cli = self._phase_cli("planning", config_name="planner")
+            delivery_adapter = self._adapter(planner_cli)
+            delivery_prompt = build_delivery_prompt(
+                task_description=state.normalized_task or state.task,
+                plan_text=self._load_plan_text(state.plan_id) if state.plan_id else "",
+                execution_summary=execution_summary,
+                review_summary=review_summary,
+            )
+            delivery_result = self._invoke_adapter_text(
+                delivery_adapter,
+                delivery_prompt,
+                self._repo_root,
+                spinner_label="Preparing delivery summary...",
+                reasoning_effort_override=self._resolve_effort_for_phase(state, "reviewing", planner_cli),
+                model_override=self._resolve_model_for_phase("reviewing", planner_cli, state),
+                resume_session_id=state.session_ids.get("claude_main"),
+                timeout_seconds=self._phase_timeout("reviewing"),
+            )
+            delivery_message = delivery_result.text.strip()
+        except Exception:
+            delivery_message = ""
 
         if not state.is_workspace:
             try:
@@ -1324,9 +1160,43 @@ class Engine:
                         f"git push -u origin {base_branch}",
                     ]
                 )
+            if self._config.delivery.auto_commit:
+                try:
+                    subprocess.run(
+                        ["git", "merge", "--squash", branch],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        text=True,
+                        shell=False,
+                        check=True,
+                    )
+                    commit_message = f"aio: {task_summary}"
+                    if self._config.delivery.commit_message_from_ai and delivery_message:
+                        commit_message = delivery_message.splitlines()[0][:120] or commit_message
+                    subprocess.run(
+                        ["git", "commit", "-m", commit_message],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        text=True,
+                        shell=False,
+                        check=True,
+                    )
+                    if self._config.delivery.auto_push:
+                        subprocess.run(
+                            ["git", "push"],
+                            cwd=self._repo_root,
+                            capture_output=True,
+                            text=True,
+                            shell=False,
+                            check=True,
+                        )
+                except subprocess.CalledProcessError as exc:
+                    return self._fail_run(state, f"Delivery auto-commit/push failed: {exc.stderr.strip() or exc.stdout.strip()}")
         else:
             commands = self._generate_workspace_commands(state)
 
+        if delivery_message:
+            commands = ["# AI delivery summary:", delivery_message, "", *commands]
         state.commit_commands = commands
         self._artifacts.clear_processed_approval(state.run_id, "merge")
         state.error = None
@@ -1645,12 +1515,12 @@ class Engine:
     def _adapter(self, cli_name: str) -> Any:
         if cli_name in self._adapters:
             return self._adapters[cli_name]
-        if cli_name == "claude":
-            adapter = ClaudeAdapter(self._config, self._artifact_root)
-        elif cli_name == "codex":
-            adapter = CodexAdapter(self._config, self._artifact_root)
-        else:
+        try:
+            adapter = self._adapter_registry.get(cli_name)
+        except KeyError as exc:
             raise EngineError(f"Unsupported adapter: {cli_name}")
+        except Exception as exc:
+            raise EngineError(f"Failed to initialize adapter: {cli_name}") from exc
         self._adapters[cli_name] = adapter
         return adapter
 
@@ -1672,7 +1542,7 @@ class Engine:
         if override and override.reasoning_effort:
             return override.reasoning_effort
 
-        complexity_tier = state.complexity_tier
+        complexity_tier = state.execution_overrides.get("complexity_tier") or state.complexity_tier
         if complexity_tier:
             tier_map = getattr(self._config.efforts.complexity, complexity_tier, None)
             if tier_map:
@@ -1683,7 +1553,7 @@ class Engine:
         return getattr(getattr(self._config.efforts, cli_name), "default", "") or None
 
     def _review_final_effort(self, state: RunState) -> str:
-        tier = state.complexity_tier or "moderate"
+        tier = state.execution_overrides.get("complexity_tier") or state.complexity_tier or "moderate"
         return getattr(self._config.efforts.review_final, tier, "high")
 
     def _resolve_model_for_phase(
@@ -1695,7 +1565,10 @@ class Engine:
         override = self._config.routing.phases.get(phase_name)
         if override and override.model:
             return override.model
-        complexity_tier = state.complexity_tier if state else None
+        complexity_tier = (
+            (state.execution_overrides.get("complexity_tier") if state else None)
+            or (state.complexity_tier if state else None)
+        )
         if override and complexity_tier:
             tier_model = getattr(override, f"model_{complexity_tier}", "")
             if tier_model:
@@ -1713,6 +1586,10 @@ class Engine:
         if phase_name == "scoping":
             if cli_name == "claude":
                 scoped_model = getattr(self._config.models.scoping, "claude", "")
+                if scoped_model:
+                    return scoped_model
+            if cli_name == "gemini":
+                scoped_model = getattr(self._config.models.scoping, "gemini", "")
                 if scoped_model:
                     return scoped_model
             scoped_codex = getattr(self._config.models.scoping, "codex", "")
@@ -2115,8 +1992,7 @@ class Engine:
             "",
             "## Scoping",
             f"- Scope: {state.scope_md_ref or '<none>'}",
-            f"- Claude scope: {state.claude_scope_ref or '<none>'}",
-            f"- Codex scope: {state.codex_scope_ref or '<none>'}",
+            f"- Participant scopes: {json.dumps(state.ai_scope_refs, sort_keys=True) if state.ai_scope_refs else '<none>'}",
             f"- Normalized task: {state.normalized_task or '<none>'}",
             f"- Complexity: {state.complexity_tier or '<none>'}",
             "",

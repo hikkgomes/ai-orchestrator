@@ -52,6 +52,18 @@ class ClaudeAdapter(BaseAdapter):
     _EFFORT_FLAG = "--effort"
     _MODEL_FLAG = "--model"
 
+    @classmethod
+    def supports_session_resume(cls) -> bool:
+        return True
+
+    @classmethod
+    def list_available_models(cls) -> list[str]:
+        return [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+        ]
+
     def invoke(
         self,
         prompt: str,
@@ -417,7 +429,7 @@ class ClaudeAdapter(BaseAdapter):
     @staticmethod
     def _is_unsupported_effort_flag(stderr: str) -> bool:
         lowered = stderr.lower()
-        return any(flag in lowered for flag in ("--effort", "--reasoning-effort")) and any(
+        return any(flag in lowered for flag in ("--effort", "--reasoning-effort", "--thinking")) and any(
             phrase in lowered for phrase in ("unknown option", "unrecognized option", "unsupported")
         )
 

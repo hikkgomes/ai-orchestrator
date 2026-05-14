@@ -142,6 +142,19 @@ class BaseAdapter(ABC):
         self._metadata = MetadataStore(artifact_root)
         self._timeout_grace_period = 10
 
+    @classmethod
+    def supports_session_resume(cls) -> bool:
+        """Whether this adapter supports resuming a prior CLI session."""
+        return False
+
+    @classmethod
+    def list_available_models(cls) -> list[str]:
+        """Return known model names for UI selection.
+
+        Adapters may override this with CLI probing when available.
+        """
+        return []
+
     @abstractmethod
     def invoke(
         self,

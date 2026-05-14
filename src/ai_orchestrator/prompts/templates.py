@@ -45,54 +45,85 @@ def build_planning_prompt(
     )
 
 
+def build_scoping_initial_prompt(raw_task: str) -> str:
+    """Build shared initial scoping prompt sent to all participants."""
+    return raw_task.strip()
+
+
+def build_scoping_cross_review_prompt(other_responses: dict[str, str]) -> str:
+    """Build a generic N-AI cross-review prompt."""
+    parts = []
+    for ai_name, response in other_responses.items():
+        parts.append(f"{ai_name} opinion:\n{response}\n")
+    joined = "\n".join(parts)
+    return (
+        "Review the following peer AI responses:\n\n"
+        f"{joined}\n"
+        "Are you all in full agreement? Start with `agreement: true` or `agreement: false`.\n"
+        "If you would change anything, provide the revised scope and reasoning.\n"
+    )
+
+
+def build_scoping_user_reply_prompt(user_input: str, previous_scope: str) -> str:
+    """Build follow-up prompt after user feedback in scoping."""
+    return (
+        "User feedback on the proposed scope:\n\n"
+        f"{user_input}\n\n"
+        "Previous agreed scope:\n\n"
+        f"{previous_scope}\n\n"
+        "Update your scope proposal accordingly.\n"
+    )
+
+
 def build_prescope_claude_prompt(raw_task: str) -> str:
-    """Build Claude round-1 prompt that creates canonical scope.md."""
-    return _prescope_prompt(raw_task=raw_task, canonical=True)
+    """Backward-compatible alias for old callers."""
+    return build_scoping_initial_prompt(raw_task)
 
 
 def build_prescope_codex_prompt(raw_task: str) -> str:
-    """Build Codex round-2 prompt that creates Codex's independent scope file."""
-    return _prescope_prompt(raw_task=raw_task, canonical=False)
+    """Backward-compatible alias for old callers."""
+    return build_scoping_initial_prompt(raw_task)
 
 
 def build_scope_compare_codex_prompt(claude_scope_md: str) -> str:
-    """Build Codex round-3 prompt to compare both scopes."""
-    return (
-        "I had another analysis of this task:\n\n"
-        f"{claude_scope_md}\n\n"
-        "Review it. Start with `agreement: true` or `agreement: false`.\n"
-        "If you disagree, explain why concisely.\n"
-    )
+    return build_scoping_cross_review_prompt({"claude": claude_scope_md})
 
 
 def build_scope_respond_claude_prompt(codex_scope_md: str) -> str:
-    """Build Claude round-4 prompt to respond to Codex reasoning."""
-    return (
-        "Codex reviewed your scope and has feedback:\n\n"
-        f"{codex_scope_md}\n\n"
-        "If you accept, update the canonical scope.md accordingly.\n"
-        "Start with `agreement: true` or `agreement: false`.\n"
-        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
-    )
+    return build_scoping_cross_review_prompt({"codex": codex_scope_md})
 
 
 def build_scope_final_codex_prompt(claude_scope_md: str) -> str:
-    """Build Codex round-5 prompt for final xhigh scope assessment."""
-    return (
-        "Claude still disagrees. Make your final case:\n\n"
-        f"{claude_scope_md}\n\n"
-        "Start with `agreement: true` or `agreement: false`.\n"
-        "If you disagree, explain why concisely.\n"
-    )
+    return build_scoping_cross_review_prompt({"claude": claude_scope_md})
 
 
 def build_scope_final_claude_prompt(codex_scope_md: str) -> str:
-    """Build Claude round-6 prompt for final Opus/max scope decision."""
+    return build_scoping_cross_review_prompt({"codex": codex_scope_md})
+
+
+def build_planning_revision_prompt(user_feedback: str) -> str:
     return (
-        "Codex still disagrees. You have the final say on the scope.\n"
-        "Review their assessment and return the final canonical scope.md.\n\n"
-        f"{codex_scope_md}\n\n"
-        "Preserve YAML frontmatter with normalized_task, complexity_tier, actionable, key_files, and context.\n"
+        "Revise the existing implementation plan based on user feedback.\n\n"
+        f"USER FEEDBACK:\n{user_feedback}\n"
+    )
+
+
+def build_delivery_prompt(
+    task_description: str,
+    plan_text: str,
+    execution_summary: str,
+    review_summary: str,
+) -> str:
+    return (
+        "Write a concise delivery handoff for the completed implementation.\n\n"
+        f"TASK:\n{task_description}\n\n"
+        f"PLAN:\n{plan_text}\n\n"
+        f"EXECUTION SUMMARY:\n{execution_summary}\n\n"
+        f"REVIEW SUMMARY:\n{review_summary}\n\n"
+        "Include:\n"
+        "- What was implemented\n"
+        "- Watch-outs / risk areas\n"
+        "- Suggested next steps\n"
     )
 
 
