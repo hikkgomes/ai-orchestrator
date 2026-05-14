@@ -1,8 +1,20 @@
 # ai-orchestrator runtime artifacts
-.ai-orchestrator/
+.ai-orchestrator/scoping/
+.ai-orchestrator/feasibility/
+.ai-orchestrator/plans/
+.ai-orchestrator/results/
+.ai-orchestrator/reviews/
+.ai-orchestrator/prompts/
+.ai-orchestrator/approvals/
+.ai-orchestrator/feedback/
+.ai-orchestrator/executions/
+.ai-orchestrator/analyses/
+.ai-orchestrator/state/
+.ai-orchestrator/worktrees/
+.ai-orchestrator/logs/
+.ai-orchestrator/metadata.sqlite3
 .ai-review/
-!.ai-orchestrator/config.toml
-!.ai-orchestrator/workflow.yaml
+
 
 # Local AI CLI settings
 .claude/settings.local.json

@@ -1,0 +1,141 @@
+[orchestrator]
+max_retries = 3
+watchdog_timeout = 3600
+
+[routing]
+planner = "claude"
+worker = "codex"
+reviewer = "claude"
+scoper = "claude"
+
+[models.claude]
+default = ""
+
+[models.codex]
+default = ""
+
+[models.scoping]
+claude = "claude-sonnet-4-6"
+codex_light = "gpt-5.4-mini"
+codex = "gpt-5.4"
+
+[models.planning]
+simple = "claude-sonnet-4-6"
+moderate = "claude-sonnet-4-6"
+complex = "claude-opus-4-6"
+architectural = "claude-opus-4-6"
+extramax = "claude-opus-4-6"
+
+[models.executing]
+simple = "gpt-5.4-mini"
+moderate = "gpt-5.3-codex"
+complex = "gpt-5.3-codex"
+architectural = "gpt-5.3-codex"
+extramax = "gpt-5.5"
+
+[models.reviewing]
+codex = "gpt-5.4"
+
+[models.debate]
+escalated_claude = "claude-opus-4-6"
+
+[efforts.claude]
+default = "high"
+
+[efforts.codex]
+default = "medium"
+
+[efforts.scoping]
+round_1_claude = "medium"
+round_1_codex = "medium"
+round_3_codex = "high"
+round_4_claude = "high"
+round_5_codex = "high"
+round_6_claude = "xhigh"
+
+[efforts.complexity.simple]
+planning = "medium"
+executing = "medium"
+reviewing = "high"
+
+[efforts.complexity.moderate]
+planning = "high"
+executing = "high"
+reviewing = "high"
+
+[efforts.complexity.complex]
+planning = "high"
+executing = "xhigh"
+reviewing = "high"
+
+[efforts.complexity.architectural]
+planning = "xhigh"
+executing = "high"
+reviewing = "high"
+
+[efforts.complexity.extramax]
+planning = "max"
+executing = "xhigh"
+reviewing = "high"
+
+[efforts.review_final]
+simple = "high"
+moderate = "high"
+complex = "high"
+architectural = "xhigh"
+extramax = "max"
+
+[efforts.reviewing]
+codex = "high"
+
+[efforts.debate]
+escalated_claude = "xhigh"
+escalated_codex = "high"
+
+[modes.analysis]
+rounds = 3
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "high"
+escalation_model = ""
+escalation_effort = "xhigh"
+
+[modes.review]
+rounds = 3
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "medium"
+escalation_model = ""
+escalation_effort = "xhigh"
+
+[modes.autonomous]
+max_iterations = 5
+claude_model = ""
+codex_model = ""
+claude_effort = "high"
+codex_effort = "medium"
+
+[scoping]
+enabled = true
+
+[sessions]
+enable_planning_resume = true
+enable_review_resume = true
+
+[approval]
+require_plan_approval = true
+require_merge_approval = true
+
+[worktree]
+base_branch = "main"
+branch_prefix = "aio/"
+
+[logging]
+retain_raw_output = false
+retain_prompts = false
+
+[cli_compat]
+claude_min_version = ""
+codex_min_version = ""
