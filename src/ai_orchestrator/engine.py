@@ -447,6 +447,8 @@ class Engine:
             return self._fail_run(state, self._format_step_failure(exc))
         except Exception as exc:
             return self._fail_run(state, str(exc))
+        except Exception as exc:
+            return self._fail_run(state, str(exc))
 
         result_text = str(invoke_result.data.get("text") or "").strip()
         generated_plan_id = str(uuid4())
@@ -1906,7 +1908,7 @@ class Engine:
 
     def _resolve_workspace_repo_path(self, repo: str) -> Path:
         repo_path = (self._repo_root / repo).resolve()
-        if not repo_path.is_relative_to(self._repo_root):
+        if not repo_path.is_relative_to(self._repo_root.resolve()):
             raise EngineError(f"Workspace repo path escapes repository root: {repo}")
         return repo_path
 

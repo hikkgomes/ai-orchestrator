@@ -317,6 +317,7 @@ class BaseAdapter(ABC):
             command,
             cwd=working_dir,
             env=self._filter_env(),
+            stdin=subprocess.PIPE if stdin_text is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -377,10 +378,11 @@ class BaseAdapter(ABC):
         prompt_flags = {"-p", "--prompt"}
         for index, token in enumerate(safe):
             if token in prompt_flags and index + 1 < len(safe):
-                safe[index + 1] = "<redacted-prompt>"
+                if safe[index + 1] != "-":
+                    safe[index + 1] = "<redacted-prompt>"
             if token == "exec" and index + 1 < len(safe):
                 # codex exec <prompt>
-                if not safe[index + 1].startswith("-"):
+                if not safe[index + 1].startswith("-") and safe[index + 1] != "resume":
                     safe[index + 1] = "<redacted-prompt>"
             if token == "-":
                 continue

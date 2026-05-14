@@ -116,7 +116,18 @@ class FakeClaudeAdapter:
                 }
             )
             return TextInvokeResult(_plan_markdown(self._plans.pop(0)), session_id="planning-session")
-        if "Scope the request for implementation across this project" in prompt:
+        if "Review the following peer AI responses:" in prompt:
+            return TextInvokeResult(
+                _scope_md(self._last_scope or {
+                    "actionable": True,
+                    "normalized_task": "Implement feature",
+                    "assumptions": [],
+                    "complexity_tier": "moderate",
+                }),
+                session_id="scoping-claude-session",
+            )
+        # Scoping initial prompt is now the raw task text.
+        if prompt.strip():
             self.scoping_calls += 1
             if self._scopings:
                 self._last_scope = self._scopings.pop(0)
@@ -128,19 +139,6 @@ class FakeClaudeAdapter:
                     "complexity_tier": "moderate",
                 }
             return TextInvokeResult(_scope_md(self._last_scope), session_id="scoping-claude-session")
-        if (
-            "Codex reviewed your scope and has feedback:" in prompt
-            or "Codex still disagrees." in prompt
-        ):
-            return TextInvokeResult(
-                _scope_md(self._last_scope or {
-                    "actionable": True,
-                    "normalized_task": "Implement feature",
-                    "assumptions": [],
-                    "complexity_tier": "moderate",
-                }),
-                session_id="scoping-claude-session",
-            )
         raise AssertionError(f"Unexpected Claude text prompt: {prompt[:80]}")
 
 
