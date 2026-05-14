@@ -45,7 +45,9 @@ def artifact_root(tmp_path: Path) -> Path:
 @pytest.fixture()
 def default_config() -> Config:
     """Return a Config object with all defaults."""
-    return Config()
+    cfg = Config()
+    cfg.scoping.require_user_approval = False
+    return cfg
 
 
 @pytest.fixture()

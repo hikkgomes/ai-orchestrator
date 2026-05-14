@@ -126,6 +126,8 @@ class FakeClaudeAdapter:
                 }),
                 session_id="scoping-claude-session",
             )
+        if "Write a concise delivery handoff" in prompt:
+            return TextInvokeResult("Delivered.", session_id=None)
         # Scoping initial prompt is now the raw task text.
         if prompt.strip():
             self.scoping_calls += 1

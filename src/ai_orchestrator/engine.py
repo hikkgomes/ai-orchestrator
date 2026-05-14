@@ -447,8 +447,6 @@ class Engine:
             return self._fail_run(state, self._format_step_failure(exc))
         except Exception as exc:
             return self._fail_run(state, str(exc))
-        except Exception as exc:
-            return self._fail_run(state, str(exc))
 
         result_text = str(invoke_result.data.get("text") or "").strip()
         generated_plan_id = str(uuid4())
@@ -585,6 +583,8 @@ class Engine:
             )
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
+        except Exception as exc:
+            return self._fail_run(state, str(exc))
 
         result = invoke_result.data
         self._commit_worktree_all(
