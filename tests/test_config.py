@@ -25,7 +25,7 @@ class TestLoadConfig:
         assert cfg.efforts.claude.default == "high"
         assert cfg.efforts.codex.default == "medium"
         assert cfg.models.scoping.codex_light == "gpt-5.4-mini"
-        assert cfg.efforts.scoping.round_6_claude == "xhigh"
+        assert cfg.efforts.scoping.escalation == "xhigh"
         assert cfg.efforts.complexity.architectural.planning == "xhigh"
         assert cfg.efforts.complexity.architectural.executing == "high"
         assert cfg.efforts.complexity.extramax.planning == "max"
