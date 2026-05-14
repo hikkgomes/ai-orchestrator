@@ -144,8 +144,8 @@ def _resolve_session(ctx: click.Context, prefix: str | None) -> tuple[str, str]:
         return session.session_id, "analysis"
     except ArtifactError:
         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        click.echo(f"Warning: failed to inspect analysis session '{normalized}': {exc}", err=True)
     raise click.ClickException(f"No run or session matches '{normalized}'.")
 
 
@@ -160,13 +160,15 @@ def _show_home_screen(ctx: click.Context) -> None:
     state_mgr = StateManager(ctx.obj["artifact_root"])
     try:
         run_ids = state_mgr.list_runs()
-    except Exception:
+    except Exception as exc:
+        ui.warning(f"Failed to list runs for home screen: {exc}")
         run_ids = []
     states: list[RunState] = []
     for run_id in run_ids:
         try:
             states.append(state_mgr.load(run_id))
-        except Exception:
+        except Exception as exc:
+            ui.warning(f"Failed to load run {run_id[:8]}: {exc}")
             continue
     active_states = set(ACTIVE_STATES)
     active_runs = [state for state in states if state.status in active_states]
@@ -238,7 +240,7 @@ def cmd_init(ctx: click.Context, force: bool, skip_review_setup: bool) -> None:
             ctx.invoke(cmd_review_install, force=force)
         ctx.invoke(cmd_review_analyze)
     except Exception as exc:  # pragma: no cover - defensive guard around optional setup
-        ctx.obj["ui"].warn(
+        ctx.obj["ui"].warning(
             f"Review setup skipped (run `orch sync` or the review subcommands manually): {exc}"
         )
 
@@ -1465,8 +1467,8 @@ def cmd_clean(ctx: click.Context, clean_all: bool) -> None:
         if state.worktree_path and state.worktree_branch:
             try:
                 worktrees.remove(Path(state.worktree_path), state.worktree_branch, force=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                ctx.obj["ui"].warning(f"Failed to remove worktree for run {run_id[:8]}: {exc}")
         for path in store.list_run_artifacts(run_id):
             if path.is_file():
                 path.unlink(missing_ok=True)
@@ -1477,8 +1479,8 @@ def cmd_clean(ctx: click.Context, clean_all: bool) -> None:
     for orphan in store.orphaned_worktrees(live_run_ids):
         try:
             worktrees.remove(orphan, f"{ctx.obj['config'].worktree.branch_prefix}{orphan.name}", force=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            ctx.obj["ui"].warning(f"Failed to remove orphaned worktree {orphan}: {exc}")
 
     ctx.obj["ui"].info(f"Removed {removed_runs} completed run(s).")
 
@@ -1511,7 +1513,8 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
             for ai_name, reference in (state.ai_scope_refs or {}).items():
                 try:
                     responses[ai_name] = ArtifactStore(ctx.obj["artifact_root"]).read_text(reference)
-                except Exception:
+                except Exception as exc:
+                    ui.warning(f"Failed to read scoping artifact for {ai_name}: {exc}")
                     continue
             if responses:
                 ui.print_scoping_conversation(responses, state.scoping_round or 1)
@@ -1591,7 +1594,7 @@ def _drive_interactive_approvals(ctx: click.Context, run_id: str) -> RunState:
                 state_mgr.save(state)
             continue
         else:
-            state = engine._terminate_run(state, "Scope rejected by user")
+            state = engine.reject(run_id, gate, "Scope rejected by user", full=True)
 
 
 def _render_status(ctx: click.Context, run_id: str) -> RenderableType:

@@ -34,7 +34,7 @@ class FakePopen:
         self.terminate_called = False
         self.kill_called = False
 
-    def communicate(self, timeout=None):
+    def communicate(self, input=None, timeout=None):
         if self._timeouts:
             self._timeouts -= 1
             raise subprocess.TimeoutExpired(
@@ -507,12 +507,12 @@ class TestCodexAdapter:
     def test_build_command_uses_codex_resume_thread(self, artifact_root, default_config):
         adapter = CodexAdapter(default_config, artifact_root)
 
-        command, _, _ = adapter._build_command("hello", resume_session_id="thread-123")
+        command, _, _ = adapter._build_command(resume_session_id="thread-123")
 
         assert command[:5] == ["codex", "exec", "resume", "--skip-git-repo-check", "thread-123"]
         assert "--sandbox" not in command
         assert "--json" in command
-        assert command[-1] == "hello"
+        assert command[-1] == "-"
 
     def test_invoke_falls_back_to_stdout_jsonl(
         self,

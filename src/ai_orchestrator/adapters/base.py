@@ -252,10 +252,11 @@ class BaseAdapter(ABC):
         log_dir = self._artifact_root / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / f"{cli_name}-{uuid4().hex[:8]}.log"
+        safe_command = self._sanitize_command(command)
         payload = {
             "started_at": started_at,
             "finished_at": finished_at,
-            "command": command,
+            "command": safe_command,
             "exit_code": exit_code,
             "stdout": stdout,
             "stderr": stderr,
@@ -308,6 +309,8 @@ class BaseAdapter(ABC):
         command: list[str],
         working_dir: Path,
         timeout: int,
+        *,
+        stdin_text: str | None = None,
     ) -> CommandResult:
         started_at = self._now()
         process = subprocess.Popen(
@@ -322,7 +325,7 @@ class BaseAdapter(ABC):
         timed_out = False
         exit_code: int | None
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            stdout, stderr = process.communicate(input=stdin_text, timeout=timeout)
             exit_code = process.returncode
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -365,7 +368,24 @@ class BaseAdapter(ABC):
         return datetime.now(timezone.utc).isoformat()
 
     def _record_invocation(self, record: InvocationRecord) -> None:
+        record.command = self._sanitize_command(record.command)
         self._metadata.record_invocation(record)
+
+    @staticmethod
+    def _sanitize_command(command: list[str]) -> list[str]:
+        safe = list(command)
+        prompt_flags = {"-p", "--prompt"}
+        for index, token in enumerate(safe):
+            if token in prompt_flags and index + 1 < len(safe):
+                safe[index + 1] = "<redacted-prompt>"
+            if token == "exec" and index + 1 < len(safe):
+                # codex exec <prompt>
+                if not safe[index + 1].startswith("-"):
+                    safe[index + 1] = "<redacted-prompt>"
+            if token == "-":
+                continue
+        # Defensive cap in case a prompt-like argument slipped through.
+        return [arg if len(arg) <= 300 else f"{arg[:297]}..." for arg in safe]
 
     @staticmethod
     def _typed_step_result(data: dict[str, Any]) -> StepResult | None:

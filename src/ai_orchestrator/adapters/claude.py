@@ -87,7 +87,6 @@ class ClaudeAdapter(BaseAdapter):
             On auth/interactive exit or timeout with no output.
         """
         command, model, reasoning_effort = self._build_command(
-            prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
@@ -96,6 +95,7 @@ class ClaudeAdapter(BaseAdapter):
         )
         return self._invoke_command(
             command,
+            prompt,
             working_dir,
             timeout,
             schema,
@@ -116,7 +116,6 @@ class ClaudeAdapter(BaseAdapter):
         allowed_tools: list[str] | None = None,
     ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
-            prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
@@ -125,6 +124,7 @@ class ClaudeAdapter(BaseAdapter):
         )
         return self._invoke_text_command(
             command,
+            prompt,
             working_dir,
             timeout,
             model=model,
@@ -134,7 +134,6 @@ class ClaudeAdapter(BaseAdapter):
 
     def _build_command(
         self,
-        prompt: str,
         *,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
@@ -157,12 +156,13 @@ class ClaudeAdapter(BaseAdapter):
             command.extend(["--resume", resume_session_id])
         if allowed_tools:
             command.extend(["--allowedTools", ",".join(allowed_tools)])
-        command.extend(["-p", prompt, "--output-format", output_format])
+        command.extend(["-p", "-", "--output-format", output_format])
         return command, model, reasoning_effort
 
     def _invoke_command(
         self,
         command: list[str],
+        prompt: str,
         working_dir: Path,
         timeout: int,
         schema: dict[str, Any],
@@ -171,7 +171,13 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort: str | None,
         allow_effort_retry: bool,
     ) -> InvokeResult:
-        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        completed = self._run_subprocess(
+            self.CLI_NAME,
+            command,
+            working_dir,
+            timeout,
+            stdin_text=prompt,
+        )
         if completed.timed_out:
             if not completed.stdout.strip() and not completed.stderr.strip():
                 raise BlockedOnCLI(
@@ -200,6 +206,7 @@ class ClaudeAdapter(BaseAdapter):
                 del retry_command[flag_index : flag_index + 2]
                 return self._invoke_command(
                     retry_command,
+                    prompt,
                     working_dir,
                     timeout,
                     schema,
@@ -265,6 +272,7 @@ class ClaudeAdapter(BaseAdapter):
     def _invoke_text_command(
         self,
         command: list[str],
+        prompt: str,
         working_dir: Path,
         timeout: int,
         *,
@@ -272,7 +280,13 @@ class ClaudeAdapter(BaseAdapter):
         reasoning_effort: str | None,
         allow_effort_retry: bool,
     ) -> TextInvokeResult:
-        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        completed = self._run_subprocess(
+            self.CLI_NAME,
+            command,
+            working_dir,
+            timeout,
+            stdin_text=prompt,
+        )
         if completed.timed_out:
             if not completed.stdout.strip() and not completed.stderr.strip():
                 raise BlockedOnCLI(
@@ -298,6 +312,7 @@ class ClaudeAdapter(BaseAdapter):
                 del retry_command[flag_index : flag_index + 2]
                 return self._invoke_text_command(
                     retry_command,
+                    prompt,
                     working_dir,
                     timeout,
                     model=model,

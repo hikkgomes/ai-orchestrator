@@ -54,6 +54,8 @@ class MetadataStore:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS runs (

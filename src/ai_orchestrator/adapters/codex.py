@@ -100,12 +100,17 @@ class CodexAdapter(BaseAdapter):
             raise StepFailure("Codex prompt is missing the pending execution result path")
 
         command, model, reasoning_effort = self._build_command(
-            prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
         )
-        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        completed = self._run_subprocess(
+            self.CLI_NAME,
+            command,
+            working_dir,
+            timeout,
+            stdin_text=prompt,
+        )
         stdout = completed.stdout
         thread_id = self._extract_thread_id(stdout)
         stderr = completed.stderr
@@ -275,12 +280,17 @@ class CodexAdapter(BaseAdapter):
         allowed_tools: list[str] | None = None,
     ) -> TextInvokeResult:
         command, model, reasoning_effort = self._build_command(
-            prompt,
             reasoning_effort_override=reasoning_effort_override,
             model_override=model_override,
             resume_session_id=resume_session_id,
         )
-        completed = self._run_subprocess(self.CLI_NAME, command, working_dir, timeout)
+        completed = self._run_subprocess(
+            self.CLI_NAME,
+            command,
+            working_dir,
+            timeout,
+            stdin_text=prompt,
+        )
         stdout = completed.stdout
         stderr = completed.stderr
         thread_id = self._extract_thread_id(stdout)
@@ -351,7 +361,6 @@ class CodexAdapter(BaseAdapter):
 
     def _build_command(
         self,
-        prompt: str,
         *,
         reasoning_effort_override: str | None = None,
         model_override: str | None = None,
@@ -376,7 +385,7 @@ class CodexAdapter(BaseAdapter):
             command.extend([self._MODEL_FLAG, model])
         if reasoning_effort:
             command.extend(["--config", f"model_reasoning_effort={json.dumps(reasoning_effort)}"])
-        command.append(prompt)
+        command.append("-")
         return command, model, reasoning_effort
 
     def _pending_result_path(self, step_number: int) -> Path:
@@ -565,6 +574,7 @@ class CodexAdapter(BaseAdapter):
             cwd=working_dir,
             capture_output=True,
             text=True,
+            env=self._filter_env(),
             shell=False,
             check=False,
         )

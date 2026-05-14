@@ -1159,7 +1159,7 @@ def test_codex_review_uses_fresh_session(tmp_repo, artifact_root, default_config
     assert state.status == "DONE"
     assert codex_review_invocations
     assert codex_review_invocations[0]["resume_session_id"] is None
-    assert state.session_ids["scoping_codex"] == "codex-review-session"
+    assert state.session_ids["reviewing_codex"] == "codex-review-session"
 
 
 def test_resume_from_executing_runs_full_plan(tmp_repo, artifact_root, default_config):

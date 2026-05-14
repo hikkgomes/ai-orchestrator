@@ -1,0 +1,32 @@
+# Default workflow configuration for ai-orchestrator.
+#
+# This file is the authoritative workflow definition for phase structure and
+# default phase-level settings. The engine loads this file at startup.
+# .ai-orchestrator/config.toml provides user-level overrides for supported settings.
+
+name: default
+description: >
+  Full orchestrated run: scope -> plan -> execute -> review -> merge.
+
+phases:
+  scoping:
+    cli: claude
+    retries: 2
+
+  planning:
+    cli: claude
+    approval_gate: plan
+    retries: 3
+
+  executing:
+    cli: codex
+    worktree: true
+    retries: 3
+
+  reviewing:
+    cli: claude
+    retries: 3
+
+  merging:
+    # Applies changes as a staged diff via git merge --squash; never commits.
+    # No approval gate — triggered automatically after review passes.

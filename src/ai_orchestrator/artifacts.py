@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import re
+import warnings
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from filelock import FileLock
 
 from .models import AnalysisSession
 
@@ -102,7 +105,7 @@ class ArtifactStore:
         )
 
     def read_json(self, reference: str) -> dict[str, Any]:
-        path = self._artifact_root / reference
+        path = self._resolve_artifact_reference(reference)
         if not path.exists():
             raise ArtifactError(f"Artifact does not exist: {reference}")
         try:
@@ -112,7 +115,7 @@ class ArtifactStore:
             raise ArtifactError(f"Failed to read artifact: {reference}") from exc
 
     def read_text(self, reference: str) -> str:
-        path = self._artifact_root / reference
+        path = self._resolve_artifact_reference(reference)
         if not path.exists():
             raise ArtifactError(f"Artifact does not exist: {reference}")
         try:
@@ -165,13 +168,15 @@ class ArtifactStore:
 
     def consume_approval_decision(self, run_id: str, gate: str) -> dict[str, Any] | None:
         pending = self._approval_pending_path(run_id, gate)
-        if not pending.exists():
-            return None
-        data = self._read_path_json(pending)
-        processed = self._approval_processed_path(run_id, gate)
-        processed.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(pending, processed)
-        return data
+        lock = FileLock(str(pending.with_suffix(".lock")))
+        with lock:
+            if not pending.exists():
+                return None
+            data = self._read_path_json(pending)
+            processed = self._approval_processed_path(run_id, gate)
+            processed.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(pending, processed)
+            return data
 
     def latest_processed_approval(self, run_id: str, gate: str) -> dict[str, Any] | None:
         path = self._approval_processed_path(run_id, gate)
@@ -234,7 +239,8 @@ class ArtifactStore:
         for path in sorted(directory.glob("session-*.json")):
             try:
                 sessions.append(AnalysisSession.model_validate(self._read_path_json(path)))
-            except Exception:
+            except Exception as exc:
+                warnings.warn(f"Skipping invalid analysis session artifact {path.name}: {exc}", RuntimeWarning)
                 continue
         return sessions
 
@@ -295,13 +301,28 @@ class ArtifactStore:
         return orphans
 
     def _approval_pending_path(self, run_id: str, gate: str) -> Path:
+        self._validate_token("gate", gate)
         return self._dirs["approvals"] / f"{run_id}-{gate}-pending.json"
 
     def _approval_processed_path(self, run_id: str, gate: str) -> Path:
+        self._validate_token("gate", gate)
         return self._dirs["approvals"] / f"{run_id}-{gate}-processed.json"
 
     def _feedback_path(self, run_id: str, phase: str) -> Path:
+        self._validate_token("phase", phase)
         return self._dirs["feedback"] / f"{run_id}-{phase}.json"
+
+    def _resolve_artifact_reference(self, reference: str) -> Path:
+        path = (self._artifact_root / reference).resolve()
+        root = self._artifact_root.resolve()
+        if not path.is_relative_to(root):
+            raise ArtifactError(f"Artifact reference escapes artifact root: {reference}")
+        return path
+
+    @staticmethod
+    def _validate_token(name: str, value: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ArtifactError(f"Invalid {name}: {value}")
 
     def _execution_manifest_path(self, run_id: str) -> Path:
         return self._dirs["executions"] / f"run-{run_id}.json"

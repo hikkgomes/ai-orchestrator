@@ -153,12 +153,28 @@ def should_ignore(rel: str) -> bool:
 
 def current_files() -> list[str]:
     try:
-        changed = subprocess.check_output(
-            "(git diff --name-only --cached; git diff --name-only; git ls-files --others --exclude-standard) 2>/dev/null | sort -u",
-            shell=True,
-            text=True,
-            cwd=ROOT,
-        ).splitlines()
+        commands = [
+            ["git", "diff", "--name-only", "--cached"],
+            ["git", "diff", "--name-only"],
+            ["git", "ls-files", "--others", "--exclude-standard"],
+        ]
+        changed_set: set[str] = set()
+        for cmd in commands:
+            completed = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+            if completed.returncode != 0:
+                continue
+            for line in completed.stdout.splitlines():
+                line = line.strip()
+                if line:
+                    changed_set.add(line)
+        changed = sorted(changed_set)
     except Exception:
         changed = []
     changed = [normalize_rel(path) for path in changed if path.strip()]

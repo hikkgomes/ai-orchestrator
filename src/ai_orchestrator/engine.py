@@ -445,6 +445,8 @@ class Engine:
             )
         except StepFailure as exc:
             return self._fail_run(state, self._format_step_failure(exc))
+        except Exception as exc:
+            return self._fail_run(state, str(exc))
 
         result_text = str(invoke_result.data.get("text") or "").strip()
         generated_plan_id = str(uuid4())
@@ -740,7 +742,7 @@ class Engine:
                 )
                 codex_review = codex_result.data
                 if codex_result.session_id:
-                    state.session_ids["scoping_codex"] = codex_result.session_id
+                    state.session_ids["reviewing_codex"] = codex_result.session_id
                 self._record_debate_round(
                     state,
                     actor="codex",
@@ -924,9 +926,10 @@ class Engine:
                 return [path.strip() for path in result.stdout.splitlines() if path.strip()]
             changed: list[str] = []
             for repo in state.workspace_repos:
+                repo_path = self._resolve_workspace_repo_path(repo)
                 result = subprocess.run(
                     ["git", "diff", "--name-only", "HEAD"],
-                    cwd=self._repo_root / repo,
+                    cwd=repo_path,
                     capture_output=True,
                     text=True,
                     shell=False,
@@ -1131,7 +1134,7 @@ class Engine:
             delivery_message = delivery_result.text.strip()
         except Exception as exc:
             if self._ui:
-                self._ui.warn(f"Delivery summary skipped: {exc}")
+                self._ui.warning(f"Delivery summary skipped: {exc}")
             delivery_message = ""
 
         if not state.is_workspace:
@@ -1650,7 +1653,7 @@ class Engine:
     def _retry_limit(self, workflow_phase: str) -> int:
         config_limit = self._config.orchestrator.max_retries
         phase_limit = self._workflow.phase(workflow_phase).retries
-        return config_limit or phase_limit
+        return config_limit if config_limit is not None else phase_limit
 
     @staticmethod
     def _retry_error_message(retry_key: str, error_message: str) -> str:
@@ -1685,7 +1688,10 @@ class Engine:
         if state.is_workspace:
             return self._repo_root
         if state.worktree_path:
-            return Path(state.worktree_path)
+            path = Path(state.worktree_path)
+            if not path.exists():
+                raise EngineError(f"Worktree directory no longer exists: {path}")
+            return path
         worktree_path, branch_name, base_commit = self._worktrees.create(
             state.run_id,
             self._config.worktree.base_branch,
@@ -1766,7 +1772,7 @@ class Engine:
 
     def _reset_workspace_repos(self, state: RunState) -> None:
         for repo in state.workspace_repos:
-            repo_path = self._repo_root / repo
+            repo_path = self._resolve_workspace_repo_path(repo)
             subprocess.run(
                 ["git", "checkout", "--", "."],
                 cwd=repo_path,
@@ -1803,7 +1809,7 @@ class Engine:
                 diffs["."] = result.stdout
             return diffs
         for repo in state.workspace_repos:
-            repo_path = self._repo_root / repo
+            repo_path = self._resolve_workspace_repo_path(repo)
             result = subprocess.run(
                 ["git", "diff", "HEAD"],
                 cwd=repo_path,
@@ -1853,7 +1859,7 @@ class Engine:
                 ]
             return ["# No changes detected."]
         for repo in state.workspace_repos:
-            repo_path = self._repo_root / repo
+            repo_path = self._resolve_workspace_repo_path(repo)
             result = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=repo_path,
@@ -1890,10 +1896,19 @@ class Engine:
         return json_block(self._artifacts.read_json(reference))
 
     def _gate_phase(self, gate: str) -> str:
-        return {
+        phase = {
             "scope": WorkflowStatus.SCOPING.value,
             "plan": WorkflowStatus.APPROVAL_PLAN.value,
-        }[gate]
+        }.get(gate)
+        if not phase:
+            raise EngineError(f"Unsupported gate: {gate}")
+        return phase
+
+    def _resolve_workspace_repo_path(self, repo: str) -> Path:
+        repo_path = (self._repo_root / repo).resolve()
+        if not repo_path.is_relative_to(self._repo_root):
+            raise EngineError(f"Workspace repo path escapes repository root: {repo}")
+        return repo_path
 
     def _workspace_feedback_prefix(self, state: RunState) -> str:
         if not state.is_workspace:
