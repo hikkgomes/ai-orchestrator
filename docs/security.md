@@ -55,7 +55,7 @@ Every AI output is validated before the orchestrator acts on it:
 Mutating steps run in a single git worktree per run, not on the main branch:
 
 - The main branch is never modified until explicit human approval and merge
-- The worktree is a full checkout on a separate branch
+- The worktree is a full checkout on a separate branch in a centralized runtime directory outside the repository tree
 - Failed/rejected worktrees are removed without affecting the main branch
 - Merge requires human approval by default
 - Base commit SHA is recorded and verified before merge
@@ -91,7 +91,7 @@ If a potential secret is detected:
 - Prompt files are stored only when `logging.retain_prompts = true`
 - Both default to `false` — no sensitive content is retained by default
 - Orchestrator event logs (state transitions, decisions, errors) are always retained but contain no file contents
-- All logs are in `.ai-orchestrator/logs/` which should be in `.gitignore`
+- All logs are stored in the centralized per-project runtime directory (outside the repo), reducing accidental commits of prompt/log content
 - `aio clean` removes logs for completed runs
 
 ### 8. State File Integrity
@@ -132,8 +132,8 @@ All dependencies are pinned in lock files for reproducible installs.
 1. **Always enable merge approval** — review every diff before it lands.
 2. **Keep secrets out of the repo** — the orchestrator reads tracked files as prompt context.
 3. **Run `aio doctor` after CLI updates** — verifies version compatibility.
-4. **Use `.gitignore`** — ensure `.ai-orchestrator/` runtime directories are ignored.
+4. **Keep repo clean** — avoid committing generated review/runtime data if you export or copy it locally.
 5. **Keep `logging.retain_raw_output` off** unless debugging — avoids local copies of prompt context.
 6. **Pin dependencies** — use `pip install ai-orchestrator==X.Y.Z` in shared environments.
-7. **Audit `.ai-orchestrator/config.toml` changes** — treat orchestrator config as security-relevant.
+7. **Audit centralized config changes** — treat orchestrator config/workflow changes as security-relevant.
 8. **Evaluate vendor data policies** — understand where your code goes when sent to Claude/Codex APIs.

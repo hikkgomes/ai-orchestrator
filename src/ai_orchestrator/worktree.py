@@ -5,7 +5,7 @@ execute sequentially in this worktree so that each step sees prior step output
 (DD-1).
 
 Worktree naming: ``aio/run-<short-uuid>``
-Worktree path:   ``.ai-orchestrator/worktrees/run-<short-uuid>``
+Worktree path:   ``<artifact-root>/worktrees/run-<short-uuid>``
 
 Merge pre-checks (DD-6):
 1. Base branch working tree must be clean (no uncommitted changes).
@@ -20,9 +20,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .bootstrap import render_runtime_gitignore
-
-
 class WorktreeError(Exception):
     """Raised when a worktree operation fails."""
 
@@ -35,7 +32,7 @@ class WorktreeManager:
     repo_root:
         Absolute path to the repository root (where ``.git/`` lives).
     artifact_root:
-        Path to the ``.ai-orchestrator/`` directory (worktrees live here).
+        Path to the centralized project artifact directory (worktrees live here).
     """
 
     def __init__(self, repo_root: Path, artifact_root: Path) -> None:
@@ -145,7 +142,7 @@ class WorktreeManager:
         if status.returncode != 0:
             raise WorktreeError(f"Failed to inspect working tree: {status.stderr.strip()}")
         dirty_lines = [line for line in status.stdout.splitlines() if line.strip()]
-        if dirty_lines and not _only_runtime_gitignore_change(self._repo_root, dirty_lines):
+        if dirty_lines:
             raise WorktreeError("Base branch working tree is dirty; commit or stash changes first.")
 
         current_base_commit = _get_head_sha(self._repo_root, base_branch)
@@ -245,27 +242,3 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 def _get_head_sha(repo_root: Path, revision: str) -> str:
     result = _run_git(["rev-parse", revision], cwd=repo_root)
     return result.stdout.strip()
-
-
-def _only_runtime_gitignore_change(repo_root: Path, dirty_lines: list[str]) -> bool:
-    if len(dirty_lines) != 1:
-        return False
-
-    dirty_path = dirty_lines[0][3:].strip() if len(dirty_lines[0]) > 3 else ""
-    if dirty_path != ".gitignore":
-        return False
-
-    gitignore_path = repo_root / ".gitignore"
-    if not gitignore_path.exists():
-        return False
-
-    completed = subprocess.run(
-        ["git", "show", "HEAD:.gitignore"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        shell=False,
-        check=False,
-    )
-    head_content = completed.stdout if completed.returncode == 0 else ""
-    return gitignore_path.read_text(encoding="utf-8") == render_runtime_gitignore(head_content)

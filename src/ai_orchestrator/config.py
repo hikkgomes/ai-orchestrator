@@ -1,8 +1,7 @@
 """Configuration loader for ai-orchestrator.
 
-Reads .ai-orchestrator/config.toml at the repo root (current working directory)
-and merges with global defaults from ~/.config/ai-orchestrator/config.toml on
-macOS/Linux or %APPDATA%\\ai-orchestrator\\config.toml on Windows.
+Reads per-project config from the centralized project directory and merges
+it with global defaults.
 
 Uses tomllib (stdlib in Python 3.11+) — no external TOML dependency.
 
@@ -16,7 +15,6 @@ Usage::
 
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,7 +30,7 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for loc
 # Config section dataclasses (mirrors config.toml structure)
 # ---------------------------------------------------------------------------
 
-ARTIFACT_DIR = ".ai-orchestrator"
+from .paths import get_project_config_path, get_user_data_dir
 
 
 @dataclass
@@ -317,10 +315,7 @@ class ConfigError(ValueError):
 
 def _global_config_path() -> Path:
     """Return the platform-appropriate global config path."""
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")
-        return Path(appdata) / "ai-orchestrator" / "config.toml"
-    return Path.home() / ".config" / "ai-orchestrator" / "config.toml"
+    return get_user_data_dir() / "config.toml"
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -557,7 +552,7 @@ def _validate_config_tree(data: dict[str, Any]) -> None:
 
 
 def load_config(repo_root: Path | None = None) -> Config:
-    """Load and merge configuration from global and repo-level TOML files.
+    """Load and merge configuration from global and project-scoped TOML files.
 
     Parameters
     ----------
@@ -581,7 +576,7 @@ def load_config(repo_root: Path | None = None) -> Config:
     if global_path.exists():
         merged = _merge(merged, _load_toml(global_path))
 
-    repo_path = root / ARTIFACT_DIR / "config.toml"
+    repo_path = get_project_config_path(root)
     if repo_path.exists():
         merged = _merge(merged, _load_toml(repo_path))
 

@@ -10,7 +10,7 @@
 
 1. **CLI-only AI access** — no API keys, no SDKs, no HTTP calls to model providers.
 2. **Fresh subprocess per invocation, resumable vendor sessions** — every CLI call is a new subprocess. Claude phases may intentionally resume one unified session (`claude_main`) across scoping, planning, and reviewing via `--resume`. Codex runs with `--json`, captures the emitted `thread_id`, and can resume that thread for later Codex rounds. Note: vendor CLIs may retain their own local state (auth, caches, project metadata) in the user's home directory; the orchestrator does not sandbox this.
-3. **Disk-artifact communication** — steps exchange data through JSON files in `.ai-orchestrator/`, never through stdout chaining.
+3. **Disk-artifact communication** — steps exchange data through JSON files in centralized project storage, never through stdout chaining.
 4. **Resumable orchestrator state** — the orchestrator persists its own state to disk so it can crash and resume.
 5. **Single worktree per run** — all mutating steps execute in one ephemeral git worktree branch per run, in sequence. The main branch is never touched until merge.
 6. **Structured outputs** — planning emits markdown; other AI outputs emit JSON validated against schemas before the orchestrator advances. Application-level validation supplements schema checks for invariants like path normalization and diff correspondence.
@@ -30,7 +30,7 @@
 │       │              │             │                       │
 │       ▼              ▼             ▼                       │
 │  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Artifact Store (.ai-orchestrator/)          │ │
+│  │         Artifact Store (centralized project dir)         │ │
 │  │ scoping/ plans/ results/ reviews/                       │ │
 │  │ state/ logs/                                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
@@ -44,30 +44,34 @@
 
 ## Directory Layout (Runtime)
 
-All orchestrator state lives under `.ai-orchestrator/` at the repo root:
+Runtime artifacts live outside the repository in a centralized user data directory.
+Each repository gets a deterministic project directory keyed by repo name + hash.
 
 ```
-.ai-orchestrator/
-├── metadata.sqlite3            # run + adapter invocation metadata
-├── state/
-│   └── run-<uuid>.json          # orchestrator run state (resumable)
-├── scoping/
-│   └── scope-<run>.md            # canonical scope with YAML frontmatter
-├── plans/
-│   └── plan-<prefix>-<hash>.md  # markdown plan with YAML frontmatter
-├── results/
-│   └── execution-<uuid>.json    # validated against execution_result.schema.json
-├── reviews/
-│   ├── review-<uuid>.json       # validated against review.schema.json
-│   └── debate-round-<n>-<run>.json
-├── worktrees/
-│   └── run-<uuid>/              # single git worktree per run
-├── prompts/
-│   └── <phase>-<run>.md         # rendered prompt sent to CLI (opt-in retention)
-└── logs/
-    ├── run-<uuid>.log           # orchestrator events
-    ├── claude-<uuid>.log        # raw stdout/stderr from claude -p (opt-in)
-    └── codex-<uuid>.log         # raw stdout/stderr from codex exec (opt-in)
+<user-data-dir>/ai-orchestrator/
+├── projects/
+│   └── <repo>-<hash>/
+│       ├── metadata.sqlite3            # run + adapter invocation metadata
+│       ├── state/
+│       │   └── run-<uuid>.json         # orchestrator run state (resumable)
+│       ├── scoping/
+│       │   └── scope-<run>.md          # canonical scope with YAML frontmatter
+│       ├── plans/
+│       │   └── plan-<prefix>-<hash>.md # markdown plan with YAML frontmatter
+│       ├── results/
+│       │   └── execution-<uuid>.json   # validated against execution_result.schema.json
+│       ├── reviews/
+│       │   ├── review-<uuid>.json      # validated against review.schema.json
+│       │   └── debate-round-<n>-<run>.json
+│       ├── worktrees/
+│       │   └── run-<uuid>/             # single git worktree per run
+│       ├── prompts/
+│       │   └── <phase>-<run>.md        # rendered prompt sent to CLI (opt-in retention)
+│       └── logs/
+│           ├── run-<uuid>.log          # orchestrator events
+│           ├── claude-<uuid>.log       # raw stdout/stderr from claude -p (opt-in)
+│           └── codex-<uuid>.log        # raw stdout/stderr from codex exec (opt-in)
+└── metadata.sqlite3                     # optional global metadata DB
 ```
 
 ## Component Architecture
@@ -90,7 +94,7 @@ Built with `click` for command parsing and `rich` for terminal UI. Entry points:
 
 ### 2. Orchestrator Engine
 
-The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `.ai-orchestrator/workflow.yaml` defines the phase structure and default phase-level settings; `.ai-orchestrator/config.toml` overrides supported routing, retry, session, debate, and watchdog values.
+The engine is a finite state machine that advances through workflow phases. State transitions are persisted to `state/run-<uuid>.json` after every phase change. `workflow.yaml` in centralized project storage defines phase structure/defaults; centralized `config.toml` overrides supported routing, retry, session, debate, and watchdog values.
 
 #### Canonical State Machine
 
@@ -150,7 +154,7 @@ Both adapters:
 
 **Claude adapter (primary):** Parse `--output-format json` stdout. Try `json.loads(stdout)` first. On failure, strip markdown fences and find JSON boundaries (lenient mode). Log a warning on lenient success.
 
-**Codex adapter (primary):** After `codex exec --json` completes, read a result file from a known path. Execution writes `.ai-orchestrator/results/pending-execution-<run>.json`. Execution reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to `item.completed` JSONL agent-message content and then legacy stdout JSON scanning. If both fail during execution, construct a minimal result from git diff alone.
+**Codex adapter (primary):** After `codex exec --json` completes, read a result file from the absolute path supplied in the prompt (under the centralized project artifact root). Execution reconstructs `files_changed` from `git diff` in the worktree. If the result file is missing, fall back to `item.completed` JSONL agent-message content and then legacy stdout JSON scanning. If both fail during execution, construct a minimal result from git diff alone.
 
 ### 4. Schema Validator
 
@@ -165,7 +169,7 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 
 ### 5. Worktree Manager
 
-- Creates one worktree per run: `git worktree add .ai-orchestrator/worktrees/run-<uuid> -b aio/run-<uuid>`
+- Creates one worktree per run under the centralized project artifact root: `git worktree add <artifact-root>/worktrees/run-<uuid> -b aio/run-<uuid>`
 - All steps execute sequentially in this worktree, so each step sees the output of prior steps
 - Resets the worktree to the last committed step baseline before an execution retry
 - On success + merge approval: merges the single worktree branch back to base
@@ -178,12 +182,12 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 - Reads/writes `state/run-<uuid>.json`
 - Uses `filelock` (cross-platform) to prevent concurrent access
 - Every state transition is atomic: write to temp file, then `os.replace()`
-- Mirrors run metadata into `.ai-orchestrator/metadata.sqlite3` for local querying
+- Mirrors run metadata into `<artifact-root>/metadata.sqlite3` for local querying
 - On corruption: attempt parse of the state file; if invalid JSON, the run is unrecoverable and must be cleaned up manually
 
 ### 6a. Metadata Store
 
-- Uses SQLite (`.ai-orchestrator/metadata.sqlite3`) via the Python stdlib `sqlite3` module
+- Uses SQLite (`<artifact-root>/metadata.sqlite3`) via the Python stdlib `sqlite3` module
 - Stores run metadata snapshots and adapter invocation metadata
 - Persists step-level execution metadata independently from JSON artifacts
 
@@ -195,7 +199,7 @@ Validation failures are non-recoverable for the current step attempt (trigger re
 
 ## Configuration
 
-`.ai-orchestrator/config.toml` at repo root (or `~/.config/ai-orchestrator/config.toml` for global defaults):
+Project config at centralized `config.toml` (with global defaults at `<user-data-dir>/ai-orchestrator/config.toml`):
 
 ```toml
 [orchestrator]

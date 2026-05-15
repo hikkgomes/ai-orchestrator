@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 
-from .bootstrap import ensure_runtime_gitignore, scaffold_repository
-from .config import ARTIFACT_DIR, Config, ConfigError, load_config
+from .bootstrap import scaffold_repository
+from .config import Config, ConfigError, load_config
+from .paths import get_project_config_path, get_project_workflow_path
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,6 @@ class DoctorReport:
 
 def run_doctor(repo_root: Path, artifact_root: Path, config: Config | None = None) -> DoctorReport:
     """Run workflow-scoped environment checks."""
-    ensure_runtime_gitignore(repo_root)
     effective_config = config or Config()
     checks = [
         _check_python(),
@@ -228,18 +228,18 @@ def _check_write_permissions(repo_root: Path, artifact_root: Path) -> DoctorChec
     return DoctorCheck(
         name="write-permissions",
         status="pass",
-        summary=f"Writable: {artifact_root.relative_to(repo_root) if artifact_root.is_relative_to(repo_root) else artifact_root}",
+        summary=f"Writable: {artifact_root}",
     )
 
 
 def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
-    config_path = repo_root / ARTIFACT_DIR / "config.toml"
+    config_path = get_project_config_path(repo_root)
     if not config_path.exists():
         return DoctorCheck(
             name="repo-config",
             status="warn",
-            summary="Repo-level .ai-orchestrator/config.toml is missing.",
-            hint="Run `orch init` in the repository root to scaffold the config.",
+            summary="Project config.toml is missing in centralized storage.",
+            hint="Run `orch init` to scaffold centralized config files.",
         )
 
     try:
@@ -248,16 +248,16 @@ def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
         return DoctorCheck(
             name="repo-config",
             status="fail",
-            summary=".ai-orchestrator/config.toml exists but is invalid.",
+            summary="Project config.toml exists but is invalid.",
             hint=str(exc),
         )
 
-    workflow_path = repo_root / ARTIFACT_DIR / "workflow.yaml"
+    workflow_path = get_project_workflow_path(repo_root)
     if not workflow_path.exists():
         return DoctorCheck(
             name="repo-config",
             status="warn",
-            summary=".ai-orchestrator/config.toml is valid, but .ai-orchestrator/workflow.yaml is missing.",
+            summary="Project config.toml is valid, but workflow.yaml is missing in centralized storage.",
             hint="Run `orch init --force` to restore default workflow files if needed.",
         )
 
@@ -271,14 +271,14 @@ def _check_repo_config(repo_root: Path, config: Config) -> DoctorCheck:
             return DoctorCheck(
                 name="repo-config",
                 status="warn",
-                summary=".ai-orchestrator/config.toml is valid, but some configured workspace repos are missing or not git repos.",
+                summary="Project config.toml is valid, but some configured workspace repos are missing or not git repos.",
                 hint=f"Check [workspace].repos entries: {', '.join(missing)}",
             )
 
     return DoctorCheck(
         name="repo-config",
         status="pass",
-        summary=".ai-orchestrator/config.toml and .ai-orchestrator/workflow.yaml are present.",
+        summary="Project config.toml and workflow.yaml are present in centralized storage.",
     )
 
 

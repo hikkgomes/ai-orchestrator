@@ -5,8 +5,8 @@ Invokes ``codex exec --skip-git-repo-check --sandbox workspace-write --json
 
 Three-tier output strategy:
 1. **Result file (primary)**: prompt instructs Codex to write a JSON result to
-   ``.ai-orchestrator/results/pending-execution-<run>.json`` or the legacy
-   ``.ai-orchestrator/results/pending-step-<n>.json``.
+   an absolute path under the configured artifact root (legacy names such as
+   ``pending-execution-<run>.json`` and ``pending-step-<n>.json`` are supported).
 2. **Stdout fallback**: scan stdout from the end for the last valid JSON object.
 3. **Git-diff-only fallback**: reconstruct a minimal execution result from
    ``git diff --name-status`` in the worktree.

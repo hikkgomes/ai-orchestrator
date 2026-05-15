@@ -30,7 +30,7 @@ Same as the implementer agent:
 
 1. **Corrected file changes**: Fix only what the review feedback requires.
    Do not refactor unrelated code.
-2. **Result file**: JSON written to `.ai-orchestrator/results/pending-step-<n>.json`.
+2. **Result file**: JSON written to the exact absolute path provided in the prompt.
 
 The result JSON must conform to `schemas/step_result.schema.json` (same schema
 as initial implementation).
@@ -70,8 +70,7 @@ All rules from the implementer agent apply:
 
 **Always write the result file**, even on failure.
 
-**Result file path** is given in the prompt:
-`.ai-orchestrator/results/pending-step-<n>.json`
+**Result file path** is given in the prompt as an absolute path.
 
 ---
 

@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..paths import get_project_review_dir
 from . import load_config
 from .detect_architecture import detect_architecture
 from .detect_commands import detect_commands
@@ -150,40 +151,41 @@ def _merge_for_reanalysis(existing: dict[str, Any], detected: dict[str, Any]) ->
 
 
 def _write_config(root: Path, config: dict[str, Any]) -> Path:
-    path = root / ".ai-review" / "config.json"
+    path = get_project_review_dir(root) / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     return path
 
 
 def _write_rules(root: Path) -> Path:
-    path = root / ".ai-review" / "rules.yaml"
+    path = get_project_review_dir(root) / "rules.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_bundled_rules_text(), encoding="utf-8")
     return path
 
 
 def _write_static_files(root: Path) -> dict[str, Path]:
+    review_root = get_project_review_dir(root)
     files = {
-        "skill": ("SKILL.md", root / ".ai-review" / "SKILL.md", False),
+        "skill": ("SKILL.md", review_root / "SKILL.md", False),
         "report_template": (
             "review-report.md",
-            root / ".ai-review" / "templates" / "review-report.md",
+            review_root / "templates" / "review-report.md",
             False,
         ),
         "scan_script": (
             "scan_ai_gotchas.py",
-            root / ".ai-review" / "scripts" / "scan_ai_gotchas.py",
+            review_root / "scripts" / "scan_ai_gotchas.py",
             True,
         ),
         "changed_review_script": (
             "review_changed.sh",
-            root / ".ai-review" / "scripts" / "review_changed.sh",
+            review_root / "scripts" / "review_changed.sh",
             True,
         ),
         "full_review_script": (
             "review.sh",
-            root / ".ai-review" / "scripts" / "review.sh",
+            review_root / "scripts" / "review.sh",
             True,
         ),
     }
@@ -212,7 +214,7 @@ def _summary(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_reviewer(root: Path) -> dict[str, Any]:
-    """First-time setup for ``.ai-review/config.json`` and ``rules.yaml``."""
+    """First-time setup for centralized reviewer config and rules."""
 
     root = root.resolve()
     config = _detected_config(root)

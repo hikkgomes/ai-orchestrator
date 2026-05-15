@@ -39,7 +39,7 @@ class StateManager:
     Parameters
     ----------
     artifact_root:
-        Path to the ``.ai-orchestrator/`` directory.
+        Path to the centralized project artifact directory.
     """
 
     def __init__(self, artifact_root: Path) -> None:

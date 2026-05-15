@@ -22,8 +22,8 @@ the step in one pass.
 ## What You Produce
 
 1. **File changes**: Modify, create, or delete the files specified in the step.
-2. **Result file**: A JSON file written to the exact path specified in your
-   prompt (`.ai-orchestrator/results/pending-step-<n>.json`).
+2. **Result file**: A JSON file written to the exact absolute path specified
+   in your prompt.
 
 The result JSON must conform to `schemas/step_result.schema.json`:
 
@@ -113,7 +113,7 @@ case:
 ## Files to Always Avoid
 
 Do not read or modify:
-- `.ai-orchestrator/**` (except writing your result file to the specified path)
+- ai-orchestrator runtime artifact directories (except writing your result file to the specified path)
 - `.git/**`
 - Files containing known secret patterns (private keys, API tokens, `.env` files
   with credentials). If the step requires modifying a file like this, set
@@ -123,8 +123,7 @@ Do not read or modify:
 
 ## Writing the Result File
 
-The result file path is given in your prompt. It looks like:
-`.ai-orchestrator/results/pending-step-<n>.json`
+The result file path is given in your prompt as an absolute path.
 
 Steps to write it:
 1. Complete all file modifications first.

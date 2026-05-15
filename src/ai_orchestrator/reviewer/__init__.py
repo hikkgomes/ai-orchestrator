@@ -7,12 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..paths import get_project_review_dir
 from .scanner import scan_repository
 
 def load_config(root: Path) -> dict[str, Any] | None:
-    """Load ``.ai-review/config.json`` from *root* when present."""
+    """Load reviewer config from centralized project storage when present."""
 
-    path = root / ".ai-review" / "config.json"
+    path = get_project_review_dir(root) / "config.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

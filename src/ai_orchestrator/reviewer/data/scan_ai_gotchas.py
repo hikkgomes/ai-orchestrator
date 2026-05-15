@@ -95,7 +95,8 @@ PATTERNS = [
 
 
 def load_local() -> dict:
-    path = ROOT / ".ai-review" / "config.json"
+    review_dir = Path(__file__).resolve().parents[1]
+    path = review_dir / "config.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:

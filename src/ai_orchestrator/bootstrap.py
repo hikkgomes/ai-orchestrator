@@ -6,7 +6,7 @@ import json as _json
 import os
 from pathlib import Path
 
-from .config import ARTIFACT_DIR
+from .paths import get_project_config_path, get_project_workflow_path
 
 
 DEFAULT_CONFIG = """[orchestrator]
@@ -174,7 +174,7 @@ DEFAULT_WORKFLOW = """# Default workflow configuration for ai-orchestrator.
 #
 # This file is the authoritative workflow definition for phase structure and
 # default phase-level settings. The engine loads this file at startup.
-# .ai-orchestrator/config.toml provides user-level overrides for supported settings.
+# Centralized project config.toml provides user-level overrides for supported settings.
 
 name: default
 description: >
@@ -205,16 +205,15 @@ phases:
 """
 
 GITIGNORE_MARKER = "# ai-orchestrator runtime artifacts"
-RUNTIME_GITIGNORE_ENTRIES = (".ai-orchestrator/", ".ai-review/")
+RUNTIME_GITIGNORE_ENTRIES = ()
 GITIGNORE_BLOCK = GITIGNORE_MARKER + "\n" + "\n".join(RUNTIME_GITIGNORE_ENTRIES) + "\n"
 
 
 def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[str, str]]:
-    """Create default config and ignore files in *repo_root*."""
+    """Create default orchestrator config files in centralized project storage."""
     actions: list[tuple[str, str]] = []
-    config_path = repo_root / ARTIFACT_DIR / "config.toml"
-    workflow_path = repo_root / ARTIFACT_DIR / "workflow.yaml"
-    gitignore_path = repo_root / ".gitignore"
+    config_path = get_project_config_path(repo_root)
+    workflow_path = get_project_workflow_path(repo_root)
 
     config_existed = config_path.exists()
     if force or not config_existed:
@@ -228,16 +227,12 @@ def scaffold_repository(repo_root: Path, *, force: bool = False) -> list[tuple[s
                 + f"repos = [{repos_value}]\n"
             )
         _write_text(config_path, config_content)
-        actions.append(("updated" if config_existed else "created", ".ai-orchestrator/config.toml"))
+        actions.append(("updated" if config_existed else "created", str(config_path)))
 
     workflow_existed = workflow_path.exists()
     if force or not workflow_existed:
         _write_text(workflow_path, DEFAULT_WORKFLOW)
-        actions.append(("updated" if workflow_existed else "created", ".ai-orchestrator/workflow.yaml"))
-
-    gitignore_action = ensure_runtime_gitignore(repo_root)
-    if gitignore_action:
-        actions.append((gitignore_action, ".gitignore"))
+        actions.append(("updated" if workflow_existed else "created", str(workflow_path)))
 
     return actions
 
@@ -247,26 +242,19 @@ def ensure_runtime_gitignore(repo_root: Path) -> str | None:
 
     Returns ``"created"``, ``"updated"``, or ``None`` when no write was needed.
     """
-    gitignore_path = repo_root / ".gitignore"
-    existed = gitignore_path.exists()
-    current = gitignore_path.read_text(encoding="utf-8") if existed else ""
-    updated = render_runtime_gitignore(current)
-    if updated == current:
-        return None
-    _write_text(gitignore_path, updated)
-    return "updated" if current else "created"
+    return None
 
 
 def refresh_workflow(repo_root: Path) -> list[tuple[str, str]]:
-    """Update ``.ai-orchestrator/workflow.yaml`` when it differs from the bundled default."""
-    workflow_path = repo_root / ARTIFACT_DIR / "workflow.yaml"
+    """Update centralized workflow.yaml when it differs from the bundled default."""
+    workflow_path = get_project_workflow_path(repo_root)
     if not workflow_path.exists():
         return []
     current = workflow_path.read_text(encoding="utf-8")
     if current == DEFAULT_WORKFLOW:
         return []
     _write_text(workflow_path, DEFAULT_WORKFLOW)
-    return [("updated", ".ai-orchestrator/workflow.yaml")]
+    return [("updated", str(workflow_path))]
 
 
 def install_shell_integration(

@@ -118,8 +118,8 @@ Use `--force` carefully. It rewrites scaffolded files in the current repo.
 ## What `update`, `init`, and `sync` mean
 
 - `orch update`: updates the CLI installed on your machine. It uses the current install mode automatically.
-- `orch init`: bootstraps the current repo. It creates or updates `aio.toml`, `workflows/default.yaml`, `.gitignore`, and `.ai-review/`.
-- `orch sync`: refreshes `.ai-review/config.json` and `.ai-review/rules.yaml` in the current repo. It does not rewrite `aio.toml` or `workflows/default.yaml`.
+- `orch init`: bootstraps centralized project config/workflow/reviewer artifacts for the current repo.
+- `orch sync`: refreshes centralized reviewer config and rules. It does not rewrite your repository files.
 - `orch install-shell`: installs shell completion and the `aio` alias.
 
 ## Daily Use
@@ -200,7 +200,7 @@ Phase summary:
 The review phase can also use non-model evidence:
 
 - heuristic findings from the bundled reviewer scanner
-- repo-aware context from `.ai-review/config.json`
+- repo-aware context from centralized reviewer config
 
 ## VS Code
 
@@ -291,36 +291,23 @@ Notes:
 
 - `aio.toml`
 - `workflows/default.yaml`
-- `.ai-review/config.json`
-- `.ai-review/rules.yaml`
-- `.gitignore` entries for `.ai-orchestrator/` and `.ai-review/`
+- project reviewer config and rules under centralized storage
 
-App-owned runtime and review artifacts should stay gitignored:
+Runtime artifacts are now stored outside the repository in a centralized user-data directory.  
+Project-specific runtime path:
 
-```text
-.ai-orchestrator/
-  state/
-  plans/
-  results/
-  reviews/
-  logs/
-  worktrees/
-  approvals/
-  feedback/
-  executions/
-  prompts/         # only when prompt retention is enabled
-  metadata.sqlite3
-.ai-review/
-  config.json
-  rules.yaml
-```
+- macOS: `~/Library/Application Support/ai-orchestrator/projects/<repo>-<hash>/`
+- Linux: `~/.local/share/ai-orchestrator/projects/<repo>-<hash>/` (or `$XDG_DATA_HOME/ai-orchestrator/projects/...`)
+- Windows: `%LOCALAPPDATA%\\ai-orchestrator\\projects\\<repo>-<hash>\\`
+
+Reviewer artifacts are also centralized under the project runtime directory.
 
 ## Reviewer Setup
 
-Reviewer heuristics run automatically during the review phase, even without extra setup. The repo-local reviewer files make those reviews much more specific.
+Reviewer heuristics run automatically during the review phase, even without extra setup. Centralized reviewer files make those reviews much more specific.
 
-- `.ai-review/config.json` stores detected stack, commands, architecture, and risk paths.
-- `.ai-review/rules.yaml` stores the bundled review categories used by the prompt.
+- `review/config.json` stores detected stack, commands, architecture, and risk paths.
+- `review/rules.yaml` stores the bundled review categories used by the prompt.
 
 Use `orch sync` when you want to refresh those files while keeping curated notes and critical paths.
 
@@ -334,7 +321,7 @@ If you only want to refresh the reviewer heuristics without running the broader 
 - Git availability and version
 - Claude CLI availability
 - Codex CLI availability
-- Write access to `.ai-orchestrator/`
+- Write access to the centralized project runtime directory
 - Repo config presence and validity
 
 ## Development

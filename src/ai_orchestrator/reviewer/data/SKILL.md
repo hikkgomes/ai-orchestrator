@@ -4,7 +4,7 @@ This is the canonical workflow for reviewing AI-written code in any repository.
 
 ## Sources of truth
 
-1. `.ai-review/config.json` for repo-specific commands and constraints
+1. Centralized `review/config.json` for repo-specific commands and constraints
 2. repository files and project config
 3. the actual results of commands you ran
 
@@ -19,7 +19,7 @@ Default to changed files first. Expand only when:
 - the local diff is too small to understand the behaviour safely
 
 ### 2. Load repo-local settings
-Read `.ai-review/config.json` if present.
+Read centralized `review/config.json` if present.
 
 Use it for:
 - install, lint, typecheck, test, build commands
@@ -30,8 +30,8 @@ Use it for:
 
 ### 3. Run automated checks
 Prefer these scripts:
-- `.ai-review/scripts/review_changed.sh`
-- `.ai-review/scripts/review.sh`
+- `review/scripts/review_changed.sh`
+- `review/scripts/review.sh`
 
 Always record:
 - which commands ran
@@ -73,6 +73,6 @@ Use this order:
 - Low: style, small duplication, minor cleanup
 
 ### 6. Output format
-Follow `.ai-review/templates/review-report.md`.
+Follow `review/templates/review-report.md`.
 
 Never claim the code is safe, correct, or production-ready unless the executed evidence supports that conclusion.

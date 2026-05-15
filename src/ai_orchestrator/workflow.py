@@ -1,9 +1,9 @@
-"""Workflow definition loading from ``.ai-orchestrator/workflow.yaml``.
+"""Workflow definition loading from centralized project workflow.yaml.
 
-The repository uses a frozen, checked-in workflow definition as the
-authoritative source for phase structure and default phase-level settings.
-``.ai-orchestrator/config.toml`` supplies user-level overrides for supported settings after the
-definition is loaded. The YAML file is intentionally small, so a minimal parser
+The centralized workflow definition is the authoritative source for phase
+structure and default phase-level settings. Centralized ``config.toml``
+supplies user-level overrides for supported settings after the definition is
+loaded. The YAML file is intentionally small, so a minimal parser
 for the supported subset is sufficient and avoids adding a runtime YAML
 dependency.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .config import ARTIFACT_DIR
+from .paths import get_project_workflow_path
 
 class WorkflowError(Exception):
     """Raised when the workflow definition cannot be loaded or is invalid."""
@@ -50,8 +50,8 @@ class WorkflowDefinition:
 
 
 def load_workflow_definition(repo_root: Path) -> WorkflowDefinition:
-    """Load the canonical workflow definition from ``.ai-orchestrator/workflow.yaml``."""
-    path = repo_root / ARTIFACT_DIR / "workflow.yaml"
+    """Load the canonical workflow definition for this repository."""
+    path = get_project_workflow_path(repo_root)
     if not path.exists():
         raise WorkflowError(f"Workflow definition does not exist: {path}")
 

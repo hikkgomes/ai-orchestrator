@@ -18,4 +18,4 @@
 
 # The prompt instructs Codex to:
 # 1. Implement the step
-# 2. Write a JSON result to: .ai-orchestrator/results/pending-step-<n>.json
+# 2. Write a JSON result to the exact absolute path given in the prompt

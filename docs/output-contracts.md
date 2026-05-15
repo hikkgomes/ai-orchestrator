@@ -151,7 +151,7 @@ This state file is the single source of truth for resumability. On `aio resume`,
 
 ## Local Metadata Store
 
-Internal use only — stored in `.ai-orchestrator/metadata.sqlite3`.
+Internal use only — stored in centralized project metadata SQLite.
 
 - `runs` mirrors the latest persisted `RunState` fields for local querying.
 - `invocations` records adapter execution metadata such as CLI name, command, working directory, timeout, exit code, output source, and typed step-result fields when available.

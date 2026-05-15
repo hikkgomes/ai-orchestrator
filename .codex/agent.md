@@ -24,7 +24,7 @@ The prompt will contain:
 
 1. Implement the step as described.
 2. After making all changes, write a JSON result file to the exact path
-   specified in the prompt (`.ai-orchestrator/results/pending-step-<n>.json`).
+   specified in the prompt (absolute path provided at runtime).
 3. Do NOT print the JSON to stdout. Write it to the file path only.
 4. The JSON must conform to `step_result.schema.json`.
 

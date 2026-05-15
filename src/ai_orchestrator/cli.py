@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -34,17 +35,18 @@ from . import __version__
 from .analysis import AnalysisRunner
 from .artifacts import ArtifactError, ArtifactStore
 from .bootstrap import (
-    ensure_runtime_gitignore,
     install_shell_integration,
     read_install_meta,
     refresh_workflow,
     scaffold_repository,
 )
-from .config import ARTIFACT_DIR, Config, ConfigError, load_config
+from .config import Config, ConfigError, load_config
 from .doctor import run_doctor, run_doctor_fix
 from .engine import Engine, EngineError
 from .models import RunState
 from .modes import AnalysisSettings, AutonomousSettings, Mode, ReviewSettings
+from .paths import get_project_dir, get_projects_root
+from .paths import get_project_review_dir
 from .reviewer.installer import analyze_repo, install_reviewer
 from .state import StateError, StateManager
 from .ui import (
@@ -72,7 +74,6 @@ def _build_engine(
     autonomous_max_iterations: int | None = None,
     review_rounds: int | None = None,
 ) -> Engine:
-    _ensure_runtime_gitignore(ctx)
     return Engine(
         config or _require_config(ctx),
         ctx.obj["repo_root"],
@@ -104,7 +105,6 @@ def _resolve_workspace_repos(repo_root: Path, config: Config) -> list[str]:
 
 
 def _resolve_run_id_arg(ctx: click.Context, run_id: str | None) -> str:
-    _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     try:
         return state_mgr.resolve_run_id(run_id)
@@ -113,7 +113,6 @@ def _resolve_run_id_arg(ctx: click.Context, run_id: str | None) -> str:
 
 
 def _resolve_session(ctx: click.Context, prefix: str | None) -> tuple[str, str]:
-    _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     artifacts = ArtifactStore(ctx.obj["artifact_root"])
     normalized = (prefix or "").strip()
@@ -147,10 +146,6 @@ def _resolve_session(ctx: click.Context, prefix: str | None) -> tuple[str, str]:
     except Exception as exc:
         click.echo(f"Warning: failed to inspect analysis session '{normalized}': {exc}", err=True)
     raise click.ClickException(f"No run or session matches '{normalized}'.")
-
-
-def _ensure_runtime_gitignore(ctx: click.Context) -> None:
-    ensure_runtime_gitignore(ctx.obj["repo_root"])
 
 
 def _show_home_screen(ctx: click.Context) -> None:
@@ -192,7 +187,7 @@ def main(ctx: click.Context) -> None:
     """Coordinate Claude Code and Codex as workflow agents."""
     ctx.ensure_object(dict)
     repo_root = Path.cwd()
-    artifact_root = repo_root / ARTIFACT_DIR
+    artifact_root = get_project_dir(repo_root)
     ui = OrchestratorUI()
 
     ctx.obj["repo_root"] = repo_root
@@ -230,11 +225,17 @@ def cmd_init(ctx: click.Context, force: bool, skip_review_setup: bool) -> None:
             ctx.obj["ui"].print_first_run_tutorial()
     else:
         ctx.obj["ui"].info("Repository already has the default orch scaffolding.")
+    legacy_runtime_dir = ctx.obj["repo_root"] / ".ai-orchestrator"
+    if legacy_runtime_dir.exists():
+        ctx.obj["ui"].warning(
+            "Detected legacy repo-local runtime directory '.ai-orchestrator/'. "
+            "Runtime artifacts now use a centralized user data directory; run `orch clean` to remove old local artifacts."
+        )
 
     if skip_review_setup:
         return
 
-    review_config_path = ctx.obj["repo_root"] / ".ai-review" / "config.json"
+    review_config_path = get_project_review_dir(ctx.obj["repo_root"]) / "config.json"
     try:
         if force or not review_config_path.exists():
             ctx.invoke(cmd_review_install, force=force)
@@ -1257,7 +1258,6 @@ def cmd_reject(ctx: click.Context, run_id: str | None, gate: str | None, reason:
 @click.pass_context
 def cmd_status(ctx: click.Context, run_id: str | None, watch: bool, refresh_interval: float) -> None:
     """Show run status for the active repository."""
-    _ensure_runtime_gitignore(ctx)
     state_mgr = StateManager(ctx.obj["artifact_root"])
     ui = ctx.obj["ui"]
 
@@ -1423,9 +1423,8 @@ def cmd_install_shell(ctx: click.Context, shell: str | None, force: bool) -> Non
 @click.option("--force", is_flag=True, default=False, help="Overwrite existing reviewer config.")
 @click.pass_context
 def cmd_review_install(ctx: click.Context, force: bool) -> None:
-    """Install repository-local reviewer config and bundled rules."""
-    _ensure_runtime_gitignore(ctx)
-    config_path = ctx.obj["repo_root"] / ".ai-review" / "config.json"
+    """Install centralized reviewer config and bundled rules."""
+    config_path = get_project_review_dir(ctx.obj["repo_root"]) / "config.json"
     if config_path.exists() and not force:
         raise click.ClickException(
             "Reviewer config already exists. Use 'orch review-analyze' to refresh, "
@@ -1439,7 +1438,6 @@ def cmd_review_install(ctx: click.Context, force: bool) -> None:
 @click.pass_context
 def cmd_review_analyze(ctx: click.Context) -> None:
     """Refresh reviewer config from the current repository structure."""
-    _ensure_runtime_gitignore(ctx)
     result = analyze_repo(ctx.obj["repo_root"])
     _print_review_setup_result(ctx, result)
 
@@ -1449,13 +1447,34 @@ def cmd_review_analyze(ctx: click.Context) -> None:
 @click.pass_context
 def cmd_clean(ctx: click.Context, clean_all: bool) -> None:
     """Remove completed run artifacts and orphaned worktrees."""
-    _ensure_runtime_gitignore(ctx)
     artifact_root = ctx.obj["artifact_root"]
     state_mgr = StateManager(artifact_root)
     store = ArtifactStore(artifact_root)
     worktrees = WorktreeManager(ctx.obj["repo_root"], artifact_root)
 
-    removable_statuses = {"DONE", "FAILED"} if not clean_all else None
+    if clean_all:
+        for run_id in state_mgr.list_runs():
+            state = state_mgr.load(run_id)
+            if state.worktree_path and state.worktree_branch:
+                try:
+                    worktrees.remove(Path(state.worktree_path), state.worktree_branch, force=True)
+                except Exception as exc:
+                    ctx.obj["ui"].warning(f"Failed to remove worktree for run {run_id[:8]}: {exc}")
+        projects_root = get_projects_root()
+        if projects_root.exists():
+            shutil.rmtree(projects_root)
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=ctx.obj["repo_root"],
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=False,
+        )
+        ctx.obj["ui"].info(f"Removed all project artifacts under {projects_root}.")
+        return
+
+    removable_statuses = {"DONE", "FAILED"}
     live_run_ids: set[str] = set()
     removed_runs = 0
 
@@ -1482,6 +1501,14 @@ def cmd_clean(ctx: click.Context, clean_all: bool) -> None:
         except Exception as exc:
             ctx.obj["ui"].warning(f"Failed to remove orphaned worktree {orphan}: {exc}")
 
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        cwd=ctx.obj["repo_root"],
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
     ctx.obj["ui"].info(f"Removed {removed_runs} completed run(s).")
 
 

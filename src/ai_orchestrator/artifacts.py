@@ -20,7 +20,7 @@ class ArtifactError(Exception):
 
 
 class ArtifactStore:
-    """Read and write orchestrator artifacts under ``.ai-orchestrator/``."""
+    """Read and write orchestrator artifacts under the configured artifact root."""
 
     def __init__(self, artifact_root: Path, *, retain_prompts: bool = False) -> None:
         self._artifact_root = artifact_root

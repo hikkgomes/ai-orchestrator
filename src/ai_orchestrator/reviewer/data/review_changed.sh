@@ -2,6 +2,8 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REVIEW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export REVIEW_DIR
 cd "$ROOT"
 
 echo "== Universal AI Review: changed scope =="
@@ -18,12 +20,13 @@ fi
 echo
 python3 - <<'PY'
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
 root = pathlib.Path.cwd()
-local_path = root / ".ai-review" / "config.json"
+local_path = pathlib.Path(os.environ["REVIEW_DIR"]) / "config.json"
 
 
 def load_json(path):
@@ -83,9 +86,9 @@ for name, payload in (local.get("workspaces") or {}).items():
 
 if not ran_any:
     print("== Fast checks ==")
-    print("No lint or typecheck commands configured in .ai-review/config.json.")
+    print("No lint or typecheck commands configured in review config.")
     print()
 PY
 
 echo "== Heuristic scan =="
-python3 .ai-review/scripts/scan_ai_gotchas.py
+python3 "$REVIEW_DIR/scripts/scan_ai_gotchas.py"

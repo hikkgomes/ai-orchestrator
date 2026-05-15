@@ -206,7 +206,7 @@ This document records decisions made during design, including responses to the f
 
 ## DD-17: Reasoning effort is user-configurable with sensible defaults
 
-**Decision:** Reasoning effort per phase is configurable in `.ai-orchestrator/config.toml` with defaults: planner=high, worker=medium, reviewer=high.
+**Decision:** Reasoning effort per phase is configurable in centralized `config.toml` with defaults: planner=high, worker=medium, reviewer=high.
 
 **Context:** The exact flags supported by `claude -p` for reasoning effort need to be tested during implementation. If the flag is not available, the adapter silently omits it.
 

@@ -2,13 +2,15 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REVIEW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export REVIEW_DIR
 cd "$ROOT"
 
 DETECTED_JSON="$(mktemp /tmp/ai_review_detected.XXXXXX.json 2>/dev/null || mktemp -t ai_review_detected)"
 export DETECTED_JSON
 trap 'rm -f "$DETECTED_JSON"' EXIT
 
-python3 .ai-review/scripts/detect_commands.py >"$DETECTED_JSON" 2>/dev/null || true
+python3 "$REVIEW_DIR/scripts/detect_commands.py" >"$DETECTED_JSON" 2>/dev/null || true
 
 python3 - <<'PY'
 import json
@@ -17,7 +19,7 @@ import pathlib
 import subprocess
 
 root = pathlib.Path.cwd()
-local_path = root / ".ai-review" / "config.json"
+local_path = pathlib.Path(os.environ["REVIEW_DIR"]) / "config.json"
 detected_path = pathlib.Path(os.environ.get("DETECTED_JSON", "/tmp/ai_review_detected.json"))
 
 def load_json(path):
@@ -125,4 +127,4 @@ else:
 PY
 
 echo "== Heuristic scan =="
-python3 .ai-review/scripts/scan_ai_gotchas.py || true
+python3 "$REVIEW_DIR/scripts/scan_ai_gotchas.py" || true

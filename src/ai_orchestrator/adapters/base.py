@@ -133,7 +133,7 @@ class BaseAdapter(ABC):
     config:
         Adapter-relevant section of the orchestrator config.
     artifact_root:
-        Path to the ``.ai-orchestrator/`` directory for log writing.
+        Path to the centralized project artifact directory for log writing.
     """
 
     def __init__(self, config: Any, artifact_root: Path) -> None:
